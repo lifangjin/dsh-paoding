@@ -190,6 +190,11 @@ export function normalizeConfig(data) {
     roles,
     roles_remove: rolesRemove,
     main_agent_extra: extra,
+    // 内部标记：键 main_agent_extra 是否在文件里显式存在（含显式空列表）。
+    // resolveAssignments 据此区分「显式 [] = 尊重空」与「键缺失 = 老配置，回填
+    // 智能默认」——serializeConfig 对显式空数组落盘 `main_agent_extra: []`，
+    // 该语义才能在 读写 往返中存活。
+    has_main_agent_extra: Array.isArray(data.main_agent_extra),
     main_agent_remove: remove,
     main_agent_skills: mainAgentSkills,
     main_agent_skills_inline: mainAgentSkillsInline,
@@ -242,9 +247,17 @@ export function serializeConfig(config) {
     lines.push('roles_remove:')
     for (const role of config.roles_remove) lines.push(`  - ${role}`)
   }
-  if (config.main_agent_extra && config.main_agent_extra.length > 0) {
-    lines.push('main_agent_extra:')
-    for (const tool of config.main_agent_extra) lines.push(`  - ${tool}`)
+  // main_agent_extra：「数组存在即写」——length>0 走多行块；显式空数组写
+  // `main_agent_extra: []`。显式空必须落盘成键：否则下次加载时键缺失，
+  // resolveAssignments 会把空列表当老配置用智能默认回填，用户「明确不要 host
+  // 工具」的意愿就丢了。非数组（缺省）仍整键省略。
+  if (Array.isArray(config.main_agent_extra)) {
+    if (config.main_agent_extra.length > 0) {
+      lines.push('main_agent_extra:')
+      for (const tool of config.main_agent_extra) lines.push(`  - ${tool}`)
+    } else {
+      lines.push('main_agent_extra: []')
+    }
   }
   if (config.main_agent_remove && config.main_agent_remove.length > 0) {
     lines.push('main_agent_remove:')

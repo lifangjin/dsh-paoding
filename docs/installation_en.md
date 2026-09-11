@@ -4,7 +4,7 @@
 
 # Installation
 
-This document is for users who install, upgrade, or uninstall the dsh-paoding「编排模式 (Orchestrator)」preset ("编排模式" is Chinese for "Orchestration Mode"): §1 prerequisites, §2 interactive wizard install, §3 non-interactive / config-driven install, §4 host patch detection at install time, §5 applying, defaulting, upgrading and uninstalling, §6 the optional visual config UI in the Settings page, §7 troubleshooting.
+This document is for users who install, upgrade, or uninstall the dsh-paoding「编排模式 (Orchestrator)」preset ("编排模式" is Chinese for "Orchestration Mode"): §1 prerequisites, §2 one-command install with npx, §3 interactive wizard install, §4 non-interactive / config-driven install, §5 host patch detection at install time, §6 applying, defaulting, upgrading and uninstalling, §7 the optional visual config UI in the Settings page, §8 troubleshooting.
 
 ## 1. Prerequisites
 
@@ -20,17 +20,54 @@ Check the following before installing:
 | preset roster root | `$DSH_HOME/.agent-presets/` | The directory `dsh-agent-presets` scans for locally authored presets |
 | Install target of this preset | `$DSH_HOME/.agent-presets/orchestrator` | The install artifact: `agent.cordis.yml` (rewritten role config), `preset.yml`, `restrict.mjs` — a static directory |
 | Config file | `$DSH_HOME/dsh-paoding.config.yml` | Role/tool assignments saved by the wizard or the config UI (`--config` selects another path) |
+| Package copy (npx/npm install) | `$DSH_HOME/dsh-paoding` | When installing via the npx/npm entry, the installer copies the whole package to this stable location and mounts the config UI from there (see §2) |
 
-- **Get the source**: clone the repository and enter the directory:
+- **Get the source**: clone the repository and enter the directory (skip this step entirely if you just want the one-command npx install in §2):
 
 ```bash
 git clone <repo-url> dsh-paoding
 cd dsh-paoding
 ```
 
-Inside the repo, `presets/orchestrator/` is the static preset source (the installer reads and rewrites `agent.cordis.yml`, and copies `preset.yml` and `restrict.mjs` as-is), `tools/install.mjs` is the installer itself, `install.sh` is a thin shell wrapper, and `plugins/paoding-config-ui/` is the optional visual config UI plugin (see §6).
+Inside the repo, `presets/orchestrator/` is the static preset source (the installer reads and rewrites `agent.cordis.yml`, and copies `preset.yml` and `restrict.mjs` as-is), `tools/install.mjs` is the installer itself, `install.sh` is a thin shell wrapper, and `plugins/paoding-config-ui/` is the optional visual config UI plugin (see §7).
 
-## 2. Interactive Installation
+## 2. One-Command Install with npx
+
+The least-effort entry point: no clone, one command (available once the package is published to npm):
+
+```bash
+npx dsh-paoding@latest
+```
+
+Before the npm release, run it straight from the GitHub repository with the same effect:
+
+```bash
+npx github:lifangjin/dsh-paoding
+```
+
+The npm package and its command share the name: package `dsh-paoding`, command `dsh-paoding`. This default route equals `--auto --config-ui` and does three things at once:
+
+1. generates the orchestrator preset (`$DSH_HOME/.agent-presets/orchestrator`);
+2. writes the base config template (`$DSH_HOME/dsh-paoding.config.yml`);
+3. mounts the web config UI into the DSH Settings page (设置 → 庖丁配置 / Settings → Paoding Config).
+
+**Out of the box: the base template.** A fresh install writes a template that only contains DSH's built-in base tools — the main agent's 21 core tools plus each delegated role's base set; detected host/MCP tools are **not written in automatically**. The detection pipeline still runs: open Settings → 庖丁配置 and the candidate list shows every recognized tool, so you can tick what you need and hit Save & Apply; or run `npx dsh-paoding --wizard` to assign everything in a guided pass.
+
+Flags this route accepts:
+
+| Flag | Effect |
+|---|---|
+| `--suggest` | On a fresh install, use smart defaults instead: detected MCP/host tools are assigned automatically to roles and the main agent (the old behavior) |
+| `--no-ui` | Skip mounting the config UI |
+| `--wizard` | Force the interactive wizard |
+
+**How the UI is mounted in the npm form.** The package directory npx runs from lives in the cache and can be cleaned at any time, so mounting straight from it is not durable. Instead, the installer copies the whole package to the stable location **`$DSH_HOME/dsh-paoding`** and mounts the config UI from there. The repo-clone route (`./install.sh`) still symlinks directly into the repository (see §7) — the two forms differ only in where the plugin is mounted from; to DSH it is the same plugin.
+
+**Existing config files are respected**: when `$DSH_HOME/dsh-paoding.config.yml` already exists, re-running any entry point (npx or `./install.sh`) applies your config file instead of overwriting your choices.
+
+When it finishes, **restart DSH (`dsh web`)**; the remaining steps are covered in §6.
+
+## 3. Interactive Installation
 
 ### Starting the wizard
 
@@ -39,13 +76,13 @@ cd dsh-paoding
 ./install.sh
 ```
 
-Starting the wizard is a thin pass-through: `install.sh` forwards all arguments to `node tools/install.mjs`. Run it bare in a terminal and the interactive wizard starts. The wizard only auto-starts when **stdin is a TTY**; on a non-TTY it refuses and suggests `--auto` (see §3). Use `--wizard` to force the wizard in scripts/CI. After a welcome line, questions proceed through the six stages below; **pressing Enter on any question accepts the default / keeps the current value**.
+Starting the wizard is a thin pass-through: `install.sh` forwards all arguments to `node tools/install.mjs`. Run it bare in a terminal and the interactive wizard starts. The wizard only auto-starts when **stdin is a TTY**; on a non-TTY it refuses and suggests `--auto` (see §4). Use `--wizard` to force the wizard in scripts/CI. After a welcome line, questions proceed through the six stages below; **pressing Enter on any question accepts the default / keeps the current value**.
 
 Before asking anything, the wizard runs a full detection pass (the same pipeline shared with `--auto` / `--dry-run`) and prints the result as a **detection report**; when a config file already exists, its contents seed the initial values (anything unset falls back to smart defaults or the static base).
 
 ### The six wizard stages
 
-**Stage ① Detection report**: lists the tools detected this run; it matches the detection pipeline described in §4:
+**Stage ① Detection report**: lists the tools detected this run; it matches the detection pipeline described in §5:
 
 - **MCP servers**: one line per enabled server, with its name, transport, and the resolved **exact tool names** (`mcp__<server>__<tool>`, e.g. `mcp__codegraph__codegraph_explore`, `mcp__tavily__tavily_search`). Well-known servers (tavily, codegraph) are resolved from a static table; unknown servers go through a live JSON-RPC handshake (stdio / streamable-http); servers whose handshake failed or whose transport is unsupported (sse) show as having no resolvable tools (the install still proceeds).
 - **Local tool plugins**: e.g. `magic-memory` → tool `memory_search`.
@@ -93,18 +130,18 @@ The wizard (and the config UI's "保存并应用" (Save & Apply) button) persist
 ./install.sh --auto
 ```
 
-to **idempotently** apply the new assignments to the preset (the config is applied when present; smart defaults are used when it is absent — see §3). The config file's key structure is documented in [Configuration](configuration_en.md).
+to **idempotently** apply the new assignments to the preset (the config is applied when present; a fresh install writes the base template instead — `--suggest` for smart defaults — see §4). The config file's key structure is documented in [Configuration](configuration_en.md).
 
-## 3. Non-interactive Usage
+## 4. Non-interactive Usage
 
 When running without a terminal (scripts, CI, scheduled re-runs), use the non-interactive flags below. Typical invocations:
 
 ```bash
 cd dsh-paoding
-./install.sh --auto                 # apply the config when present, else smart defaults (below)
+./install.sh --auto                 # apply the config when present, else write the base template (--suggest for smart defaults, below)
 ./install.sh --auto --dry-run       # only print the detection report and the allow lists to be generated; write nothing
 ./install.sh --auto --config /path/to/dsh-paoding.config.yml
-./install.sh --auto --config-ui     # apply the preset and mount the visual config UI (see §6)
+./install.sh --auto --config-ui     # apply the preset and mount the visual config UI (see §7)
 ./install.sh --wizard < answers.txt # force the wizard even on a non-TTY, reading answers from stdin
 ```
 
@@ -112,24 +149,30 @@ CLI options (from `tools/install.mjs` usage):
 
 | Option | Description | Default |
 |---|---|---|
-| `--auto` | Non-interactive: apply the config file when present; otherwise use built-in **smart defaults** (identical to the static preset — zero regression — when no host tools exist) | off |
+| `--auto` | Non-interactive: apply the config file when present; otherwise write the **base template** (DSH's built-in base tools only; with `--suggest` it uses smart defaults — identical to the static preset — zero regression — when no host tools exist) | off |
 | `--config <file>` | Config file path (`--config=<file>` also accepted) | `$DSH_HOME/dsh-paoding.config.yml` |
-| `--wizard` | Force the interactive wizard; reads answers line by line from stdin even when it is not a TTY, for scripts/CI | off |
+| `--wizard` | Force the interactive wizard; reads answers line by line from stdin even when it is not a TTY, for scripts/CI (the npx entry uses it to reach the wizard too) | off |
+| `--suggest` | On a fresh install, use smart defaults instead: detected MCP/host tools are assigned automatically to roles and the main agent (the old behavior) | off |
+| `--no-ui` | Skip mounting the config UI (the npx one-command install mounts it by default; this turns that off) | off |
 | `--profile <name>` | Which profile's patch layer is scanned | `web` |
-| `--patch <file>` | Extra patch override file(s) to scan; repeatable (see §4) | none |
+| `--patch <file>` | Extra patch override file(s) to scan; repeatable (see §5) | none |
 | `--dry-run` | Print only the detection report and the allow lists to be generated; write nothing | off |
-| `--config-ui` | Also mount the config UI into the DSH Settings page while applying the preset (see §6) | off |
+| `--config-ui` | Also mount the config UI into the DSH Settings page while applying the preset (see §7) | off |
 | `--help` / `-h` | Print usage and exit | — |
 
 Environment: `DSH_HOME` overrides the home directory (default `~/.dsh`).
 
-Smart-default assignment rules (only with `--auto` and no config file): `codegraph` MCP tools and `memory_search` go to the main agent; other MCP servers are routed to the three default roles by tool-name keywords (names matching `search|research|crawl|extract|map|web` → `search_external`; `code|fs|file|write|edit|bash|exec|run` → `implement`; `design|render|image|screenshot|paint` → `design`; otherwise → `search_external`); a role that would end up with an empty allow refuses the **installation**.
+**Base template** (the new default on a fresh install — `--auto` with no config file): only DSH's built-in base tools are written — the main agent's 21 core tools plus each delegated role's base set; detected host/MCP tools are not written in. The detection report still prints and the config UI's candidate list still shows every recognized tool, so you can opt in after installing.
+
+**Smart defaults** (only with `--auto --suggest` and no config file — the old behavior): `codegraph` MCP tools and `memory_search` go to the main agent; other MCP servers are routed to the three default roles by tool-name keywords (names matching `search|research|crawl|extract|map|web` → `search_external`; `code|fs|file|write|edit|bash|exec|run` → `implement`; `design|render|image|screenshot|paint` → `design`; otherwise → `search_external`); a role that would end up with an empty allow refuses the **installation**.
+
+Writing `main_agent_extra: []` explicitly in the config means "intentionally empty": re-runs never backfill it from smart defaults; only configs that lack the key get backfilled.
 
 **Non-TTY stdin guard**: when stdin is not a TTY and none of `--auto`, `--config` (no existing config), or `--dry-run` is given, the installer errors out immediately (suggesting `--auto`) instead of letting the wizard hang in a terminal-less environment. `--dry-run` is safe to use without a TTY.
 
-On success the output prints the next steps: restart the host or open a new session, then pick「编排模式 (Orchestrator)」in the preset selector (see §5).
+On success the output prints the next steps: restart the host or open a new session, then pick「编排模式 (Orchestrator)」in the preset selector (see §6).
 
-## 4. Host Patch Detection
+## 5. Host Patch Detection
 
 Why the installer exists: DSH runs `tools.restrict()` when a child agent is created, and **every name in an allow list must exist in the registry visible to the child**, otherwise creation is rejected (unknown tools). The only machine-dependent part of that registry is the host patch layer, so the installer never ships a fixed allow list: at install time it reads the patch layers, detects which tools are **actually enabled**, and rewrites the `toolFilter.allow` of the three default roles (`search_external` / `design` / `implement`) and of any custom roles you create using「configured / static intent ∩ actually detected tools」— the installed preset can never go stale when a host tool is disabled.
 
@@ -155,7 +198,7 @@ All layers are included in order (`--patch` adds extra layers on top of the home
 
 For every rewritten role: allow entries that **depend on the host** (`mcp__*` and known plugin tools) are kept only inside the intersection with the detection inventory; **base tools guaranteed by the standard composition** (read/write/edit/glob/grep/bash/skill/web_search and similar) are untouched and never filtered. The result = configured intent ∩ actually enabled tools: disabled host-tool names are dropped automatically, so `tools.restrict()` never reports unknown tools. The main-agent side works the same way: host-dependent names in `restrict.mjs`'s base allow are filtered by the detection result, host tools from `main_agent_extra` and custom-role toolNames are injected into `config.allow`, and `main_agent_remove` entries are removed (an empty result **refuses to install**, preventing a runtime rejection of an empty allow). Other static delegation rows that the installer does not rewrite (e.g. `search_internal_deep`) stay as-is.
 
-**When to re-run**: after changing patch configuration (enabling/disabling MCP servers or plugins, adding/removing `--patch` files), re-run `./install.sh --auto` to resync the allow lists; the installer also compares timestamps of patch files against the last generated output and prints a reminder when a patch is newer. Use `--dry-run` first to preview what would be removed.
+**When to re-run**: after changing patch configuration (enabling/disabling MCP servers or plugins, adding/removing `--patch` files), re-run `./install.sh --auto` (the npx entry works the same) to resync the allow lists; the installer also compares timestamps of patch files against the last generated output and prints a reminder when a patch is newer. Use `--dry-run` first to preview what would be removed.
 
 ### Parsing and validation
 
@@ -176,7 +219,7 @@ Example 2 — disabling a plugin: re-run `--auto` after disabling magic-memory; 
 
 Example 3 — extra `--patch` file: keep additional MCP/plugin config in a separate file and pass `--patch <file>` so detection includes it (no need to touch the home/profile layer files).
 
-## 5. Apply & Activate
+## 6. Apply & Activate
 
 After the install finishes (wizard or `--auto`), the artifact is the static directory under `$DSH_HOME/.agent-presets/orchestrator/` — nothing needs a restart to be safe, and re-running the installer after config changes simply rewrites this directory:
 
@@ -191,17 +234,20 @@ cd dsh-paoding
 ./install.sh --auto       # applies the existing config idempotently (try --auto --dry-run first)
 ```
 
+On the npx/npm entry it is even simpler: re-run `npx dsh-paoding@latest` (or `npx github:lifangjin/dsh-paoding` before the npm release) — the config file is applied when present, as always.
+
 Because the artifact is a static directory generated from the repo source, upgrading / reinstalling / uninstalling never affects the host's other configuration (MCP, plugins, sessions), with zero coupling to DSH source code.
 
-**Uninstalling**: delete the preset directory (config UI uninstall is in §6; `dsh-paoding.config.yml` is not removed with the preset — keeping or deleting it does not affect other presets, and a later install with `--auto` applies it again):
+**Uninstalling**: delete the preset directory (config UI uninstall is in §7; `dsh-paoding.config.yml` is not removed with the preset — keeping or deleting it does not affect other presets, and a later install with `--auto` applies it again):
 
 ```bash
 rm -rf "$DSH_HOME/.agent-presets/orchestrator"
+rm -rf "$DSH_HOME/dsh-paoding"   # npx/npm installs only: remove the package copy the installer made
 ```
 
 After that,「编排模式 (Orchestrator)」no longer appears in the preset selector of new sessions.
 
-## 6. Config UI (Optional)
+## 7. Config UI (Optional)
 
 When hand-editing `dsh-paoding.config.yml` or using the terminal wizard is not desired, the visual config UI can be mounted as a plugin into the **设置 → 庖丁配置** section (Settings → Paoding Config) of the DSH Web GUI. It shares the same detection/generation pipeline as the CLI (`collectState` / `generateAndInstall`), so it is WYSIWYG.
 
@@ -221,6 +267,8 @@ After applying the preset, `--config-ui` **idempotently** does two things: it sy
 ```
 
 Then **restart DSH (`dsh web`)**; the "庖丁配置" (Paoding Config) section appears in the Settings page.
+
+On the npx/npm entry there is no repository directory to link: the installer instead copies the whole package to `$DSH_HOME/dsh-paoding` (see §2) and mounts from there; only the clone-and-run-`./install.sh` route uses the symlink shown above. Both forms present the same `paoding-config-ui` package to DSH, so the loading mechanism in the next subsection is identical.
 
 ### Loading mechanism
 
@@ -249,9 +297,9 @@ rm -f "$DSH_HOME/node_modules/paoding-config-ui"   # 1) remove the symlink
 # 3) restart DSH (dsh web)
 ```
 
-The section disappears from the Settings page; the generated preset and the config file are unaffected.
+The section disappears from the Settings page; the generated preset and the config file are unaffected. For the full npx/npm uninstall (including removing `$DSH_HOME/dsh-paoding`), see §6.
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 **Node.js missing**
 
@@ -267,7 +315,7 @@ An allow list contains a name absent from the child's registry — most often be
 
 **"requires a terminal" error**
 
-When stdin is not a TTY (scripts, CI, remote execution) and none of `--auto` / `--config` / `--dry-run` is passed, the installer refuses to start so the wizard cannot hang: use `./install.sh --auto` (applies the config when present, smart defaults otherwise), or feed answers from stdin in scripts via `./install.sh --wizard < answers.txt`.
+When stdin is not a TTY (scripts, CI, remote execution) and none of `--auto` / `--config` / `--dry-run` is passed, the installer refuses to start so the wizard cannot hang: use `./install.sh --auto` (applies the config when present, writes the base template otherwise), or feed answers from stdin in scripts via `./install.sh --wizard < answers.txt`. The npx one-command install carries `--auto` built in and runs fine without a TTY.
 
 **A role is missing an MCP tool**
 
@@ -279,7 +327,7 @@ Role skills can only be assigned to roles whose allow contains `skill`; main-age
 
 **Where is the config file**
 
-Both the wizard and the config UI write to `$DSH_HOME/dsh-paoding.config.yml` (default `~/.dsh/dsh-paoding.config.yml`); the CLI can point elsewhere with `--config <file>`, and the config UI's status area shows the current config file path. To reset all choices: delete the file — `./install.sh --auto` then falls back to smart defaults (matching the static preset).
+Both the wizard and the config UI write to `$DSH_HOME/dsh-paoding.config.yml` (default `~/.dsh/dsh-paoding.config.yml`); the CLI can point elsewhere with `--config <file>`, and the config UI's status area shows the current config file path. To reset all choices: delete the file — `./install.sh --auto` (or re-running the npx one-command install) then falls back to the base template; add `--suggest` to fall back to smart defaults instead.
 
 **The installed preset or config is broken**
 
@@ -287,4 +335,4 @@ The preset is a static directory, so simply reinstall: fix the config and run `.
 
 **The Config UI section is missing**
 
-Check in order: whether DSH was restarted after mounting; whether the `$DSH_HOME/node_modules/paoding-config-ui` symlink points at this repo's `plugins/paoding-config-ui` (`--config-ui` errors when it points elsewhere); and whether the `paoding-config-ui` mount row in `$DSH_HOME/cordis.patch.yml` is enabled (not commented out). Once all are fine, restart DSH and reopen the Settings page.
+Check in order: whether DSH was restarted after mounting; for npx/npm installs, whether `$DSH_HOME/dsh-paoding` exists (npx cache cleanup never touches it; if it is missing, re-run the one-command install); for clone installs, whether the `$DSH_HOME/node_modules/paoding-config-ui` symlink points at this repo's `plugins/paoding-config-ui` (`--config-ui` errors when it points elsewhere); and whether the `paoding-config-ui` mount row in `$DSH_HOME/cordis.patch.yml` is enabled (not commented out). Once all are fine, restart DSH and reopen the Settings page.

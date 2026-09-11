@@ -9,6 +9,7 @@
 # rejects a child agent for an unknown host-tool name.
 #
 # Usage: ./install.sh [--profile <name>] [--patch <file> ...] [--dry-run] [--help]
+# npx equivalent: npx dsh-paoding [options] (same options; defaults to --auto --config-ui)
 # After installing: restart the dsh host (or open a new session), then pick
 # 「编排模式 (Orchestrator)」 in the new-session preset selector. To make it
 # the default, set it in Settings → Agent Presets.

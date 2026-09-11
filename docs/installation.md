@@ -4,7 +4,7 @@
 
 # 安装
 
-本文面向要安装、升级或卸载 dsh-paoding「编排模式 (Orchestrator)」预设的用户：第 1 节前置要求，第 2 节交互向导安装，第 3 节非交互/配置驱动安装，第 4 节安装时的 host patch 检测机制，第 5 节应用、设为默认、升级与卸载，第 6 节可选的设置页可视化配置器，第 7 节常见问题。
+本文面向要安装、升级或卸载 dsh-paoding「编排模式 (Orchestrator)」预设的用户：第 1 节前置要求，第 2 节 npx 一键安装，第 3 节交互向导安装，第 4 节非交互/配置驱动安装，第 5 节安装时的 host patch 检测机制，第 6 节应用、设为默认、升级与卸载，第 7 节可选的设置页可视化配置器，第 8 节常见问题。
 
 ## 1. 前置要求
 
@@ -20,17 +20,54 @@
 | preset roster 根目录 | `$DSH_HOME/.agent-presets/` | `dsh-agent-presets` 扫描本地 authored presets 的目录 |
 | 本预设安装目标 | `$DSH_HOME/.agent-presets/orchestrator` | 安装产物：`agent.cordis.yml`（重写后的角色配置）、`preset.yml`、`restrict.mjs`，是一个静态目录 |
 | 配置文件 | `$DSH_HOME/dsh-paoding.config.yml` | 向导/配置 UI 保存的角色与工具分配（`--config` 可指定其它路径） |
+| 本包副本（npx/npm 安装） | `$DSH_HOME/dsh-paoding` | npx/npm 入口安装时，安装器把整包复制到这个稳定位置，配置 UI 从这里挂载（见第 2 节） |
 
-- **拿到源码**：克隆仓库后进入目录：
+- **拿到源码**：克隆仓库后进入目录（只想用第 2 节的 npx 一键安装，这步可以跳过）：
 
 ```bash
 git clone <repo-url> dsh-paoding
 cd dsh-paoding
 ```
 
-仓库内 `presets/orchestrator/` 是静态预设源（安装器读取并重写 `agent.cordis.yml`，原样复制 `preset.yml`、`restrict.mjs`），`tools/install.mjs` 是安装器本体，`install.sh` 是薄 shell 包装，`plugins/paoding-config-ui/` 是可选的可视化配置器插件（见第 6 节）。
+仓库内 `presets/orchestrator/` 是静态预设源（安装器读取并重写 `agent.cordis.yml`，原样复制 `preset.yml`、`restrict.mjs`），`tools/install.mjs` 是安装器本体，`install.sh` 是薄 shell 包装，`plugins/paoding-config-ui/` 是可选的可视化配置器插件（见第 7 节）。
 
-## 2. 安装（交互向导）
+## 2. npx 一键安装
+
+最省事的入口：不用克隆仓库，一条命令装完（npm 发布后可用）：
+
+```bash
+npx dsh-paoding@latest
+```
+
+npm 还没发布时，直接从 GitHub 仓库跑，效果相同：
+
+```bash
+npx github:lifangjin/dsh-paoding
+```
+
+npm 包与命令同名：包 `dsh-paoding`，命令 `dsh-paoding`。这条默认路线等价于 `--auto --config-ui`，一次做三件事：
+
+1. 生成编排 preset（`$DSH_HOME/.agent-presets/orchestrator`）；
+2. 写基础配置模板（`$DSH_HOME/dsh-paoding.config.yml`）；
+3. 把 Web 配置 UI 挂进 DSH 设置页（设置 → 庖丁配置）。
+
+**开箱默认是基础模板**：全新安装生成的配置模板只含 DSH 自带的基础工具——主 agent 21 项核心工具，加各委派角色的基础工具集；检测到的 host/MCP 工具**默认不写入**。检测管线照常运行：打开设置 → 庖丁配置，候选清单照常列出全部已识别工具，装完按需勾选、「保存并应用」即可；也可以跑 `npx dsh-paoding --wizard` 进交互向导逐项分配。
+
+这条路线可带的旗标：
+
+| 旗标 | 作用 |
+|---|---|
+| `--suggest` | fresh 安装改用智能默认：按检测结果自动把 MCP/host 工具分进角色与主 agent（即旧行为） |
+| `--no-ui` | 跳过配置 UI 挂载 |
+| `--wizard` | 强制进交互向导 |
+
+**npm 安装形态怎么挂 UI**：npx 运行时的包目录在缓存里，随时可能被清掉，直接拿去挂载不保险。因此安装器会把整包复制到 **`$DSH_HOME/dsh-paoding`** 这个稳定位置，再从那里挂载配置 UI；克隆仓库走 `./install.sh` 的仍是符号链接直连仓库（见第 7 节）。两条路线只在挂载来源上有别，对 DSH 来说都是同一个插件。
+
+**已有配置文件的用户**不受影响：`$DSH_HOME/dsh-paoding.config.yml` 已存在时，重跑任何入口（npx 或 `./install.sh`）都按配置文件应用、不覆写既有选择。
+
+装完**重启 DSH（`dsh web`）**，后续步骤见第 6 节。
+
+## 3. 安装（交互向导）
 
 ### 进入向导
 
@@ -39,13 +76,13 @@ cd dsh-paoding
 ./install.sh
 ```
 
-在终端里直接运行 `./install.sh`（不带参数）即进入交互式安装向导（`install.sh` 只是把参数透传给 `node tools/install.mjs`）。向导只在 **stdin 是 TTY** 时自动启动；非 TTY 环境会拒绝并提示改用 `--auto`（见第 3 节）。强制在脚本/CI 里走向导用 `--wizard`。向导启动后先打印一行欢迎语，随后按下面六个阶段逐项提问；**每个问题直接回车 = 采用默认/保持当前值**。
+在终端里直接运行 `./install.sh`（不带参数）即进入交互式安装向导（`install.sh` 只是把参数透传给 `node tools/install.mjs`）。向导只在 **stdin 是 TTY** 时自动启动；非 TTY 环境会拒绝并提示改用 `--auto`（见第 4 节）。强制在脚本/CI 里走向导用 `--wizard`。向导启动后先打印一行欢迎语，随后按下面六个阶段逐项提问；**每个问题直接回车 = 采用默认/保持当前值**。
 
 向导在提问前会先做一次完整检测（与 `--auto`/`--dry-run` 共用同一条检测管线），并把结果打印成**检测报告**；若已有配置文件，其内容会作为各项初值（未配置项回落到智能默认或静态基础）。
 
 ### 六个阶段
 
-**① 检测报告**：列出本次检测到的工具，报告内容与第 4 节的检测管线一致：
+**① 检测报告**：列出本次检测到的工具，报告内容与第 5 节的检测管线一致：
 
 - **MCP 服务器**：每个已启用服务器一行，含名称、transport 与解析出的**精确工具名**（`mcp__<server>__<tool>` 形态，如 `mcp__codegraph__codegraph_explore`、`mcp__tavily__tavily_search`）。已知服务器（tavily、codegraph）走静态表直接解析；未知服务器用实时 JSON-RPC 握手（stdio / streamable-http）解析；握手失败或 transport 不受支持（sse）的服务器显示为无工具可解析（不影响安装）。
 - **本地工具插件**：如 `magic-memory` → 工具 `memory_search`。
@@ -91,18 +128,18 @@ path.」；到⑤把 `html-ppt` 技能分给 `ppt` 角色（persona 尾部会带
 ./install.sh --auto
 ```
 
-即可**幂等**地把新分配应用到 preset（有配置就应用配置；无配置时用智能默认，见第 3 节）。配置文件的键位结构说明见 [配置](configuration.md)。
+即可**幂等**地把新分配应用到 preset（有配置就应用配置；无配置时写基础模板，`--suggest` 改用智能默认——见第 4 节）。配置文件的键位结构说明见 [配置](configuration.md)。
 
-## 3. 非交互 / 配置驱动
+## 4. 非交互 / 配置驱动
 
 不带终端跑安装（脚本、CI、定时重跑）时，用下列非交互参数。典型用法：
 
 ```bash
 cd dsh-paoding
-./install.sh --auto                 # 有配置则应用配置，否则智能默认（见下）
+./install.sh --auto                 # 有配置则应用配置；没有则写基础模板（--suggest 改用智能默认，见下）
 ./install.sh --auto --dry-run       # 只打印检测报告与将生成的 allow，不写任何文件
 ./install.sh --auto --config /path/to/dsh-paoding.config.yml
-./install.sh --auto --config-ui     # 应用 preset 并挂载可视化配置器（见第 6 节）
+./install.sh --auto --config-ui     # 应用 preset 并挂载可视化配置器（见第 7 节）
 ./install.sh --wizard < answers.txt # 非 TTY 也强制向导，从 stdin 读答案
 ```
 
@@ -110,24 +147,30 @@ CLI 参数（`tools/install.mjs` 的 usage）：
 
 | 参数 | 说明 | 默认 |
 |---|---|---|
-| `--auto` | 非交互：有配置文件则应用配置；否则用内置**智能默认**（无 host 工具时输出与静态 preset 完全一致，零回归） | 关 |
+| `--auto` | 非交互：有配置文件则应用配置；否则写**基础模板**（只含 DSH 自带基础工具；加 `--suggest` 则改用智能默认，无 host 工具时输出与静态 preset 完全一致，零回归） | 关 |
 | `--config <file>` | 配置文件路径（也接受 `--config=<file>`） | `$DSH_HOME/dsh-paoding.config.yml` |
-| `--wizard` | 强制交互向导；stdin 非 TTY 时也逐行读 stdin，便于脚本/CI 喂答案 | 关 |
+| `--wizard` | 强制交互向导；stdin 非 TTY 时也逐行读 stdin，便于脚本/CI 喂答案（npx 入口进向导也用它） | 关 |
+| `--suggest` | fresh 安装改用智能默认：按检测结果自动把 MCP/host 工具分进角色与主 agent（旧行为） | 关 |
+| `--no-ui` | 跳过配置 UI 挂载（npx 一键安装默认挂载，用它关掉） | 关 |
 | `--profile <name>` | 检测时纳入哪个 profile 的 patch 层 | `web` |
-| `--patch <file>` | 额外的 patch 覆盖文件，可重复（详见第 4 节） | 无 |
+| `--patch <file>` | 额外的 patch 覆盖文件，可重复（详见第 5 节） | 无 |
 | `--dry-run` | 只打印检测报告与将生成的 allow 列表，不写任何文件 | 关 |
-| `--config-ui` | 应用 preset 的同时把配置 UI 挂进 DSH 设置页（见第 6 节） | 关 |
+| `--config-ui` | 应用 preset 的同时把配置 UI 挂进 DSH 设置页（见第 7 节） | 关 |
 | `--help` / `-h` | 打印用法说明并退出 | — |
 
 环境变量：`DSH_HOME` 覆盖家目录（默认 `~/.dsh`）。
 
-智能默认的分配规则（仅 `--auto` 且无配置文件时生效）：`codegraph` MCP 工具与 `memory_search` 归主 agent；其它 MCP 服务器按其工具名关键字分到三个默认角色（含 `search|research|crawl|extract|map|web` → `search_external`，含 `code|fs|file|write|edit|bash|exec|run` → `implement`，含 `design|render|image|screenshot|paint` → `design`，都不含则归 `search_external`）；每个角色最终 allow 为空会**拒绝安装**。
+**基础模板**（fresh 安装的新默认，`--auto` 且无配置文件时）：只写 DSH 自带的基础工具——主 agent 21 项核心工具加各委派角色基础集；检测到的 host/MCP 工具不写入，检测报告照常打印，配置 UI 的候选清单也照常列出全部已识别工具，装完按需勾选即可。
+
+**智能默认**（仅 `--auto --suggest` 且无配置文件时，即旧行为）：`codegraph` MCP 工具与 `memory_search` 归主 agent；其它 MCP 服务器按其工具名关键字分到三个默认角色（含 `search|research|crawl|extract|map|web` → `search_external`，含 `code|fs|file|write|edit|bash|exec|run` → `implement`，含 `design|render|image|screenshot|paint` → `design`，都不含则归 `search_external`）；每个角色最终 allow 为空会**拒绝安装**。
+
+配置里显式写 `main_agent_extra: []` 视为明确留空，重跑不会被智能默认回填；老配置缺该键时才回填。
 
 **stdin 非 TTY 保护**：stdin 非 TTY 且不带 `--auto`/`--config`（无现成配置）/`--dry-run` 时，安装器直接报错退出（提示改用 `--auto`），避免向导在无终端环境挂起。非 TTY 下可放心用 `--dry-run` 预览。
 
-安装完成后的输出会打印后续步骤提示：重启 host 或新建会话、在预设选择器里选「编排模式 (Orchestrator)」（见第 5 节）。
+安装完成后的输出会打印后续步骤提示：重启 host 或新建会话、在预设选择器里选「编排模式 (Orchestrator)」（见第 6 节）。
 
-## 4. host patch 检测机制
+## 5. host patch 检测机制
 
 安装器存在的根本原因：DSH 在子 agent 创建时执行 `tools.restrict()`，**allow 名单里的名字必须存在于子 agent 可见的注册面内**，否则创建被拒（unknown tools）。注册面里唯一随机器变化的部分就是 host patch 层，因此安装器不写死 allow，而是在安装时读取 patch 层、检测**实际启用**的工具，用「配置/静态意图 ∩ 实际检测到的工具」重写三个默认角色（`search_external` / `design` / `implement`）以及你新建的自定义角色的 `toolFilter.allow`——这样安装出来的 preset 永不因 host 工具停用而过期。
 
@@ -153,7 +196,7 @@ CLI 参数（`tools/install.mjs` 的 usage）：
 
 对每个被重写的角色：allow 中**依赖 host 的名字**（`mcp__*` 与已知插件工具）只在与检测库存的交集里保留；**standard 组合保证的基础工具**（read/write/edit/glob/grep/bash/skill/web_search 等）原样保留、不参与过滤。结果 = 配置意图 ∩ 实际启用工具：停用的 host 工具名自动剔除，保证 `tools.restrict()` 永不报 unknown tools。主 agent 侧同理：`restrict.mjs` 的 base allow 里 host 依赖名按检测结果过滤，`main_agent_extra` 追加的 host 工具与自定义角色 toolName 注入 `config.allow`，`main_agent_remove` 剔除（移除结果为空列表会**拒绝安装**，防止运行时空 allow 拒载）。静态 preset 中不由安装器重写的其它委派行（如 `search_internal_deep`）原样保留。
 
-**重跑时机**：改动了 patch 配置（启用/停用 MCP 服务器或插件、增删 `--patch` 文件）后重跑一次 `./install.sh --auto` 同步 allow；安装器还会比较 patch 文件与上次生成结果的时间戳，发现 patch 更新过会打印提醒。先 `--dry-run` 预览将发生的剔除。
+**重跑时机**：改动了 patch 配置（启用/停用 MCP 服务器或插件、增删 `--patch` 文件）后重跑一次 `./install.sh --auto`（npx 入口同理）同步 allow；安装器还会比较 patch 文件与上次生成结果的时间戳，发现 patch 更新过会打印提醒。先 `--dry-run` 预览将发生的剔除。
 
 ### 解析与校验
 
@@ -173,7 +216,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 
 例 3——新增 `--patch`：把额外的 MCP/插件配置放独立文件，检测时用 `--patch <file>` 一并纳入（不必动 home/profile 层文件）。
 
-## 5. 应用与生效
+## 6. 应用与生效
 
 安装完成（向导或 `--auto`）后，产物是 `$DSH_HOME/.agent-presets/orchestrator/` 下的静态目录——**不重启也安全**，改配置重跑安装器只是重写这个目录：
 
@@ -188,17 +231,20 @@ cd dsh-paoding
 ./install.sh --auto       # 有配置则幂等应用（推荐先 --auto --dry-run 预览）
 ```
 
+走 npx/npm 入口的更省事：重跑 `npx dsh-paoding@latest`（发布前用 `npx github:lifangjin/dsh-paoding`），同样有配置应用配置。
+
 因为产物是静态目录且由仓库源生成，升级/重装/卸载都不会影响 host 的其它配置（MCP、插件、会话等），与 DSH 源码零耦合。
 
-**卸载**：删除预设目录即可（配置 UI 的卸载见第 6 节；`dsh-paoding.config.yml` 不随 preset 删除，删掉它或留着都不影响其它预设，重新安装时 `--auto` 会再次应用它）：
+**卸载**：删除预设目录即可（配置 UI 的卸载见第 7 节；`dsh-paoding.config.yml` 不随 preset 删除，删掉它或留着都不影响其它预设，重新安装时 `--auto` 会再次应用它）：
 
 ```bash
 rm -rf "$DSH_HOME/.agent-presets/orchestrator"
+rm -rf "$DSH_HOME/dsh-paoding"   # 仅 npx/npm 安装需要：删掉安装器复制的整包目录
 ```
 
 之后新建会话时「编排模式 (Orchestrator)」不再出现在预设选择器里。
 
-## 6. 可视化配置器（可选）
+## 7. 可视化配置器（可选）
 
 不想手编 `dsh-paoding.config.yml`、也不想走终端向导时，可以把可视化配置器作为插件挂进 DSH Web 的**设置 → 庖丁配置**分区。它与 CLI 共用同一条检测/生成管线（`collectState` / `generateAndInstall`），所见即所得。
 
@@ -218,6 +264,8 @@ cd dsh-paoding
 ```
 
 然后**重启 DSH（`dsh web`）**，设置页出现「庖丁配置」分区。
+
+从 npx/npm 入口安装时没有仓库目录可链：安装器改为把整包复制到 `$DSH_HOME/dsh-paoding`（见第 2 节），再从那里挂载；只有克隆仓库跑 `./install.sh` 才走上面的符号链接直连。两种形态对 DSH 都是同一个 `paoding-config-ui` 包，下一节的加载机制完全一致。
 
 ### 加载机制
 
@@ -246,9 +294,9 @@ rm -f "$DSH_HOME/node_modules/paoding-config-ui"   # 1) 删除符号链接
 # 3) 重启 DSH（dsh web）
 ```
 
-分区随之从设置页消失；已生成的 preset 与配置文件不受影响。
+分区随之从设置页消失；已生成的 preset 与配置文件不受影响。npx/npm 安装形态的完整卸载（含删 `$DSH_HOME/dsh-paoding`）见第 6 节。
 
-## 7. 常见问题与排查
+## 8. 常见问题与排查
 
 **node 缺失**
 
@@ -264,7 +312,7 @@ allow 名单里出现了子 agent 注册面上不存在的名字——最常见�
 
 **安装时提示需要终端**
 
-stdin 非 TTY（脚本、CI、远程执行）且没带 `--auto`/`--config`/`--dry-run` 时安装器拒绝启动，避免向导挂起：改用 `./install.sh --auto`（有配置则应用、无配置用智能默认），或在脚本里 `./install.sh --wizard < answers.txt` 从 stdin 喂答案。
+stdin 非 TTY（脚本、CI、远程执行）且没带 `--auto`/`--config`/`--dry-run` 时安装器拒绝启动，避免向导挂起：改用 `./install.sh --auto`（有配置则应用、无配置写基础模板），或在脚本里 `./install.sh --wizard < answers.txt` 从 stdin 喂答案；npx 一键安装自带 `--auto`，非 TTY 下也能正常跑。
 
 **角色里少了某个 MCP 工具**
 
@@ -276,7 +324,7 @@ stdin 非 TTY（脚本、CI、远程执行）且没带 `--auto`/`--config`/`--dr
 
 **配置文件在哪里**
 
-向导与配置 UI 都写到 `$DSH_HOME/dsh-paoding.config.yml`（默认 `~/.dsh/dsh-paoding.config.yml`）；CLI 可用 `--config <file>` 指到别处，配置 UI 的状态栏也会显示当前配置文件路径。想重置全部选择：删除该文件后 `./install.sh --auto` 会回到智能默认（= 静态 preset 现状）。
+向导与配置 UI 都写到 `$DSH_HOME/dsh-paoding.config.yml`（默认 `~/.dsh/dsh-paoding.config.yml`）；CLI 可用 `--config <file>` 指到别处，配置 UI 的状态栏也会显示当前配置文件路径。想重置全部选择：删除该文件后 `./install.sh --auto`（或重跑 npx 一键安装）会回到基础模板；想回到自动分配的智能默认，加 `--suggest`。
 
 **装好的预设与配置被改坏了**
 
@@ -284,4 +332,4 @@ preset 是静态目录，直接重装即可：修正配置后 `./install.sh --au
 
 **配置 UI 的设置页没有「庖丁配置」**
 
-依次检查：是否在挂载后重启过 DSH；`$DSH_HOME/node_modules/paoding-config-ui` 符号链接是否指向本仓库的 `plugins/paoding-config-ui`（指向其它来源时 `--config-ui` 会报错）；`$DSH_HOME/cordis.patch.yml` 里 `paoding-config-ui` 挂载行是否处于启用（未被注释）。全部正常后重启 DSH 再开设置页。
+依次检查：是否在挂载后重启过 DSH；npx/npm 安装的先确认 `$DSH_HOME/dsh-paoding` 目录存在（npx 缓存清理不影响它，缺了重跑一键安装即可），克隆安装的则看 `$DSH_HOME/node_modules/paoding-config-ui` 符号链接是否指向本仓库的 `plugins/paoding-config-ui`（指向其它来源时 `--config-ui` 会报错）；`$DSH_HOME/cordis.patch.yml` 里 `paoding-config-ui` 挂载行是否处于启用（未被注释）。全部正常后重启 DSH 再开设置页。

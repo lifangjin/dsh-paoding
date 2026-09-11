@@ -13,7 +13,7 @@ dsh-paoding（中文品牌「庖丁」，典出《庄子》——庖丁顺纹理
 - **帮手还能指定专用模型**：写代码的用强档、查资料的用轻快档，各配各的模型；不配就跟随主 agent 当前会话的模型。
 - **省钱省上下文**：帮手的工具只在被叫到时才加载，用一次付一次；主 agent 每次请求的工具开销约降三分之二，上下文只收摘要，不再被搜索结果和代码改动撑爆。
 - **角色随改随用**：删掉用不上的内置角色、给角色改显示名、给主 agent 改名，都是配置里一行的事；改完跑一条命令重新生成，即刻生效。
-- **装了什么都能认出来**：MCP 服务器、本地插件、已装技能，安装时自动检测并分派工具；停用哪个，重跑一遍后相关工具自动剔除。
+- **装了什么都能认出来**：MCP 服务器、本地插件、已装技能，安装与配置时全程检测；默认只装 dsh 基础工具，检测到的 host 工具在「庖丁配置」里按需勾选（或 `--suggest` 自动分派）；停用哪个，重跑一遍后相关工具自动剔除。
 - **图形界面配置**：不习惯改配置文件的话，「设置 → 庖丁配置」里点选即可，「保存并应用」与命令行走同一条生成管线。
 - **来去自由**：不改 DSH 一行源码；装完新会话即用，卸载即删目录。
 
@@ -33,18 +33,30 @@ dsh-paoding（中文品牌「庖丁」，典出《庄子》——庖丁顺纹理
 
 ## 快速开始
 
-前置：**Node.js ≥ 18** 与一台已装好的 DSH host。克隆后无需安装依赖。
+前置：**Node.js ≥ 18** 与一台已装好的 DSH host。
+
+**npx 一键安装（推荐）**——不用克隆仓库，一条命令：
 
 ```bash
+npx dsh-paoding@latest             # npm 发布后可用
+npx github:lifangjin/dsh-paoding   # 发布前从 GitHub 仓库直装，效果相同
+```
+
+这一条等价于 `--auto --config-ui`：生成编排预设、写好基础配置模板，并把「庖丁配置」挂进 DSH 设置页。开箱默认只带 DSH 自带的基础工具，检测到的 MCP/host 工具不会自动写入——装完在**设置 → 庖丁配置**里按需勾选工具与角色，「保存并应用」即生效；想逐项过一遍就跑 `npx dsh-paoding --wizard`，想沿用自动分配就加 `--suggest`。
+
+**克隆仓库安装**——老路线原样保留：
+
+```bash
+git clone <repo-url> dsh-paoding
 cd dsh-paoding
 ./install.sh              # 交互向导，一路回车即用默认
-./install.sh --auto       # 非交互：有配置应用配置，没配置用智能默认
+./install.sh --auto       # 非交互：有配置应用配置，没配置写基础模板（--suggest 用智能默认）
 ./install.sh --config-ui  # 顺带挂上图形配置界面（可与 --auto 同用）
 ./install.sh --dry-run    # 只预览将生成的内容，不写盘
 ./install.sh --help       # 全部参数
 ```
 
-装完**重启 DSH 或新建会话**，在预设选择器里选「编排模式 (Orchestrator)」即可；要设为默认，在 Settings → Agent Presets 里选。卸载就是删掉 `~/.dsh/.agent-presets/orchestrator` 一个目录。详细步骤与排查见 [安装文档](docs/installation.md)。
+装完**重启 DSH（`dsh web`）或新建会话**，在预设选择器里选「编排模式 (Orchestrator)」即可；要设为默认，在 Settings → Agent Presets 里选。已有 `dsh-paoding.config.yml` 的话，重跑任何入口都按配置文件应用、不覆写。卸载删掉 `~/.dsh/.agent-presets/orchestrator` 即可（npx/npm 安装的还多一个 `~/.dsh/dsh-paoding`）。详细步骤与排查见 [安装文档](docs/installation.md)。
 
 ## 怎么用
 
@@ -68,7 +80,7 @@ cd dsh-paoding
 | 文档 | 内容 |
 |---|---|
 | [架构](docs/architecture.md) | 为什么这样设计——概述、成本账、角色与工具、对应 DSH 原生机制、Token 治理、已知边界。 |
-| [安装](docs/installation.md) | 前置要求、交互向导六阶段、CLI 参数、host patch 检测机制、应用/升级/卸载、配置 UI 挂载、排查。 |
+| [安装](docs/installation.md) | npx 一键安装、前置要求、交互向导六阶段、CLI 参数、host patch 检测机制、应用/升级/卸载、配置 UI 挂载、排查。 |
 | [编排](docs/orchestration.md) | 编排总览、失败如何呈现与三层处理、one-shot vs continuable、上下文隔离。 |
 | [配置](docs/configuration.md) | 配置键全参考、内置角色微调、主 agent 工具与技能、自定义角色、按角色分模型。 |
 

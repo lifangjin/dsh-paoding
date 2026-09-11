@@ -243,6 +243,10 @@ export function parseScalar(raw) {
   if (s === 'true') return true
   if (s === 'false') return false
   if (s === 'null' || s === '~') return null
+  // 空流式序列 []：serializeConfig 对显式空 main_agent_extra 落盘 `[]`，回读时
+  // 必须还原为数组而非字符串，否则 has_main_agent_extra 判否、显式空语义丢失。
+  // （非空流式 [a, b] 仍不支持 —— 现有消费键均走块列表或 yaml 包路径。）
+  if (s === '[]') return []
   if (/^-?\d+$/.test(s) || /^-?\d*\.\d+$/.test(s)) return Number(s)
   return s
 }

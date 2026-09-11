@@ -1,20 +1,21 @@
 /**
  * CLI 层：参数解析与帮助（parseArgs / printHelp）、检测报告（printReport）、
- * --config-ui 挂载（ensureConfigUiMount）与主流程（main）。install.mjs 被直接
- * 运行时由此模块的 main() 真正驱动。
- * 依赖 util（REPO_ROOT / ROLES / SRC_DIR）、config（normalizeMainAgentName）、
+ * --config-ui 挂载（ensureConfigUiMount，含 npx 分布式载荷自愈）与主流程
+ * （main，供 tools/install.mjs 直接运行与 bin/dsh-paoding.mjs（npx 入口）调用）。
+ * 依赖 util（REPO_ROOT / ROLES / SRC_DIR / warn）、config（normalizeMainAgentName）、
  * host（removedReason）、state（collectState / generateAndInstall）、wizard
- * （runWizard）与 alloc（resolveAssignments）以及 node:fs / node:os / node:path。
+ * （runWizard）与 alloc（resolveAssignments / baseAssignments）以及
+ * node:fs / node:os / node:path。
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { REPO_ROOT, ROLES, SRC_DIR } from './util.mjs'
+import { REPO_ROOT, ROLES, SRC_DIR, warn } from './util.mjs'
 import { normalizeMainAgentName } from './config.mjs'
 import { removedReason } from './host.mjs'
 import { collectState, generateAndInstall } from './state.mjs'
 import { runWizard } from './wizard.mjs'
-import { resolveAssignments } from './alloc.mjs'
+import { baseAssignments, resolveAssignments } from './alloc.mjs'
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,8 @@ export function printHelp() {
 Usage:
   node tools/install.mjs [options]
   ./install.sh [options]
+  npx dsh-paoding [options]
+  npm exec dsh-paoding -- [options]
 
 Options:
   --profile <name>   Profile whose patch layer is scanned (default: web).
@@ -34,12 +37,19 @@ Options:
   --config <file>    Configuration file with role/tool assignments
                      (default: $DSH_HOME/dsh-paoding.config.yml).
   --auto             Non-interactive: apply the config file when present,
-                     otherwise apply smart default assignments.  Required when
-                     stdin is not a TTY.
+                     otherwise apply the base template (or --suggest smart
+                     defaults on a fresh install). Required when stdin is
+                     not a TTY.
   --wizard           Force the interactive wizard even when stdin is not a TTY
                      (reads answers from stdin).
   --dry-run          Print the detection report and the generated allow lists
                      without writing anything; exit 0.
+  --suggest          Fresh install without a config file: seed smart defaults
+                     from the detected host/MCP tools instead of the base
+                     template (host tools are folded in automatically).
+  --no-ui            npx entry only: skip mounting the config UI (the npx
+                     entry mounts it by default; --config-ui wins when both
+                     are given).
   --config-ui        Also mount the visual config UI into the DSH Settings
                      page: symlink plugins/paoding-config-ui into
                      $DSH_HOME/node_modules and ensure the cordis.patch.yml
@@ -53,12 +63,16 @@ Environment:
 Without --auto, an interactive wizard runs (when stdin is a TTY): it detects
 enabled MCP servers / plugins / skills, lets you assign tools to the default
 role agents or create custom sub-agents, and writes the config file before
-installing.  With --auto and no config file, smart defaults match the static
-preset exactly (zero regression).`)
+installing.  The npx entry (bin/dsh-paoding.mjs) defaults to
+--auto --config-ui for a quick non-interactive install.  With --auto and no
+config file, a base template is written: only the dsh built-in tools stay
+enabled — add host/MCP tools afterwards in 设置 → 庖丁配置 (or the wizard).
+Pass --suggest to fall back to the smart defaults that fold detected host
+tools in automatically.`)
 }
 
 export function parseArgs(argv) {
-  const opts = { profile: null, patches: [], dryRun: false, help: false, auto: false, wizard: false, config: undefined, configUi: false }
+  const opts = { profile: null, patches: [], dryRun: false, help: false, auto: false, wizard: false, config: undefined, configUi: false, noUi: false, suggest: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--help' || arg === '-h') {
@@ -71,6 +85,13 @@ export function parseArgs(argv) {
       opts.wizard = true
     } else if (arg === '--config-ui') {
       opts.configUi = true
+    } else if (arg === '--no-ui') {
+      // 仅 bin（npx 入口）有意义：跳过 bin 默认注入的 --config-ui；与
+      // --config-ui 同传时后者优先（configUi 已为 true，注入逻辑自然跳过）。
+      opts.noUi = true
+    } else if (arg === '--suggest') {
+      // fresh 安装时用智能默认（自动纳入检测到的 host 工具）而非基础模板。
+      opts.suggest = true
     } else if (arg === '--config') {
       const value = argv[++i]
       if (value === undefined || value.startsWith('--')) {
@@ -196,25 +217,84 @@ export function printReport({ scanned, mcpReports, pluginReports, roleResults, d
 
 /** 幂等挂载配置 UI：symlink 进 $DSH_HOME/node_modules + 启用 patch 行。 */
 export function ensureConfigUiMount(dshHome, dryRun) {
-  const pluginDir = path.join(REPO_ROOT, 'plugins', 'paoding-config-ui')
+  // 仓库检出（含 .git）直接 symlink 仓库内插件目录；npm 包 / tarball / git 依赖
+  // 安装不含 .git，运行目录随时可能被 npx 缓存回收 —— 先把整包载荷复制到
+  // $DSH_HOME/dsh-paoding/（稳定位置）再挂载，缓存清掉后 symlink 也不悬空。
+  // 插件 api-core.mjs 以相对路径 import '../../tools/install.mjs'，故必须整包
+  // 复制（tools/ + presets/ + plugins/ + package.json），不能只拷 plugins/。
+  const devCheckout = existsSync(path.join(REPO_ROOT, '.git'))
+  const payloadDir = path.join(dshHome, 'dsh-paoding')
+  // 自愈载荷内再运行（REPO_ROOT 已在 payload 里）：源即目标，跳过复制，仅保证
+  // symlink 指向 payload —— 否则 rmSync 会先删掉正在运行的包。比较走 realpath：
+  // REPO_ROOT 可能带 /private 前缀（macOS /var 符号链接），字符串比对会失配。
+  let selfHosted = false
+  if (!devCheckout) {
+    try {
+      const realPayload = path.join(realpathSync(dshHome), 'dsh-paoding')
+      const realRoot = realpathSync(REPO_ROOT)
+      selfHosted = realRoot === realPayload || realRoot.startsWith(realPayload + path.sep)
+    } catch {
+      /* dshHome 尚不存在等：按非 selfHosted 处理 */
+    }
+  }
+  const pluginDir = devCheckout || selfHosted
+    ? path.join(REPO_ROOT, 'plugins', 'paoding-config-ui')
+    : path.join(payloadDir, 'plugins', 'paoding-config-ui')
   const linkDir = path.join(dshHome, 'node_modules')
   const linkTarget = path.join(linkDir, 'paoding-config-ui')
   const patchFile = path.join(dshHome, 'cordis.patch.yml')
 
   if (dryRun) {
+    if (!devCheckout && !selfHosted) {
+      console.log(`[config-ui] 将复制到 ${payloadDir} 再挂载（npx/npm 包形态：整包载荷进稳定位置，防缓存清理悬空）`)
+    }
     console.log(`[config-ui] 将挂载: ${linkTarget} -> ${pluginDir}`)
     console.log(`[config-ui] 将启用 patch 行: id: paoding-config-ui (${patchFile})`)
     return
+  }
+
+  if (!devCheckout && !selfHosted) {
+    // 整包复制（先删后建 = 幂等刷新载荷；bin 缺失跳过）。
+    console.log(`[config-ui] distributed copy: ${REPO_ROOT} → ${payloadDir}`)
+    rmSync(payloadDir, { recursive: true, force: true })
+    mkdirSync(payloadDir, { recursive: true })
+    for (const dir of ['tools', 'presets', 'bin', 'plugins']) {
+      const from = path.join(REPO_ROOT, dir)
+      if (existsSync(from)) cpSync(from, path.join(payloadDir, dir), { recursive: true })
+    }
+    copyFileSync(path.join(REPO_ROOT, 'package.json'), path.join(payloadDir, 'package.json'))
   }
 
   // 1) symlink（已存在且指向正确则跳过）
   if (!existsSync(pluginDir)) {
     throw new Error(`config-ui 插件目录不存在: ${pluginDir}`)
   }
-  if (existsSync(linkTarget)) {
+  let linkStat = null
+  try {
+    linkStat = lstatSync(linkTarget)
+  } catch {
+    /* 不存在：首次挂载 */
+  }
+  if (linkStat !== null && !linkStat.isSymbolicLink()) {
+    // 真实目录（用户自装/解包安装）不动，保持原有报错文案。
     const real = realpathSync(linkTarget)
     if (real !== realpathSync(pluginDir)) {
       throw new Error(`config-ui 已安装为其它来源（${real}）；删除 ${linkTarget} 后重试`)
+    }
+  } else if (linkStat !== null) {
+    // 符号链接：指向正确 → 幂等跳过；指向别处或悬空（lstat 命中但 realpath
+    // 抛错，典型为旧 npx 缓存被清）→ 删除重建（迁移自愈）。
+    let real = null
+    try {
+      real = realpathSync(linkTarget)
+    } catch {
+      real = null
+    }
+    if (real !== realpathSync(pluginDir)) {
+      unlinkSync(linkTarget)
+      mkdirSync(linkDir, { recursive: true })
+      symlinkSync(pluginDir, linkTarget, 'dir')
+      warn(`config-ui 旧 symlink 指向 ${real ?? '<已失效>'}，已重建 -> ${pluginDir}`)
     }
   } else {
     mkdirSync(linkDir, { recursive: true })
@@ -268,10 +348,16 @@ export function ensureConfigUiMount(dshHome, dryRun) {
 
 // ── main ────────────────────────────────────────────────────────────────────
 
-export async function main() {
+/**
+ * 主流程。argv 缺省取 process.argv.slice(2)（tools/install.mjs 直接运行，行为
+ * 与旧版逐字一致）；bin=true 由 npx 入口（bin/dsh-paoding.mjs）传入 —— 注入
+ * 快速安装默认值：非交互（TTY 也不进 wizard，先装完基础版，自定义留给 Web
+ * 配置器）+ 默认挂载配置 UI。用户显式旗标优先（--wizard / --no-ui 不覆盖）。
+ */
+export async function main({ argv = process.argv.slice(2), bin = false } = {}) {
   let opts
   try {
-    opts = parseArgs(process.argv.slice(2))
+    opts = parseArgs(argv)
   } catch (err) {
     console.error(err.message)
     return 1
@@ -279,6 +365,10 @@ export async function main() {
   if (opts.help) {
     printHelp()
     return 0
+  }
+  if (bin) {
+    if (!opts.wizard) opts.auto ||= true
+    if (!opts.noUi) opts.configUi = true
   }
 
   const dshHome = process.env.DSH_HOME || path.join(homedir(), '.dsh')
@@ -333,7 +423,14 @@ export async function main() {
     if (assignments === null) return 0
     wizardRan = true
   } else if (opts.auto || existing || opts.dryRun) {
-    assignments = resolveAssignments(existing, suggested, staticBase)
+    // 既有配置 → 按配置合成（不变）；fresh（无配置）→ 默认基础模板（仅 dsh
+    // 基础工具，host/MCP 工具留给 Web 配置器 / 向导显式开启），--suggest 恢复
+    // 智能默认自动纳入。--dry-run fresh 同样按此计算但不落盘。
+    assignments = existing
+      ? resolveAssignments(existing, suggested, staticBase)
+      : opts.suggest
+        ? suggested
+        : baseAssignments(staticBase)
   } else {
     console.error(
       'error: interactive wizard requires a terminal. Run with --auto for a non-interactive install, ' +
@@ -343,9 +440,15 @@ export async function main() {
   }
 
   // Compose, validate and (unless dry-run) install via the shared generator.
+  // saveConfigOnWrite：wizard 路径写用户选择（原行为）；fresh 非交互安装把基础
+  // 模板落进配置文件（显式 main_agent_extra: [] 锚定「未开启 host 工具」）；
+  // existing 路径绝不覆写用户配置文件。
   let composed
   try {
-    composed = generateAndInstall(state, assignments, { dryRun: opts.dryRun, saveConfigOnWrite: wizardRan })
+    composed = generateAndInstall(state, assignments, {
+      dryRun: opts.dryRun,
+      saveConfigOnWrite: wizardRan || (!existing && !opts.dryRun),
+    })
   } catch (err) {
     console.error(`error: ${err.message}`)
     return 1
@@ -370,6 +473,13 @@ export async function main() {
   })
   if (wizardRan) {
     console.log(`\n配置已写入 ${configFile}（改后重跑 ./install.sh --auto 应用）`)
+  } else if (!existing && !opts.dryRun) {
+    // fresh 非交互安装：提示基础模板已落盘、host/MCP 工具去哪补（--suggest 可
+    // 恢复智能默认自动纳入）。
+    console.log(
+      `\n基础模板已写入 ${configFile}：默认仅 dsh 基础工具，重启后在 设置 → 庖丁配置` +
+        `（或 npx dsh-paoding --wizard）里自定义 host/MCP 工具。`,
+    )
   }
   const customRoles = Object.keys(assignments.roles).filter((n) => !ROLES.includes(n))
   if (customRoles.length > 0) {

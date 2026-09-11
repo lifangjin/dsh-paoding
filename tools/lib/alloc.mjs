@@ -1,9 +1,11 @@
 /**
  * 分配策略：smartDefaults 按工具名关键词（keywords）给出默认角色分配、在无既有
- * 配置时作 --auto 的兜底 assignments；resolveAssignments 把既有配置 / 建议 /
- * 静态基础合成最终 assignments。纯参数计算，不依赖任何 lib 模块；
- * 被 state（smartDefaults）/ cli（resolveAssignments）引用。
+ * 配置时作 --auto 的兜底 assignments；baseAssignments 给出「基础模板」（仅 dsh
+ * 内置工具，fresh 非交互安装的默认起点）；resolveAssignments 把既有配置 / 建议 /
+ * 静态基础合成最终 assignments。纯参数计算，仅依赖 util 的 ROLES 常量；
+ * 被 state（smartDefaults）/ cli（resolveAssignments / baseAssignments）引用。
  */
+import { ROLES } from './util.mjs'
 
 
 // ── smart default allocation ────────────────────────────────────────────────
@@ -61,6 +63,35 @@ export function keywords(names, pattern) {
 }
 
 /**
+ * 基础模板 assignments（fresh 非交互安装的默认起点）：每个内置角色保留静态
+ * preset 的 dsh 基础工具，host/MCP 工具一概不纳入 —— npx 场景先装完可用基础
+ * 版，host 工具留给用户在 设置 → 庖丁配置（或向导）里显式开启，避免智能默认
+ * 把检测到的 host 工具静默塞进委派链。形状与 smartDefaults 返回值完全一致，
+ * 生成层 / 序列化层无需区分来源；staticBase 复制而非别名，防调用方原地改写。
+ */
+export function baseAssignments(staticBase) {
+  const roles = {}
+  for (const role of ROLES) {
+    // static preset 的角色 allow 自带静态 host 工具名（如 mcp__tavily__*）；模板
+    // 一律剔除 mcp__ 前缀名（KNOWN_HOST_PLUGINS 工具不在 staticBase 里，无需再滤），
+    // 保证落盘的配置文件只含 dsh 基础工具 —— host 工具全部经 UI/向导显式开启。
+    const baseTools = (staticBase[role] ?? []).filter((name) => !name.startsWith('mcp__'))
+    roles[role] = { name: null, model: null, provider: null, persona: null, tools: [...baseTools] }
+  }
+  return {
+    roles,
+    roles_remove: [],
+    main_agent_extra: [],
+    main_agent_remove: [],
+    main_agent_skills: [],
+    main_agent_skills_inline: [],
+    main_agent_persona_extra: null,
+    main_agent_name: null,
+    skills: {},
+  }
+}
+
+/**
  * Resolve the final assignments from the existing config, smart defaults, or
  * the interactive wizard.  Returns { roles, roles_remove, main_agent_extra,
  * main_agent_remove, main_agent_skills, main_agent_skills_inline,
@@ -87,7 +118,14 @@ export function resolveAssignments(existing, suggested, staticBase) {
     return {
       roles,
       roles_remove: existing.roles_remove ?? [],
-      main_agent_extra: existing.main_agent_extra.length > 0 ? existing.main_agent_extra : suggested.main_agent_extra,
+      // main_agent_extra 回填语义：配置文件里「显式写了键」（含显式空列表，见
+      // normalizeConfig.has_main_agent_extra）一律尊重 —— 显式 [] = 用户明确不
+      // 要任何 host 工具，不得被智能默认悄悄回填；只有键完全缺失（老配置，无
+      // 该标记）才按旧行为用 suggested.main_agent_extra 兜底。
+      main_agent_extra:
+        existing.has_main_agent_extra || existing.main_agent_extra.length > 0
+          ? existing.main_agent_extra
+          : suggested.main_agent_extra,
       main_agent_remove: existing.main_agent_remove ?? [],
       main_agent_skills: existing.main_agent_skills ?? [],
       main_agent_skills_inline: existing.main_agent_skills_inline ?? [],

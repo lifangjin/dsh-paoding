@@ -5,3 +5,4 @@
 # internal design archive (not for publish)
 plan/
 .DS_Store
+*.tgz
