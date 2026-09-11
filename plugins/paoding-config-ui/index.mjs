@@ -288,6 +288,19 @@ export function apply(ctx) {
               dryRun,
               saveConfigOnWrite: !dryRun,
             })
+            // apply 落盘后必须重刷状态缓存：stateCache 仍是应用前的快照（existing
+            // 还是旧 config 的 roles），浏览器刷新读到的就是它——角色专用模型 /
+            // 显示名等会“看起来保存丢失、回落默认”。这里与 rescan 同款带运行时
+            // 事实重刷；best-effort：刷新失败不影响 apply 已成功的落盘结果
+            // （refreshState 自捕错误置空缓存，下次 GET state 会带事实重建）。
+            if (!dryRun && result.wrote) {
+              try {
+                const facts = await collectRuntimeFacts(ctx)
+                await refreshState(facts)
+              } catch (err) {
+                ctx.logger?.warn?.('paoding-config-ui: post-apply state refresh failed: ' + String(err?.message ?? err))
+              }
+            }
             json(res, 200, {
               dryRun,
               wrote: result.wrote,
