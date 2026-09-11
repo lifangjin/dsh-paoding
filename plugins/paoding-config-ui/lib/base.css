@@ -1,0 +1,615 @@
+/* paoding-config-ui / base — DSH-native settings section chrome.
+   All colors are DSH design tokens (--dsw-alias-*), injected at runtime, so
+   the panel follows the shell's light/dark theme automatically. */
+
+.omd-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 760px;
+}
+
+.omd-intro {
+  margin: 0;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Group container: the DSH PluginCard recipe — l2 hairline, r16, layer-3. */
+.omd-group {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 16px;
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.omd-groupHeading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 2px 6px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.omd-groupIcon {
+  display: inline-flex;
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Inventory count badge (the settings catalogHeading recipe). */
+.omd-count {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--dsw-alias-accent-soft, var(--dsw-alias-bg-layer-2));
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status bar: neutral by default, success / warn / error variants. */
+.omd-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.omd-statusIcon { display: inline-flex; flex: none; }
+.omd-statusText { min-width: 0; overflow-wrap: anywhere; }
+
+.omd-statusOk {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.omd-statusWarn {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.omd-statusError {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.omd-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.omd-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.omd-chipSecondary {
+  flex-basis: 100%;
+  opacity: 0.62;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.omd-chipErrText { color: var(--dsw-alias-state-error-primary); }
+
+/* Role cards: stacked small cards (l2 hairline, r12, layer-1 fill). */
+.omd-roleCard {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+  overflow: hidden;
+}
+
+.omd-roleHeadWrap { display: flex; align-items: stretch; }
+
+.omd-roleHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.omd-roleHead:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.omd-roleHead:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: -2px; }
+
+.omd-chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.omd-chevronOpen { transform: rotate(180deg); }
+
+.omd-roleName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omd-roleBadge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.omd-roleCount {
+  margin-left: auto;
+  flex: none;
+  padding-right: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.omd-roleDel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.omd-roleDel:hover {
+  color: var(--dsw-alias-state-error-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.omd-roleDel:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: -2px; }
+
+.omd-roleBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* Group sub-label inside a role card (secondary, small caps). */
+.omd-glabel {
+  margin: 10px 0 4px;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.omd-toolGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 2px 12px;
+  padding: 2px 0;
+}
+
+.omd-toolItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.omd-toolItem:hover { background: var(--dsw-alias-interactive-bg-hover); }
+
+.omd-check {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--dsw-alias-button-primary-fill);
+  cursor: pointer;
+}
+
+.omd-check:disabled { cursor: default; opacity: 0.55; }
+
+.omd-toolName {
+  min-width: 0;
+  /* 工具名不做超长隐藏：允许换行展示（overflow-wrap: anywhere 使
+     mcp__server__tool 这类无断点长名也能在任意字符处折行，不溢出） */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+/* Source badge: "base" neutral, "host" warn-tinted (matches the old amber). */
+.omd-toolTag {
+  flex: none;
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+.omd-toolTagHost {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 35%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.omd-empty {
+  padding: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* "New custom role" entry: dashed card button (the repo's dashed affordance). */
+.omd-addRole {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  box-sizing: border-box;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.omd-addRole:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-color: var(--dsw-alias-interactive-bg-hover-accent);
+  color: var(--dsw-alias-label-primary);
+}
+
+.omd-addRole:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: 1px; }
+
+/* Collapsible persona editor (hairline-dashed separated from the tools). */
+.omd-persona {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--dsw-alias-border-l2);
+}
+
+.omd-personaToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.omd-personaToggle:hover { color: var(--dsw-alias-label-primary); }
+.omd-personaToggle:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: 2px; }
+
+.omd-personaEdit {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.omd-personaBody {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.omd-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+  transition: border-color 0.16s ease;
+}
+
+.omd-textarea:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
+.omd-textarea::placeholder { color: var(--dsw-alias-label-tertiary); }
+
+.omd-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Skill assignment rows: mono name + per-role checkboxes, hairline rows. */
+.omd-skillRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.omd-skillRow:last-child { border-bottom: none; }
+
+.omd-skillName {
+  flex: none;
+  width: 150px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.omd-skillRoles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  min-width: 0;
+}
+
+.omd-skillRole {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+/* Preview: success summary + scrollable mono yml block. */
+.omd-previewSummary {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-success-primary);
+  overflow-wrap: anywhere;
+}
+
+.omd-pre {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.6;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.omd-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.omd-spin { animation: omd-spin 0.9s linear infinite; }
+
+@keyframes omd-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 主 agent「人设追加」编辑器：更高 textarea + 恢复默认按钮行。 */
+.omd-extraArea { min-height: 96px; }
+
+.omd-extraActions {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.omd-extraRestore {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dsw-alias-state-business-primary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.omd-extraRestore:hover { text-decoration: underline; }
+.omd-extraRestore:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: 2px; }
+
+.omd-extraHint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 主 agent「名称」行：单行文本输入 + 并排「恢复默认」（按钮复用 omd-extraRestore）。 */
+.omd-mainName {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+}
+
+.omd-mainName .omd-glabel { margin-top: 0; }
+
+.omd-nameRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.omd-nameInput {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  transition: border-color 0.16s ease;
+}
+
+.omd-nameInput:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+.omd-nameInput::placeholder { color: var(--dsw-alias-label-tertiary); }
+
+/* 已删除的内置角色：恢复区（dashed 容器，与「新建自定义角色」虚线按钮呼应）。 */
+.omd-restoreRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  box-sizing: border-box;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 12px;
+}
+
+.omd-restoreTitle {
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.omd-restorePill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.omd-restorePill:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-color: var(--dsw-alias-interactive-bg-hover-accent);
+  color: var(--dsw-alias-label-primary);
+}
+
+.omd-restorePill:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .omd-roleHead,
+  .omd-roleDel,
+  .omd-addRole,
+  .omd-personaToggle,
+  .omd-toolItem,
+  .omd-chevron,
+  .omd-textarea,
+  .omd-extraRestore,
+  .omd-nameInput,
+  .omd-restorePill,
+  .omd-spin {
+    transition: none;
+    animation: none;
+  }
+}

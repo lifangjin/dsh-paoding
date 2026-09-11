@@ -1,0 +1,323 @@
+# orchestrator (编排模式) agent composition
+#
+# 基于 builtin `standard` preset 全量组合（基础工具注册在 preset 层，不在 global
+# 层——这是本 preset 此前运行时 tools.restrict() 报 "unknown global tools" 的根因），
+# 叠加编排层：
+#   · persona            → 编排人设（主 agent 分工指引）
+#   · orchestrator-restrict → restrict.mjs 在 system-prompt/assemble 瀑布上把
+#     主 agent 的工具面裁剪为「编排 + 内部搜索」白名单；子 agent（origin:
+#     'subagent'）放行，由各自 toolFilter 决定工具面
+#   · delegation-*       → 3 个角色委派工具（dsh-tool-subagent），子 agent 创建时
+#     以 per-child tools.restrict() 只保留各自 allow 的工具
+#
+# 工具税（每请求估算）：主 agent 全量 ~16.2k → 白名单后 ~5.5k（含 3 个委派工具）；
+# search_external ~3.0k / design ~3.2k / implement ~3.7k，仅实际委派时发生。
+
+# ── identity ────────────────────────────────────────────────────────────────
+
+# 编排人设：{{model}}/{{cwd}} 由 agent 的 route/workspace 解析（同 standard）。
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: |-
+      You are the orchestrator agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+      Decompose the task, delegate to role agents, integrate results.
+      - Internal file questions (finding code, references, reading files): solve yourself with glob/grep/read/codegraph — never delegate them.
+      - External research: delegate to search_external.
+      - UI/design work: delegate to design.
+      - Code implementation: delegate to implement.
+      Keep your own context lean; integrate only summaries. Use todo_write to plan, and ask_user_question only for user-owned choices.
+
+      Delegation failure handling (SOP):
+      - A delegated run reports failure either as a thrown tool error (foreground)
+        or as a failed background job; both carry the child's partial output and
+        a stop reason (error / max-tokens / refusal / aborted / completed-but-poor).
+      - Diagnose by stop reason, never retry blindly:
+        · error (runtime/tool-level) → re-delegate ONCE as a fresh task (not a continuation);
+          if the failure cites a missing tool or permission, pick a different role or do it yourself.
+        · max-tokens → split the task into smaller steps and re-delegate, or ask the child to
+          output incrementally.
+        · refusal → do NOT retry the same task: adjust the task's scope or framing, switch roles,
+          or handle it yourself (a refusal is a policy decision, not a transient error).
+        · aborted → only re-delegate when the cancellation was accidental.
+        · completed but poor output → re-delegate with concrete missing points, or send_message
+          to ask a continuable child to finish the gaps.
+      - If the same task fails twice, stop retrying: report to the user what failed, why,
+        and what you already tried. Never loop a failing delegation.
+      - When re-delegating (fresh task or continuation), always include your integration
+        summary of the previous attempt (what was done, what failed, what to pick up from),
+        so the child never re-derives it from a cold context.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# ── 主 agent 工具面白名单 ───────────────────────────────────────────────────
+# 过滤主 agent 的 assembly.tools 为编排 + 内部搜索面；子 agent 放行。
+- id: orchestrator-restrict
+  name: ./restrict.mjs
+
+# ── shell ───────────────────────────────────────────────────────────────────
+
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ── background jobs ────────────────────────────────────────────────────────
+
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
+# ── skills ──────────────────────────────────────────────────────────────────
+
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── goals ───────────────────────────────────────────────────────────────────
+
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+# ── plan mode ───────────────────────────────────────────────────────────────
+
+- id: planning
+  name: cordis:group
+  group: true
+  isolate:
+    planMode: true
+  config:
+    - id: plan-mode
+      name: '@deepseek-ai/dsh-plan-mode'
+      config:
+        section: |
+              You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+              Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+              The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+              Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+              Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+              When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+
+# ── compaction ──────────────────────────────────────────────────────────────
+# 触发线（实测校准，2026-08-20）：
+#   默认 thresholdRatio 0.8（窗口 256K → 209,715 tokens 才压缩），长会话
+#   裸涨到 ~137K-142K 稳态且从未触发——这是「每请求 token 是 opencode 近两倍」
+#   的真凶（opencode 同项目 73 会话平均 68K，且全部发生过压缩）。
+#   0.45 → 117,965 tokens 触发，保留 16% 尾部（≈42K）+ 摘要 checkpoint，
+#   稳态平均回落到 ~80K 量级。保留尾部由 retainRatio 控制，不会丢最近上下文。
+#   如需更激进可改 0.35（≈92K 触发，平均 ~67K，逼近 opencode）；0.45 是
+#   「省 token 与不频繁摘要的平衡点」（压缩会调用一次 LLM 摘要，复用前缀缓存）。
+
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+      config:
+        thresholdRatio: 0.45
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# ── delegation and workflows ────────────────────────────────────────────────
+
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        backgroundMode: continuable
+
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+
+    - id: workflow-worker-thread
+      name: '@deepseek-ai/dsh-workflow-worker-thread'
+      config:
+        provider: spawn
+
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      config:
+        subagentProvider: spawn
+        maxRounds: 64
+
+    # ── 角色委派工具 ─────────────────────────────────────────────
+    # 每个实例把一个 spawn provider 绑定到一个 toolName；主 agent 调哪个工具，
+    # 即选择该子 agent 的工具面。子 agent 创建时 tools.restrict(toolFilter)
+    # 校验 allow 名字必须存在于其可见注册面 —— 本组合（standard 全量 + host
+    # patch 的 mcp/memory）就是这些名字的来源，缺一行都会报 unknown tools。
+
+    # search_external：外部调研（冷路径，用一次才付一次 ~3.0k）
+    - id: delegation-search-external
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: search_external
+        persona: |-
+          You are the external-research agent. Your job is web research only — use web_search and the tavily tools; you never modify files. Search the web, extract key facts, and return a concise structured research summary (findings, sources, open questions).
+          On tool failure, do not retry a denied operation: report the failure compactly — what you completed, the exact error, which tool/permission you lack, and your suggested next step — so the orchestrator can re-delegate or adjust.
+        toolFilter:
+          allow:
+            - web_search
+            - mcp__tavily__tavily_search
+            - mcp__tavily__tavily_crawl
+            - mcp__tavily__tavily_extract
+            - mcp__tavily__tavily_map
+            - mcp__tavily__tavily_research
+            - glob
+            - grep
+            - read
+            - ask_user_question
+
+    # design：设计（读参考 + 设计技能 + 出 spec，不写最终代码）~3.2k
+    - id: delegation-design
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: design
+        persona: |-
+          You are the design agent. You produce UI/UX designs, wireframes, and frontend specs — and may load design skills (frontend-design, html-ppt) via the skill tool. Read reference material first, then deliver a concrete design spec. You do not implement final code.
+          On tool failure, do not retry a denied operation: report the failure compactly — what you completed, the exact error, which tool/permission you lack, and your suggested next step — so the orchestrator can re-delegate or adjust.
+        toolFilter:
+          allow:
+            - read
+            - read_image
+            - glob
+            - grep
+            - bash
+            - skill
+            - write
+            - edit
+            - ask_user_question
+            - todo_write
+            - job_output
+            - job_list
+            - job_kill
+
+    # implement：实现（读上下文 → 外科手术式修改 → 验证）~3.7k
+    - id: delegation-implement
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: implement
+        persona: |-
+          You are the implementation agent. You write and edit code: read surrounding context first, make surgical changes, then verify (build/test/grep). Report what you changed and how you verified. You do not redesign architecture.
+          On tool failure, do not retry a denied operation: report the failure compactly — what you completed, the exact error, which tool/permission you lack, and your suggested next step — so the orchestrator can re-delegate or adjust.
+        toolFilter:
+          allow:
+            - read
+            - write
+            - edit
+            - glob
+            - grep
+            - bash
+            - skill
+            - web_search
+            - ask_user_question
+            - todo_write
+            - job_output
+            - job_list
+            - job_kill
+            - get_goal
+            - create_goal
+            - update_goal
+
+    # search_internal_deep：全仓深度探索（冷路径，把大 dump 隔离出主上下文）
+    # 主 agent 遇到「超大仓库全量探索」（全仓 grep dump / 大文件通读 / 跨目录
+    # 符号追踪）时委派到这里：子 agent 内部消化大输出，只回浓缩摘要。
+    # 与 search_external 的区别：search_external 只联网不碰仓库；这个只碰仓库
+    # 不联网。工具面 = 内部搜索全量（read 无 limit 限制由它自己权衡），
+    # 不含 write/edit —— 它只读不改。
+    - id: delegation-search-internal-deep
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: search_internal_deep
+        persona: |-
+          You are the internal deep-search agent. Your job is repository exploration only — you never modify files and you never use the network. Handle exactly the tasks the orchestrator can't afford in its own context: whole-repo grep dumps, full-file reads beyond a page, cross-directory symbol/definition tracking. Search thoroughly, then return a CONCISE structured summary: what you searched, key files with line numbers, definitions/symbols found, and the takeaway the orchestrator needs to decide next. Never echo large dumps back — condense aggressively; the orchestrator re-delegates or reads specific ranges itself if it needs details.
+          On tool failure, do not retry a denied operation: report the failure compactly — what you completed, the exact error, which tool/permission you lack, and your suggested next step — so the orchestrator can re-delegate or adjust.
+        # 2026-09-02: memory_search / mcp__codegraph__codegraph_explore 已从 allow 移除——
+        # 两者对应插件（magic-memory / codegraph MCP）停用时不在子 agent 注册面，
+        # tools.restrict() 会以 unknown tools 拒绝创建该角色；重开插件时按需加回。
+        toolFilter:
+          allow:
+            - glob
+            - grep
+            - read
+            - read_image
+            - bash
+            - ask_user_question
+            - todo_write
+            - job_output
+            - job_list
+            - job_kill
+
+# ── remaining model-facing rows ─────────────────────────────────────────────
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: false
+    searchTimeoutMs: 60000

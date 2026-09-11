@@ -1,0 +1,7 @@
+# local indexes & session data
+.codegraph/
+.dsh-magic-memory/
+.mnemon/
+# internal design archive (not for publish)
+plan/
+.DS_Store
