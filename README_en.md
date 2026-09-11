@@ -44,6 +44,8 @@ npx github:lifangjin/dsh-paoding   # before publishing: runs straight from GitHu
 
 This one command equals `--auto --config-ui`: it generates the orchestrator preset, writes the base config template, and mounts the config UI into the DSH Settings page. Out of the box the template only carries DSH's built-in base tools — detected MCP/host tools are not written in automatically. After installing, pick the tools and roles you need in **Settings → 庖丁配置 (Paoding Config)** and hit Save & Apply, or run `npx dsh-paoding --wizard` for a guided pass; add `--suggest` if you prefer the old auto-assignment.
 
+If you prefer the official plugin channel, `dsh plugin --profile web add dsh-paoding@0.2.0` installs the Paoding Config UI into Settings, scoped per profile (the preset itself still comes from npx / `./install.sh`) — see the [installation guide](docs/installation_en.md).
+
 **Clone and install** — the classic route, unchanged:
 
 ```bash
@@ -80,7 +82,7 @@ All preferences live in `~/.dsh/dsh-paoding.config.yml`: role add/remove/tweak, 
 | Document | Contents |
 |---|---|
 | [Architecture](docs/architecture_en.md) | Why it is designed this way — overview, the cost ledger, roles and tools, mapping to DSH's native mechanisms, token governance, known limits. |
-| [Installation](docs/installation_en.md) | One-command install with npx, prerequisites, the six wizard stages, CLI flags, host patch detection, applying/upgrading/uninstalling, mounting the config UI, troubleshooting. |
+| [Installation](docs/installation_en.md) | One-command install with npx, the official `dsh plugin` channel for the config UI, prerequisites, the six wizard stages, CLI flags, host patch detection, applying/upgrading/uninstalling, mounting the config UI, troubleshooting. |
 | [Orchestration](docs/orchestration_en.md) | Orchestration overview, how failures surface and the three recovery layers, one-shot vs continuable, context isolation. |
 | [Configuration](docs/configuration_en.md) | The full key reference, tuning built-in roles, main-agent tools and skills, custom roles, per-role models. |
 

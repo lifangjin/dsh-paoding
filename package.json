@@ -5,8 +5,25 @@
   "type": "module",
   "license": "MIT",
   "bin": { "dsh-paoding": "bin/dsh-paoding.mjs" },
-  "files": ["bin/", "tools/", "presets/", "plugins/", "docs/", "install.sh", "README.md", "README_en.md", "LICENSE"],
+  "files": ["bin/", "tools/", "presets/", "plugins/", "docs/", "install.sh", "README.md", "README_en.md", "LICENSE", "cordis.patch.yml"],
   "engines": { "node": ">=18" },
   "keywords": ["dsh", "deepseek-harness", "orchestrator", "agent-preset", "config-ui"],
-  "repository": { "type": "git", "url": "git+https://github.com/lifangjin/dsh-paoding.git" }
+  "repository": { "type": "git", "url": "git+https://github.com/lifangjin/dsh-paoding.git" },
+  "main": "plugins/paoding-config-ui/index.mjs",
+  "exports": {
+    ".": "./plugins/paoding-config-ui/index.mjs",
+    "./client": "./plugins/paoding-config-ui/lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-connection"
+      ]
+    },
+    "bundle": { "patch": "./cordis.patch.yml" }
+  }
 }

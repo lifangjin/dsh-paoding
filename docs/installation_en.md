@@ -4,7 +4,7 @@
 
 # Installation
 
-This document is for users who install, upgrade, or uninstall the dsh-paoding「编排模式 (Orchestrator)」preset ("编排模式" is Chinese for "Orchestration Mode"): §1 prerequisites, §2 one-command install with npx, §3 interactive wizard install, §4 non-interactive / config-driven install, §5 host patch detection at install time, §6 applying, defaulting, upgrading and uninstalling, §7 the optional visual config UI in the Settings page, §8 troubleshooting.
+This document is for users who install, upgrade, or uninstall the dsh-paoding「编排模式 (Orchestrator)」preset ("编排模式" is Chinese for "Orchestration Mode"): §1 prerequisites, §2 one-command install with npx and the official `dsh plugin` channel (config UI), §3 interactive wizard install, §4 non-interactive / config-driven install, §5 host patch detection at install time, §6 applying, defaulting, upgrading and uninstalling, §7 the optional visual config UI in the Settings page, §8 troubleshooting.
 
 ## 1. Prerequisites
 
@@ -66,6 +66,29 @@ Flags this route accepts:
 **Existing config files are respected**: when `$DSH_HOME/dsh-paoding.config.yml` already exists, re-running any entry point (npx or `./install.sh`) applies your config file instead of overwriting your choices.
 
 When it finishes, **restart DSH (`dsh web`)**; the remaining steps are covered in §6.
+
+### The official plugin channel: per-profile UI install
+
+Besides npx, the config UI can also be installed on its own through DSH's official plugin channel:
+
+```bash
+dsh plugin --profile web add dsh-paoding@0.2.0
+```
+
+Restart DSH (`dsh web`) afterwards and the「庖丁配置」(Paoding Config) section appears in Settings; uninstall with `dsh plugin --profile web remove dsh-paoding`. The mechanism in one line: the `dsh-paoding` npm package declares a `dsh.bundle.patch` at its root (a `cordis.patch.yml` with one insert row, `id: paoding-config-ui` / `name: dsh-paoding`), and `reconcilePlugins` folds it into that profile's startup layer — the same npm package as the npx channel, just a second way to install it.
+
+**This channel carries the UI only** (by design it cannot install the orchestrator preset or the config file — that half goes through npx / `./install.sh`), so the full setup takes two steps:
+
+```bash
+dsh plugin --profile web add dsh-paoding@0.2.0   # the config UI, effective in the given profile only
+npx dsh-paoding@latest --no-ui                    # the preset + config template; --no-ui avoids mounting the UI twice
+```
+
+Or keep it to the single npx command — it mounts the UI by default. **The recommendation stands**: one-command npx remains the first choice; the plugin channel is there for people who prefer the official channel or want the UI isolated per profile.
+
+**Semantic difference**: a UI installed via the plugin channel takes effect only in the profile you named (e.g. `web`); the npx / `./install.sh` mount writes into the global `$DSH_HOME/cordis.patch.yml` and takes effect in every profile.
+
+**Don't mix the two**: with both mounts side by side on one machine, the Settings page shows a duplicate「庖丁配置」section — two insert rows from different sources, both active. To migrate from the old global mount to the plugin channel: run `dsh plugin --profile web add dsh-paoding`, then delete the `paoding-config-ui` section from `$DSH_HOME/cordis.patch.yml` and the `$DSH_HOME/node_modules/paoding-config-ui` symlink, and restart; the reverse migration works the same way.
 
 ## 3. Interactive Installation
 
@@ -270,6 +293,8 @@ Then **restart DSH (`dsh web`)**; the "庖丁配置" (Paoding Config) section ap
 
 On the npx/npm entry there is no repository directory to link: the installer instead copies the whole package to `$DSH_HOME/dsh-paoding` (see §2) and mounts from there; only the clone-and-run-`./install.sh` route uses the symlink shown above. Both forms present the same `paoding-config-ui` package to DSH, so the loading mechanism in the next subsection is identical.
 
+Another route to the same section is DSH's official plugin channel: `dsh plugin --profile web add dsh-paoding@0.2.0` installs the UI on its own, per profile (see §2). Don't keep that mount side by side with `--config-ui`'s global one, or the Settings page ends up with a duplicate Paoding Config section.
+
 ### Loading mechanism
 
 - cordis resolves the package name `paoding-config-ui` in the patch row via `$DSH_HOME/node_modules`;
@@ -297,7 +322,7 @@ rm -f "$DSH_HOME/node_modules/paoding-config-ui"   # 1) remove the symlink
 # 3) restart DSH (dsh web)
 ```
 
-The section disappears from the Settings page; the generated preset and the config file are unaffected. For the full npx/npm uninstall (including removing `$DSH_HOME/dsh-paoding`), see §6.
+The section disappears from the Settings page; the generated preset and the config file are unaffected. For the full npx/npm uninstall (including removing `$DSH_HOME/dsh-paoding`), see §6. A UI installed through the plugin channel is removed differently: `dsh plugin --profile web remove dsh-paoding`, which affects that profile only.
 
 ## 8. Troubleshooting
 
@@ -335,4 +360,8 @@ The preset is a static directory, so simply reinstall: fix the config and run `.
 
 **The Config UI section is missing**
 
-Check in order: whether DSH was restarted after mounting; for npx/npm installs, whether `$DSH_HOME/dsh-paoding` exists (npx cache cleanup never touches it; if it is missing, re-run the one-command install); for clone installs, whether the `$DSH_HOME/node_modules/paoding-config-ui` symlink points at this repo's `plugins/paoding-config-ui` (`--config-ui` errors when it points elsewhere); and whether the `paoding-config-ui` mount row in `$DSH_HOME/cordis.patch.yml` is enabled (not commented out). Once all are fine, restart DSH and reopen the Settings page.
+If you installed through the plugin channel, first make sure the profile you passed to `dsh plugin add` matches the profile this DSH actually runs (the UI is per-profile) and that you restarted after installing. For the `--config-ui` global mount, check in order: whether DSH was restarted after mounting; for npx/npm installs, whether `$DSH_HOME/dsh-paoding` exists (npx cache cleanup never touches it; if it is missing, re-run the one-command install); for clone installs, whether the `$DSH_HOME/node_modules/paoding-config-ui` symlink points at this repo's `plugins/paoding-config-ui` (`--config-ui` errors when it points elsewhere); and whether the `paoding-config-ui` mount row in `$DSH_HOME/cordis.patch.yml` is enabled (not commented out). Once all are fine, restart DSH and reopen the Settings page.
+
+**Two duplicate Paoding Config sections**
+
+The global mount and the plugin channel are both present — two insert rows from different sources, both active (see "Don't mix the two" in §2). Pick one: to stay on the plugin channel, follow the migration steps in §2 and delete the `paoding-config-ui` section from `$DSH_HOME/cordis.patch.yml` plus the `$DSH_HOME/node_modules/paoding-config-ui` symlink; to return to the global mount, run `dsh plugin --profile web remove dsh-paoding`. Restart DSH afterwards.

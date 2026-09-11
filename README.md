@@ -44,6 +44,8 @@ npx github:lifangjin/dsh-paoding   # 发布前从 GitHub 仓库直装，效果�
 
 这一条等价于 `--auto --config-ui`：生成编排预设、写好基础配置模板，并把「庖丁配置」挂进 DSH 设置页。开箱默认只带 DSH 自带的基础工具，检测到的 MCP/host 工具不会自动写入——装完在**设置 → 庖丁配置**里按需勾选工具与角色，「保存并应用」即生效；想逐项过一遍就跑 `npx dsh-paoding --wizard`，想沿用自动分配就加 `--suggest`。
 
+偏好官方插件通道的话，`dsh plugin --profile web add dsh-paoding@0.2.0` 也能把「庖丁配置」按 profile 装进设置页（preset 本体仍走 npx / `./install.sh`），详见[安装文档](docs/installation.md)。
+
 **克隆仓库安装**——老路线原样保留：
 
 ```bash
@@ -80,7 +82,7 @@ cd dsh-paoding
 | 文档 | 内容 |
 |---|---|
 | [架构](docs/architecture.md) | 为什么这样设计——概述、成本账、角色与工具、对应 DSH 原生机制、Token 治理、已知边界。 |
-| [安装](docs/installation.md) | npx 一键安装、前置要求、交互向导六阶段、CLI 参数、host patch 检测机制、应用/升级/卸载、配置 UI 挂载、排查。 |
+| [安装](docs/installation.md) | npx 一键安装、官方插件通道装 UI、前置要求、交互向导六阶段、CLI 参数、host patch 检测机制、应用/升级/卸载、配置 UI 挂载、排查。 |
 | [编排](docs/orchestration.md) | 编排总览、失败如何呈现与三层处理、one-shot vs continuable、上下文隔离。 |
 | [配置](docs/configuration.md) | 配置键全参考、内置角色微调、主 agent 工具与技能、自定义角色、按角色分模型。 |
 

@@ -4,7 +4,7 @@
 
 # 安装
 
-本文面向要安装、升级或卸载 dsh-paoding「编排模式 (Orchestrator)」预设的用户：第 1 节前置要求，第 2 节 npx 一键安装，第 3 节交互向导安装，第 4 节非交互/配置驱动安装，第 5 节安装时的 host patch 检测机制，第 6 节应用、设为默认、升级与卸载，第 7 节可选的设置页可视化配置器，第 8 节常见问题。
+本文面向要安装、升级或卸载 dsh-paoding「编排模式 (Orchestrator)」预设的用户：第 1 节前置要求，第 2 节 npx 一键安装与 dsh plugin 官方插件通道（装配置 UI），第 3 节交互向导安装，第 4 节非交互/配置驱动安装，第 5 节安装时的 host patch 检测机制，第 6 节应用、设为默认、升级与卸载，第 7 节可选的设置页可视化配置器，第 8 节常见问题。
 
 ## 1. 前置要求
 
@@ -66,6 +66,29 @@ npm 包与命令同名：包 `dsh-paoding`，命令 `dsh-paoding`。这条默认
 **已有配置文件的用户**不受影响：`$DSH_HOME/dsh-paoding.config.yml` 已存在时，重跑任何入口（npx 或 `./install.sh`）都按配置文件应用、不覆写既有选择。
 
 装完**重启 DSH（`dsh web`）**，后续步骤见第 6 节。
+
+### 官方插件通道：按 profile 装 UI
+
+npx 之外，配置 UI 还能走 DSH 的官方插件通道单独安装：
+
+```bash
+dsh plugin --profile web add dsh-paoding@0.2.0
+```
+
+装完**重启 DSH（`dsh web`）**，设置页出现「庖丁配置」；卸载用 `dsh plugin --profile web remove dsh-paoding`。机制一句话：npm 包 `dsh-paoding` 在包根声明了 `dsh.bundle.patch`（一份 `cordis.patch.yml`，一行 insert：`id: paoding-config-ui` / `name: dsh-paoding`），安装后由 `reconcilePlugins` 自动并入该 profile 的启动层——与 npx 通道是同一个 npm 包，只是两种装法。
+
+**这条通道只装 UI 这一件**（机制所限，编排 preset 与配置文件装不了，preset 那半边走 npx / `./install.sh`），想两步装齐全就这样搭配：
+
+```bash
+dsh plugin --profile web add dsh-paoding@0.2.0   # 配置 UI，只在指定 profile 生效
+npx dsh-paoding@latest --no-ui                    # 编排 preset + 配置模板，--no-ui 防止 UI 重复挂载
+```
+
+反过来只用 npx 一条命令也行——它默认就含 UI 挂载。**推荐口径**：npx 一条命令仍是首选；plugin 通道留给偏好官方通道、或想让 UI 按 profile 隔离的人。
+
+**语义差异**：plugin 通道装的 UI 只在指定 profile（如 `web`）生效；npx / `./install.sh` 的挂载写进全局 `~/.dsh/cordis.patch.yml`，对所有 profile 生效。
+
+**勿混用**：同一台机器两种挂载并存时，设置页会出现重复的「庖丁配置」分区——两条不同来源的 insert 行同时生效。从旧的全局挂载迁到 plugin 通道：先 `dsh plugin --profile web add dsh-paoding`，再删掉 `~/.dsh/cordis.patch.yml` 里的 `paoding-config-ui` 段与 `~/.dsh/node_modules/paoding-config-ui` 符号链接，重启即可；反向迁移同理。
 
 ## 3. 安装（交互向导）
 
@@ -267,6 +290,8 @@ cd dsh-paoding
 
 从 npx/npm 入口安装时没有仓库目录可链：安装器改为把整包复制到 `$DSH_HOME/dsh-paoding`（见第 2 节），再从那里挂载；只有克隆仓库跑 `./install.sh` 才走上面的符号链接直连。两种形态对 DSH 都是同一个 `paoding-config-ui` 包，下一节的加载机制完全一致。
 
+除了 `--config-ui`，还有一条路通向同一个分区：DSH 官方插件通道 `dsh plugin --profile web add dsh-paoding@0.2.0`，只装 UI、按 profile 生效（详见第 2 节）。它与这里的全局挂载勿并存，否则设置页会出现重复的「庖丁配置」。
+
 ### 加载机制
 
 - cordis 经 `$DSH_HOME/node_modules` 解析 patch 行里的包名 `paoding-config-ui`；
@@ -294,7 +319,7 @@ rm -f "$DSH_HOME/node_modules/paoding-config-ui"   # 1) 删除符号链接
 # 3) 重启 DSH（dsh web）
 ```
 
-分区随之从设置页消失；已生成的 preset 与配置文件不受影响。npx/npm 安装形态的完整卸载（含删 `$DSH_HOME/dsh-paoding`）见第 6 节。
+分区随之从设置页消失；已生成的 preset 与配置文件不受影响。npx/npm 安装形态的完整卸载（含删 `$DSH_HOME/dsh-paoding`）见第 6 节。走 plugin 通道装的 UI 卸载方式不同：`dsh plugin --profile web remove dsh-paoding`，只影响对应 profile。
 
 ## 8. 常见问题与排查
 
@@ -332,4 +357,8 @@ preset 是静态目录，直接重装即可：修正配置后 `./install.sh --au
 
 **配置 UI 的设置页没有「庖丁配置」**
 
-依次检查：是否在挂载后重启过 DSH；npx/npm 安装的先确认 `$DSH_HOME/dsh-paoding` 目录存在（npx 缓存清理不影响它，缺了重跑一键安装即可），克隆安装的则看 `$DSH_HOME/node_modules/paoding-config-ui` 符号链接是否指向本仓库的 `plugins/paoding-config-ui`（指向其它来源时 `--config-ui` 会报错）；`$DSH_HOME/cordis.patch.yml` 里 `paoding-config-ui` 挂载行是否处于启用（未被注释）。全部正常后重启 DSH 再开设置页。
+走 plugin 通道装的，先确认 `dsh plugin add` 时指定的 profile 与当前 DSH 用的 profile 一致（这个 UI 按 profile 生效），且装完重启过 DSH；`--config-ui` 全局挂载的，依次检查：是否在挂载后重启过 DSH；npx/npm 安装的先确认 `$DSH_HOME/dsh-paoding` 目录存在（npx 缓存清理不影响它，缺了重跑一键安装即可），克隆安装的则看 `$DSH_HOME/node_modules/paoding-config-ui` 符号链接是否指向本仓库的 `plugins/paoding-config-ui`（指向其它来源时 `--config-ui` 会报错）；`$DSH_HOME/cordis.patch.yml` 里 `paoding-config-ui` 挂载行是否处于启用（未被注释）。全部正常后重启 DSH 再开设置页。
+
+**设置页出现两个「庖丁配置」分区**
+
+全局挂载与 plugin 通道并存了——两条不同来源的 insert 行同时生效（见第 2 节「勿混用」）。二选一：留在 plugin 通道，按第 2 节的迁移步骤删掉 `~/.dsh/cordis.patch.yml` 里的 `paoding-config-ui` 段与 `~/.dsh/node_modules/paoding-config-ui` 符号链接；回到全局挂载，则 `dsh plugin --profile web remove dsh-paoding`。改完重启 DSH。
