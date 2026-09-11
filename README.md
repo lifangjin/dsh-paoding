@@ -44,7 +44,7 @@ npx github:lifangjin/dsh-paoding   # 发布前从 GitHub 仓库直装，效果�
 
 这一条等价于 `--auto --config-ui`：生成编排预设、写好基础配置模板，并把「庖丁配置」挂进 DSH 设置页。开箱默认只带 DSH 自带的基础工具，检测到的 MCP/host 工具不会自动写入——装完在**设置 → 庖丁配置**里按需勾选工具与角色，「保存并应用」即生效；想逐项过一遍就跑 `npx dsh-paoding --wizard`，想沿用自动分配就加 `--suggest`。
 
-偏好官方插件通道的话，`dsh plugin --profile web add dsh-paoding@0.2.0` 也能把「庖丁配置」按 profile 装进设置页（preset 本体仍走 npx / `./install.sh`），详见[安装文档](docs/installation.md)。
+偏好官方插件通道的话，`dsh plugin --profile web add dsh-paoding@latest` 也能把「庖丁配置」按 profile 装进设置页（preset 本体仍走 npx / `./install.sh`），详见[安装文档](docs/installation.md)。
 
 **克隆仓库安装**——老路线原样保留：
 

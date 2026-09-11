@@ -72,7 +72,7 @@ When it finishes, **restart DSH (`dsh web`)**; the remaining steps are covered i
 Besides npx, the config UI can also be installed on its own through DSH's official plugin channel:
 
 ```bash
-dsh plugin --profile web add dsh-paoding@0.2.0
+dsh plugin --profile web add dsh-paoding@latest
 ```
 
 Restart DSH (`dsh web`) afterwards and the「庖丁配置」(Paoding Config) section appears in Settings; uninstall with `dsh plugin --profile web remove dsh-paoding`. The mechanism in one line: the `dsh-paoding` npm package declares a `dsh.bundle.patch` at its root (a `cordis.patch.yml` with one insert row, `id: paoding-config-ui` / `name: dsh-paoding`), and `reconcilePlugins` folds it into that profile's startup layer — the same npm package as the npx channel, just a second way to install it.
@@ -80,7 +80,7 @@ Restart DSH (`dsh web`) afterwards and the「庖丁配置」(Paoding Config) sec
 **This channel carries the UI only** (by design it cannot install the orchestrator preset or the config file — that half goes through npx / `./install.sh`), so the full setup takes two steps:
 
 ```bash
-dsh plugin --profile web add dsh-paoding@0.2.0   # the config UI, effective in the given profile only
+dsh plugin --profile web add dsh-paoding@latest   # the config UI, effective in the given profile only
 npx dsh-paoding@latest --no-ui                    # the preset + config template; --no-ui avoids mounting the UI twice
 ```
 
@@ -293,7 +293,7 @@ Then **restart DSH (`dsh web`)**; the "庖丁配置" (Paoding Config) section ap
 
 On the npx/npm entry there is no repository directory to link: the installer instead copies the whole package to `$DSH_HOME/dsh-paoding` (see §2) and mounts from there; only the clone-and-run-`./install.sh` route uses the symlink shown above. Both forms present the same `paoding-config-ui` package to DSH, so the loading mechanism in the next subsection is identical.
 
-Another route to the same section is DSH's official plugin channel: `dsh plugin --profile web add dsh-paoding@0.2.0` installs the UI on its own, per profile (see §2). Don't keep that mount side by side with `--config-ui`'s global one, or the Settings page ends up with a duplicate Paoding Config section.
+Another route to the same section is DSH's official plugin channel: `dsh plugin --profile web add dsh-paoding@latest` installs the UI on its own, per profile (see §2). Don't keep that mount side by side with `--config-ui`'s global one, or the Settings page ends up with a duplicate Paoding Config section.
 
 ### Loading mechanism
 

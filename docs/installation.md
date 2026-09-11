@@ -72,7 +72,7 @@ npm 包与命令同名：包 `dsh-paoding`，命令 `dsh-paoding`。这条默认
 npx 之外，配置 UI 还能走 DSH 的官方插件通道单独安装：
 
 ```bash
-dsh plugin --profile web add dsh-paoding@0.2.0
+dsh plugin --profile web add dsh-paoding@latest
 ```
 
 装完**重启 DSH（`dsh web`）**，设置页出现「庖丁配置」；卸载用 `dsh plugin --profile web remove dsh-paoding`。机制一句话：npm 包 `dsh-paoding` 在包根声明了 `dsh.bundle.patch`（一份 `cordis.patch.yml`，一行 insert：`id: paoding-config-ui` / `name: dsh-paoding`），安装后由 `reconcilePlugins` 自动并入该 profile 的启动层——与 npx 通道是同一个 npm 包，只是两种装法。
@@ -80,7 +80,7 @@ dsh plugin --profile web add dsh-paoding@0.2.0
 **这条通道只装 UI 这一件**（机制所限，编排 preset 与配置文件装不了，preset 那半边走 npx / `./install.sh`），想两步装齐全就这样搭配：
 
 ```bash
-dsh plugin --profile web add dsh-paoding@0.2.0   # 配置 UI，只在指定 profile 生效
+dsh plugin --profile web add dsh-paoding@latest   # 配置 UI，只在指定 profile 生效
 npx dsh-paoding@latest --no-ui                    # 编排 preset + 配置模板，--no-ui 防止 UI 重复挂载
 ```
 
@@ -290,7 +290,7 @@ cd dsh-paoding
 
 从 npx/npm 入口安装时没有仓库目录可链：安装器改为把整包复制到 `$DSH_HOME/dsh-paoding`（见第 2 节），再从那里挂载；只有克隆仓库跑 `./install.sh` 才走上面的符号链接直连。两种形态对 DSH 都是同一个 `paoding-config-ui` 包，下一节的加载机制完全一致。
 
-除了 `--config-ui`，还有一条路通向同一个分区：DSH 官方插件通道 `dsh plugin --profile web add dsh-paoding@0.2.0`，只装 UI、按 profile 生效（详见第 2 节）。它与这里的全局挂载勿并存，否则设置页会出现重复的「庖丁配置」。
+除了 `--config-ui`，还有一条路通向同一个分区：DSH 官方插件通道 `dsh plugin --profile web add dsh-paoding@latest`，只装 UI、按 profile 生效（详见第 2 节）。它与这里的全局挂载勿并存，否则设置页会出现重复的「庖丁配置」。
 
 ### 加载机制
 
