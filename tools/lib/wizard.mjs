@@ -484,19 +484,27 @@ export async function createCustomRole({ ask, toolPool, roleTools, rolePersonas,
     return null
   }
   console.log('  工具池（输入逗号分隔编号，all 全选，none 清空）：')
-  for (let i = 0; i < toolPool.length; i++) {
-    if (i % 4 === 0) console.log('    ')
-    process.stdout.write(`${i + 1}:${toolPool[i]}  `)
-  }
-  console.log()
-  const raw = (await ask('  > ')).trim()
+  // 零工具重问循环：tools 为空的自定义角色会在应用时被生成器拒绝（空
+  // toolFilter.allow → 子 agent 零工具），所以这里选不出工具就重显工具池重问，
+  // 直到至少选了一个；回车 / 'none' 视为清空重问。刻意不设跳出口——想放弃就回
+  // toolName 步骤输 done（本函数开头已处理）或直接 Ctrl-C；非 TTY 下向导根本
+  // 不会进入（cli 已挡），不存在 stdin 耗尽死循环的路径。
   const picked = new Set()
-  if (raw === 'all') toolPool.forEach((t, i) => picked.add(t))
-  else if (raw !== 'none' && raw !== '') {
-    for (const n of raw.split(',')) {
-      const i = Number(n.trim())
-      if (Number.isInteger(i) && i >= 1 && i <= toolPool.length) picked.add(toolPool[i - 1])
+  while (picked.size === 0) {
+    for (let i = 0; i < toolPool.length; i++) {
+      if (i % 4 === 0) console.log('    ')
+      process.stdout.write(`${i + 1}:${toolPool[i]}  `)
     }
+    console.log()
+    const raw = (await ask('  > ')).trim()
+    if (raw === 'all') toolPool.forEach((t) => picked.add(t))
+    else if (raw !== 'none' && raw !== '') {
+      for (const n of raw.split(',')) {
+        const i = Number(n.trim())
+        if (Number.isInteger(i) && i >= 1 && i <= toolPool.length) picked.add(toolPool[i - 1])
+      }
+    }
+    if (picked.size === 0) console.log('  至少选择一个工具（零工具自定义角色会在应用时被拒绝）')
   }
   const personaInput = (await ask('  persona 一句话（回车默认）: ')).trim()
   const persona = personaInput === '' ? null : `You are the ${toolName} agent. ${personaInput}`

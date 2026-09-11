@@ -135,8 +135,9 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 [docs/orchestration.md](orchestration.md)。
 
 内置四角色只是**出厂分工**：任何「工具 + 技能」组合都能以同一机制成为新委派工具——在配置文件 `roles`
-键写一个 toolName（或经向导 / 配置 UI 新建），安装器生成 `delegation-<toolName>` 块并把 toolName
-注入主 agent 白名单，详见 [docs/configuration.md](configuration.md) 第 6 节；自定义角色同样支持 `model` / `provider` 专用模型（与内置角色同一子键、同一生成机制，见 2.5）。例如建一个装配 `html-ppt`
+键写一个 toolName（或经向导 / 配置 UI 新建），安装器生成 `delegation-<toolName>` 块、把 toolName
+注入主 agent 白名单，并把角色 persona 首行职责句自动追加为主 agent persona 的委派行（tools 为空的
+角色应用时会被拒绝安装），详见 [docs/configuration.md](configuration.md) 第 6 节；自定义角色同样支持 `model` / `provider` 专用模型（与内置角色同一子键、同一生成机制，见 2.5）。例如建一个装配 `html-ppt`
 技能的 `ppt` agent，做 PPT 这类任务就有了专属子 agent。
 
 | 委派工具 | 实例 ID | persona 一句话职责 | 加载成本 |

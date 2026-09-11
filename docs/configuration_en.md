@@ -424,6 +424,16 @@ instead of asking a generalist role to handle it. Any installed skill can become
 way (frontend drafts, charts, document layout, …). This section covers the wizard/UI path (6.1), the
 hand-written static-source path (6.2), and configuration examples (6.3, including a skill-typed PPT agent).
 
+Two generation-time behaviors are worth stating up front. First, **a custom role with an empty tool
+surface is rejected at apply time** — a missing or empty `tools` list yields a blank allow list
+(`toolFilter.allow:` collapses to YAML null), leaving the sub-agent without a single tool; the generator
+treats custom roles exactly like built-ins here and refuses to install such a role, so give the role at
+least one tool before applying (the wizard keeps re-asking until you do). Second, the generator
+**appends the role's persona first line — its duty sentence — to the main-agent persona as a delegation
+row** (`- <duty>: delegate to <toolName>.`, right after the existing delegation rows); that row is the
+main agent's only routing hint for the role, so make the persona's first line a short duty sentence
+(e.g. "Find the skill that matches the user's need").
+
 ### 6.1 Path 1: interactive wizard / config UI (recommended)
 
 The wizard flow (`./install.sh` interactive, or the config UI's agent tool assignment):

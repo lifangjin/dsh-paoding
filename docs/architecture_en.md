@@ -168,8 +168,10 @@ persona and the delegation-failure SOP live in [docs/orchestration_en.md](orches
 
 The four built-in roles are just the factory division of labor: through the same mechanism, any combination
 of tools and skills becomes a new delegation tool — write a toolName under the config `roles` key (or create
-it in the wizard / config UI), the installer generates a `delegation-<toolName>` block and injects the
-toolName into the main-agent allow list; see section 6 of [docs/configuration_en.md](configuration_en.md).
+it in the wizard / config UI), the installer generates a `delegation-<toolName>` block, injects the
+toolName into the main-agent allow list, and appends the role's persona first line (its duty sentence)
+to the main-agent persona as a delegation row (a role with no tools is rejected at apply time); see
+section 6 of [docs/configuration_en.md](configuration_en.md).
 Custom roles support the same `model` / `provider` dedicated-model sub-keys as the built-in roles (same
 sub-keys, same generation mechanism — see 2.5).
 For example, a `ppt` agent carrying the `html-ppt` skill gives slide-making its own dedicated sub-agent.

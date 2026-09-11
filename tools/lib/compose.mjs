@@ -8,6 +8,11 @@
  * （injectRoleAgentOptions，roles.<toolName>.model / .provider → 内置角色委派块
  * 的 agentOptions 子块）、restrict config.allow 注入（computeRestrictAllow /
  * injectRestrictAllow / filterHostTools）与整文 compose（composeGenerated）。
+ * 自定义角色另有两道防护/自动化：tools 为空时拒绝安装零工具角色
+ * （renderCustomRoleBlocks 直接 throw，防 `toolFilter.allow:` 空白名单）；并把
+ * 角色 persona 首行职责句自动追加为主 agent persona 委派行
+ * （composeMainPersonaEdit 第 4 参 customBullets → `- <职责>: delegate to
+ * <toolName>.`），否则主 agent 永远不会委派给自定义角色。
  * 依赖 util（ROLES / warn / DEFAULT_MAIN_AGENT_PERSONA_EXTRA）、config
  * （normalizeMainAgentName / normalizeModelRef / yamlScalar）与 host
  * （isHostDependent）；被 wizard / state 引用。
@@ -85,6 +90,12 @@ export function renderCustomRoleBlocks(roles, skillsMap) {
   if (custom.length === 0) return ''
   const chunks = []
   for (const [toolName, role] of custom) {
+    // 零工具防护（与 composeGenerated 内置角色循环同款）：tools 为空（缺省或
+    // `tools:` 空列表）会生成 `toolFilter.allow:`（YAML null），子 agent 创建后
+    // 零工具——宁可拒绝安装，也不静默生成一个干不了活的角色。
+    if ((role.tools ?? []).length === 0) {
+      throw new Error(`role "${toolName}" would end up with an empty toolFilter.allow — refusing to install a zero-tool role.`)
+    }
     const persona = withSkillGuidance(
       role.persona || `You are the ${toolName} agent. Handle tasks delegated to this role.`,
       toolName,
@@ -311,18 +322,24 @@ export function injectRoleAgentOptions(srcText, role, model, provider) {
 }
 
 /**
- * 主 persona 整块改造（改名 + 删委派 bullet），返回一个 span edit
- * { start, end, text }（start/end 为源文本原坐标、随其它 edits 降序应用），
+ * 主 persona 整块改造（改名 + 删委派 bullet + 自定义角色自动委派行），返回一个
+ * span edit { start, end, text }（start/end 为源文本原坐标、随其它 edits 降序应用），
  * 无任何改动时返回 null（产物零 diff）。结构扫描与 appendToMainPersona 相同：
  * `- id: persona` 行 → `text: |-` → 首内容行定缩进 → 浅缩进行收尾。
  *  - 改名：main_agent_name 非空时，把身份行 label 换成它（正则不中则 warn 不崩）；
  *  - 删 bullet：对每个 removedRoles 角色，删掉 content 中 trimmed 匹配
- *    `^- .*delegate to <role>\.?$` 的行（限定行首 `- `，不误删 SOP 段落）。
+ *    `^- .*delegate to <role>\.?$` 的行（限定行首 `- `，不误删 SOP 段落）；
+ *  - 自定义角色自动委派行：customBullets（第 4 参，元素 { toolName, duty }）逐个
+ *    渲染成 `- <duty>: delegate to <toolName>.`（duty 去掉尾部 `。`/`.`/`！`/`!`
+ *    与空白），插到 body 中最后一个匹配 `^- .*delegate to \S+\.?$` 的行之后；
+ *    一条都没有时退到匹配 `^Decompose the task` 的行之后；仍没有则退到首行之后。
+ *    其余文本与空行结构保持不变——没有这行指引，主 agent persona 就不含自定义
+ *    角色，主 agent 永远不会委派给它。
  * 返回值经 renderPersona 以块标量整体回填；技能行/extra 追加在 edits 应用后由
  * appendToMainPersona 基于已改造文本追加，顺序天然正确。
  */
-export function composeMainPersonaEdit(srcText, mainAgentName, removedRoles) {
-  if (!mainAgentName && removedRoles.length === 0) return null
+export function composeMainPersonaEdit(srcText, mainAgentName, removedRoles, customBullets = []) {
+  if (!mainAgentName && removedRoles.length === 0 && customBullets.length === 0) return null
   const marker = `- id: persona\n  name: '@deepseek-ai/dsh-persona'`
   const idx = srcText.indexOf(marker)
   if (idx === -1) throw new Error('main agent persona block (`- id: persona` / @deepseek-ai/dsh-persona) not found')
@@ -362,6 +379,30 @@ export function composeMainPersonaEdit(srcText, mainAgentName, removedRoles) {
     body = lines
       .filter((line) => !dropRe.some((re) => re.test(line.trim())))
       .join('\n')
+  }
+  if (customBullets.length > 0) {
+    // 自定义角色自动委派行：duty 去尾部句读与空白后渲染成 `- <duty>: delegate to
+    // <toolName>.`；插到最后一条既有委派行之后（与编排段落保持相邻），一条都没有
+    // 则退到 Decompose the task 行之后、再退到首行之后。
+    const lines = body.split('\n')
+    const bullets = customBullets.map(({ toolName, duty }) => {
+      const cleaned = String(duty ?? '').trim().replace(/[。.!！]+$/u, '').trim()
+      return `- ${cleaned}: delegate to ${toolName}.`
+    })
+    let after = -1
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (/^- .*delegate to \S+\.?$/.test(lines[i].trim())) {
+        after = i
+        break
+      }
+    }
+    if (after === -1) {
+      const decIdx = lines.findIndex((l) => /^Decompose the task/.test(l.trim()))
+      if (decIdx !== -1) after = decIdx
+    }
+    if (after === -1) after = 0 // 兜底：插到首行之后
+    lines.splice(after + 1, 0, ...bullets)
+    body = lines.join('\n')
   }
   return { start: dashStart, end, text: renderPersona(body, indent) }
 }
@@ -464,8 +505,15 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
     const span = delegationRowSpan(srcText, role)
     edits.push({ start: span.start, end: span.end, text: '' })
   }
-  // 主 persona 改造（改名 + 删委派 bullet）：无任何改动时不产 edit（产物零 diff）。
-  const personaEdit = composeMainPersonaEdit(srcText, mainAgentName, removedRoles)
+  // 主 persona 改造（改名 + 删委派 bullet + 自定义角色自动委派行）：无任何改动时
+  // 不产 edit（产物零 diff）。自定义角色取 persona 首行职责句生成 delegate 行
+  // （firstLine 对空 persona 返回占位「自定义角色」，中文占位可直接用）——没有这
+  // 行指引，主 agent persona 就不含该角色，永远不会委派给它。
+  const customBullets = customToolNames.map((n) => ({
+    toolName: n,
+    duty: firstLine(assignments.roles[n]?.persona || ''),
+  }))
+  const personaEdit = composeMainPersonaEdit(srcText, mainAgentName, removedRoles, customBullets)
   if (personaEdit !== null) edits.push(personaEdit)
 
   // 角色专用模型注入（roles.<toolName>.model / .provider → 委派块 agentOptions）：

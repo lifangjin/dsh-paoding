@@ -10,7 +10,7 @@ dsh-paoding（中文品牌「庖丁」，典出《庄子》庖丁解牛——顺
 - **角色分工编排**：主 agent 拆解任务、沿任务纹理分派，内置四个委派角色——联网调研 `search_external`、UI/设计 `design`、写代码 `implement`、全仓深搜 `search_internal_deep`，各干一摊。
 - **主 agent 可改名、内置角色可删/可恢复**：`main_agent_name` 一处改两处——部署 preset 显示名与 persona 身份行；`roles_remove` 可从部署中整条删掉 `search_external` / `design` / `implement` 之一（委派行、工具面、角色 persona 与主 agent 委派指引一并消失），配置 UI 角色列表末尾可一键恢复。内置角色也可配**显示名**：`roles.<toolName>.name` 只替换该角色 persona 首行身份句的主语（如 design 配 `UI 设计` 后身份句为 `You are the UI 设计 agent.`），工具注册名 / 委派调用名与委派机制均不动。
 - **每个角色可配专用模型**：`roles.<toolName>.model` / `.provider` 给角色（内置三角色或自定义角色均可）指定固定模型——例如 `implement` 固定用 pro 档、调研角色用轻量快档；不配则随主 agent 会话当前模型走（见 [配置](docs/configuration.md) 2.5 节）。
-- **自定义角色 agent（你的专属分工）**：内置四角色只是起点——任意「工具 + 技能」组合都能注册成新的委派工具，向导、配置文件 `roles` 键或配置 UI 都能建。例如建一个装配 `html-ppt` 技能的 `ppt` agent：之后主 agent 一句「把这份大纲做成 PPT」就委派给会做幻灯片的专属子 agent。
+- **自定义角色 agent（你的专属分工）**：内置四角色只是起点——任意「工具 + 技能」组合都能注册成新的委派工具，向导、配置文件 `roles` 键或配置 UI 都能建。例如建一个装配 `html-ppt` 技能的 `ppt` agent：之后主 agent 一句「把这份大纲做成 PPT」就委派给会做幻灯片的专属子 agent。生成器会把角色 persona 首行职责句自动追加为主 agent persona 的委派行（建议首行写一句简短职责）；tools 为空的角色应用时会被拒绝安装，记得至少配一个工具。
 - **按需加载冷路径**：外部调研 / 设计 / 实现只在委派那一刻加载自己的工具面（约 3.0k–3.7k tokens/委派，估算），用一次付一次。
 - **上下文隔离**：worker 上下文小而专、跑完即弃；主 agent 只集成摘要，不再累积搜索 dump、设计稿与 diff。
 - **工具面开销下降**：主 agent 工具面 60 → 21 项白名单，每请求 ≈16.2k → ≈5.5k tokens（估算，↓约 66%）；`web_search` / `mcp__tavily__*` / `write` / `edit` / `skill` / `workflow` / `ralph` 等整类从主 agent 移除。
