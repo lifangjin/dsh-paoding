@@ -49,7 +49,7 @@ If you prefer the official plugin channel, `dsh plugin --profile web add dsh-pao
 **Clone and install** — the classic route, unchanged:
 
 ```bash
-git clone <repo-url> dsh-paoding
+git clone https://github.com/lifangjin/dsh-paoding.git dsh-paoding
 cd dsh-paoding
 ./install.sh              # interactive wizard; press Enter to keep defaults
 ./install.sh --auto       # non-interactive: apply the config if present, else write the base template (--suggest for smart defaults)

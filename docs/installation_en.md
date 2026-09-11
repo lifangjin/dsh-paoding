@@ -25,7 +25,7 @@ Check the following before installing:
 - **Get the source**: clone the repository and enter the directory (skip this step entirely if you just want the one-command npx install in §2):
 
 ```bash
-git clone <repo-url> dsh-paoding
+git clone https://github.com/lifangjin/dsh-paoding.git dsh-paoding
 cd dsh-paoding
 ```
 

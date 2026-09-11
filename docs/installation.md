@@ -25,7 +25,7 @@
 - **拿到源码**：克隆仓库后进入目录（只想用第 2 节的 npx 一键安装，这步可以跳过）：
 
 ```bash
-git clone <repo-url> dsh-paoding
+git clone https://github.com/lifangjin/dsh-paoding.git dsh-paoding
 cd dsh-paoding
 ```
 

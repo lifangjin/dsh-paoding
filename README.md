@@ -49,7 +49,7 @@ npx github:lifangjin/dsh-paoding   # 发布前从 GitHub 仓库直装，效果�
 **克隆仓库安装**——老路线原样保留：
 
 ```bash
-git clone <repo-url> dsh-paoding
+git clone https://github.com/lifangjin/dsh-paoding.git dsh-paoding
 cd dsh-paoding
 ./install.sh              # 交互向导，一路回车即用默认
 ./install.sh --auto       # 非交互：有配置应用配置，没配置写基础模板（--suggest 用智能默认）
