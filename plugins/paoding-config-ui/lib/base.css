@@ -98,11 +98,28 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
-.omd-actions {
+/* Sticky bottom action dock: keeps the primary buttons reachable at the
+   bottom of the scroll container while the user edits lower groups. */
+.omd-actionBar {
+  position: sticky;
+  bottom: 8px;
+  z-index: 6;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
+  background: var(--dsw-alias-bg-layer-3);
+  box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.35);
+}
+
+/* 主操作（保存并应用）推到操作坞最右；窄屏换行时落到次行右缘。 */
+.omd-applyDock {
+  margin-left: auto;
+  display: inline-flex;
 }
 
 .omd-chips {

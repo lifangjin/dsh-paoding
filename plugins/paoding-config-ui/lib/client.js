@@ -31,7 +31,7 @@ window.__ModuleLoader__.load({
 
     var React = require("react");
     var h = React.createElement;
-    var useState = React.useState, useEffect = React.useEffect, useCallback = React.useCallback;
+    var useState = React.useState, useEffect = React.useEffect, useCallback = React.useCallback, useRef = React.useRef;
     var P = require("@deepseek-ai/dsh-client-ui-primitives");
 
     // ── 样式注入（幂等）─────────────────────────────────────────────────
@@ -267,6 +267,9 @@ window.__ModuleLoader__.load({
       var _mg = useState(null), modelGroups = _mg[0], setModelGroups = _mg[1]; // 模型目录 groups（/api/paoding/models）
       var _mgok = useState(false), modelGroupsOk = _mgok[0], setModelGroupsOk = _mgok[1]; // 目录可用 = 下拉模式；false = 降级双 input
       var _mgerr = useState(""), modelGroupsErr = _mgerr[0], setModelGroupsErr = _mgerr[1]; // 目录拉取失败原因（降级 hint 一句话展示）
+      var rootRef = useRef(null); // 面板根节点（重新检测后回顶用）
+      var previewRef = useRef(null); // 预览生成组根节点（条件渲染，预览成功后定位用）
+      var _sr = useState(null), scrollReq = _sr[0], setScrollReq = _sr[1]; // 滚动请求："preview" | "top" | null
 
       var api = useCallback(function (path, body) {
         var opts = body === undefined ? {} : {
@@ -356,6 +359,14 @@ window.__ModuleLoader__.load({
       }, [api]);
 
       useEffect(loadModels, [loadModels]);
+
+      // 滚动请求：preview 需等条件渲染挂载后生效（effect 在 commit 后运行），top 立即生效。
+      useEffect(function () {
+        if (!scrollReq) return;
+        var el = scrollReq === "preview" ? previewRef.current : rootRef.current;
+        if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        setScrollReq(null);
+      }, [scrollReq, preview]);
 
       function setRoleTools(name, tool, on) {
         setAssign(function (prev) {
@@ -511,6 +522,7 @@ window.__ModuleLoader__.load({
         setPreview(null);
         api("preview", { assignments: assign }).then(function (r) {
           setPreview(r);
+          setScrollReq("preview"); // 预览成功后自动滚动定位到预览生成区
           setNote("");
         }).catch(function (err) { setError(err.message); }).finally(function () {
           setBusy(false);
@@ -537,6 +549,7 @@ window.__ModuleLoader__.load({
       function doRescan() {
         setBusy(true);
         setBusyOp("rescan");
+        setScrollReq("top"); // 立即滚动回面板顶部看状态说明（不等接口返回）
         api("rescan", {}).then(function (d) {
           setData(d);
           setAssign(buildAssignments(d));
@@ -1051,7 +1064,7 @@ window.__ModuleLoader__.load({
 
       var pluginChips = data ? pluginChipsOf(data) : { primary: [], secondary: [] };
 
-      return h("div", { className: "omd-section" },
+      return h("div", { className: "omd-section", ref: rootRef },
         h("p", { className: "omd-intro" }, INTRO),
 
         // 状态与操作
@@ -1061,7 +1074,6 @@ window.__ModuleLoader__.load({
             h("span", null, "状态与操作")),
           statusBarOf(),
           runtimeNoteOf(data),
-          h("div", { className: "omd-actions" }, applyBtn, previewBtn, rescanBtn),
           h("div", { className: "omd-chips" },
             h(P.Pill, null, "profile " + (data.effectiveProfile || "web")),
             (data.mcpReports || []).map(function (m) {
@@ -1116,7 +1128,7 @@ window.__ModuleLoader__.load({
           skillsBlock()),
 
         // 预览生成（预览成功后才出现）
-        preview ? h("div", { className: "omd-group" },
+        preview ? h("div", { className: "omd-group", ref: previewRef },
           h("div", { className: "omd-groupHeading" },
             h("span", { className: "omd-groupIcon" }, ic(P.IconDataOutline16, 14)),
             h("span", null, "预览生成")),
@@ -1124,7 +1136,12 @@ window.__ModuleLoader__.load({
             "✅ 生成成功（未写盘）" + (preview.roleResults || []).map(function (r) {
               return " · " + r.role + ": " + r.intent.length + " → " + r.kept.length;
             }).join("")),
-          h("pre", { className: "omd-pre" }, preview.text)) : null);
+          h("pre", { className: "omd-pre" }, preview.text)) : null,
+
+        // 悬浮操作坞（sticky bottom：按钮常驻滚动容器底部，改完配置无需滚回顶部再操作）
+        h("div", { className: "omd-actionBar" },
+          previewBtn, rescanBtn,
+          h("span", { className: "omd-applyDock" }, applyBtn)));
     }
 
     // ── cordis client 插件：注册到设置页 settings.section 槽位 ──────────────

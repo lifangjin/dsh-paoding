@@ -305,7 +305,7 @@ cd dsh-paoding
 
 ### 面板能力
 
-- **状态与操作**：顶部按钮「**保存并应用**」「预览生成」「重新检测」；检测摘要与 chips（当前 profile、每个 MCP 服务器及工具数、插件 chips、技能数等）。
+- **状态与操作**：检测摘要与 chips（当前 profile、每个 MCP 服务器及工具数、插件 chips、技能数等）；操作按钮「**保存并应用**」「预览生成」「重新检测」固定在面板底部悬浮操作坞（sticky bottom），滚动任意位置都可直接点击。
 - **Agent 工具分配卡片**：主 agent 一张固定卡（基础工具取消勾选 = 加入 `main_agent_remove` 从主 agent 剔除；Host 工具勾选 = 加入 `main_agent_extra`；技能「read 按需」与「内联全文」两组勾选；另有「人设追加」编辑区，可改、清空、恢复默认）＋ `search_external` / `design` / `implement` 三张内置角色卡 ＋ 任意自定义角色卡（带删除按钮）；每张角色卡可勾选/取消基础工具与 Host 工具、编辑 persona。底部「新建自定义 agent 角色」。
 - **技能分配**：每个 skill 一行，勾选分配给哪些 agent（写入对应 persona 的 `Available skills` 软引导；角色技能软引导，主 agent 技能另有 read 按需/内联两组）。
 - **预览生成**：不写盘生成 `agent.cordis.yml`，显示每个角色 allow 的 intent → kept 计数与生成全文。
