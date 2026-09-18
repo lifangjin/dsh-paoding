@@ -3,7 +3,7 @@
 
 # 编排
 
-编排行为是 dsh-paoding 的核心：主 agent 拆解任务、沿任务纹理委派、集成结果；子 agent 按角色只带必要工具、跑完即弃。本文面向想了解或调优这些行为的用户：失败如何被发现与恢复、one-shot 与多轮迭代（continuable）的取舍、以及可选的 `implement_cont` 增强如何启用。与源码冲突处一律以源码为准；本文所有配置引用均取自 `presets/orchestrator/agent.cordis.yml` 与 `presets/orchestrator/restrict.mjs`。
+编排行为是 dsh-paoding 的核心：主 agent 拆解任务、沿任务纹理委派、集成结果；子 agent 按角色只带必要工具、跑完即弃。本文面向想了解或调优这些行为的用户：失败如何被发现与恢复、one-shot 与多轮迭代（continuable）的取舍、会话模式如何按角色切换——面板与配置键直达，`implement_cont` 手编路径作为免面板的进阶保留。与源码冲突处一律以源码为准；本文所有配置引用均取自 `presets/orchestrator/agent.cordis.yml` 与 `presets/orchestrator/restrict.mjs`。
 
 ## 编排总览
 
@@ -24,7 +24,7 @@ dsh-paoding 把 DSH 从「单体 agent 全量加载工具」改造成「主 agen
 | 协调 | `todo_write` / `ask_user_question` / `get_goal` / `create_goal` / `update_goal` / `exit_plan_mode` / `job_output` / `job_list` / `job_kill` |
 | 主 agent 刻意看不到 | `web_search`、`mcp__tavily__*`、`write` / `edit`、`skill`、`workflow`、`ralph`、裸 `subagent` / `subagent_fork` |
 
-每请求工具开销（估算，随注册面浮动）：主 agent 全量 ~16.2k tokens → 白名单后 ~5.5k；`search_external` ~3.0k / `design` ~3.2k / `implement` ~3.7k，仅在真正委派时发生（数值来源：`agent.cordis.yml` 头部注释）。
+每请求工具开销（估算，随注册面浮动）：主 agent 全量 ~16.2k tokens → 白名单后 ~5.5k；`search_external` ~3.0k / `design` ~3.3k / `implement` ~3.8k，仅在真正委派时发生（数值来源：`agent.cordis.yml` 头部注释）。
 
 ### 主 agent persona（编排人设）原文摘录
 
@@ -61,9 +61,9 @@ DSH 没有原生自动重试——恢复是编排层的职责，具体地说就�
 
 子 agent 创建时，DSH 会对 `toolFilter.allow` 做 `tools.restrict()` 校验：allow 里的每个名字必须存在于子 agent 可见注册面（= 本组合注册全量 + host 层 MCP/插件工具）内，否则**创建被拒**（`tools.restrict() ... unknown tools`）。
 
-本 preset 在安装期消除这类失败：`./install.sh`（tools/install.mjs）读取 host patch 层（home / profile / `--patch`），检测实际启用的 MCP 服务器与本地工具插件，解析出精确工具名（静态已知表优先，未知服务器走实时 JSON-RPC 握手），然后把各角色 allow 重写为「静态意图 ∩ 实际检测到的工具」——组合保证的基础工具原样保留，未启用/无法解析的 host 工具被剔除。握手失败或 transport 不支持的 MCP 会被跳过：对应角色只是缺这些工具，安装不报错。宿主停用/启用了 MCP 或插件后，重跑一次 `./install.sh --auto` 即可同步 allow（`--dry-run` 先预览）。细节见[安装](installation.md)。
+本 preset 在生成期消除这类失败：生成器（面板「保存并应用」与兜底 CLI 共用同一管线）读取 host patch 层（home / profile / `--patch`），检测实际启用的 MCP 服务器与本地工具插件，解析出精确工具名（静态已知表优先，未知服务器走实时 JSON-RPC 握手），然后把各角色 allow 重写为「静态意图 ∩ 实际检测到的工具」——组合保证的基础工具原样保留，未启用/无法解析的 host 工具被剔除。握手失败或 transport 不支持的 MCP 会被跳过：对应角色只是缺这些工具，应用不报错。宿主停用/启用了 MCP 或插件后，到「庖丁配置」点一次「保存并应用」即可同步 allow（「预览生成」先看清单）。细节见[安装](installation.md)。
 
-注意：安装器的 allow 重写只覆盖三个内置角色（`search_external` / `design` / `implement`，`tools/install.mjs` 的 `ROLES` 常量）。手写新增的 `delegation-*` 块（例如第 4 节的 `implement_cont`）**原样生效、不会被自动清洗**——其中的 host 依赖工具名必须自己与宿主实际启用的插件保持同步，否则创建被拒。这正是 2026-09-02 起各角色 allow 剔除 `memory_search` / `mcp__codegraph__codegraph_explore` 的原因（插件停用时这些名字不在注册面；重开插件时按需加回，见 `agent.cordis.yml` 中 `delegation-search-internal-deep` 的注释）。
+注意：生成器的 allow 重写只覆盖三个内置角色（`search_external` / `design` / `implement`，`tools/install.mjs` 的 `ROLES` 常量）。手写新增的 `delegation-*` 块（例如第 4 节手编的 `implement_cont`）**原样生效、不会被自动清洗**——其中的 host 依赖工具名必须自己与宿主实际启用的插件保持同步，否则创建被拒。这正是 2026-09-02 起各角色 allow 剔除 `memory_search` / `mcp__codegraph__codegraph_explore` 的原因（插件停用时这些名字不在注册面；重开插件时按需加回，见 `agent.cordis.yml` 中 `delegation-search-internal-deep` 的注释）。
 
 ### 第 2 层：检测
 
@@ -109,49 +109,51 @@ Delegation failure handling (SOP):
 | `max-tokens` | 把任务拆小再重委派，或要求子 agent 分步输出 |
 | `refusal` | **不重试同一任务**：调整任务范围/表述、换角色，或自己处理——refusal 是策略决定，不是瞬时错误 |
 | `aborted` | 仅当取消是意外才重委派 |
-| completed 但产出差 | 带具体缺失点重委派；子 agent 为 continuable 时用 `send_message` 让它补完缺口 |
+| completed 但产出差 | 带具体缺失点重委派；角色为 continuable 时走下方的 continuable 分支 |
 | 同一任务失败 **2 次** | 停止重试，向用户报告失败原因与已尝试方案；绝不循环一个失败的委派 |
 | 任何重委派 | **必须携带上次的集成摘要**：做了什么 / 败在哪 / 从哪接续——子 agent 无需从冷上下文重新推导 |
 
-设计要点：SOP 是 persona 文本而非代码逻辑，因此可以按需编辑——直接改 `presets/orchestrator/agent.cordis.yml` 中 persona 段落（YAML 块标量，内容行缩进 10 空格，注意保持缩进），再重跑 `./install.sh --auto` 应用。例如想让失败任务更频繁地退回主 agent 自己做、或对某个角色采用不同的重试上限，都可在此调整。
+continuable 分支（SOP 新增）：失败或产出不满、**且该角色已配成 continuable** 时，先 `send_message` 在同一子会话续修——子 agent 记得自己做到哪，就地补完；续修无效再回到上表按停止原因重委派（重委派从首选退为退路）。
+
+设计要点：SOP 是 persona 文本而非代码逻辑，因此可以按需编辑——直接改 `presets/orchestrator/agent.cordis.yml` 中 persona 段落（YAML 块标量，内容行缩进 10 空格，注意保持缩进），再到「庖丁配置」点「保存并应用」重新生成。例如想让失败任务更频繁地退回主 agent 自己做、或对某个角色采用不同的重试上限，都可在此调整。
 
 ## one-shot 与多轮迭代
 
 ### 默认：one-shot（用完即弃）
 
-四个角色委派实例（`delegation-search-external` / `delegation-design` / `delegation-implement` / `delegation-search-internal-deep`）只配置 `provider: spawn`，**不设 `backgroundMode`**，因此取 `dsh-tool-subagent` 的配置默认值 `one-shot`。任一角色还可经 `roles.<toolName>.model` / `.provider` 固定专用模型——配置后该角色固定用自己的模型，不随主 agent 会话切换模型而变（见[配置](configuration.md) 2.5）。含义：
+四个角色委派实例（`delegation-search-external` / `delegation-design` / `delegation-implement` / `delegation-search-internal-deep`）的会话模式都是 one-shot——基础模板把四个内置角色显式写明（委派块里的 `backgroundMode: one-shot` 行，纯为可见性，省得打开文件猜默认值），语义与 `dsh-tool-subagent` 的配置默认值一致。会话模式按角色可配：任一角色（含自定义角色）经 `roles.<toolName>.background_mode` 切成 `continuable`（见[配置](configuration.md) 2.6）；还可经 `roles.<toolName>.model` / `.provider` 固定专用模型——配置后该角色固定用自己的模型，不随主 agent 会话切换模型而变（见[配置](configuration.md) 2.5）。含义：
 
 - 一次委派 = 一个用完即弃的子会话。调用默认等子 agent 跑完、把结果交回主 agent（也可按工具参数 `run_in_background` 转为后台 job，用 `job_output` 收结果、`job_kill` 叫停）。
 - 子会话在任务结束时即弃，其工具面与上下文只为该次运行而加载（**按需加载 + 上下文隔离**，这是本 preset 的核心设计）。
-- 与组合里另外两个通用委派行不同——`tool-subagent`（`subagent`，continuable）与 `tool-subagent-fork`（`subagent_fork`，continuable）是通用、可续的委派工具，但主 agent 白名单刻意不向其暴露；模型可见的委派面只有上述 one-shot 角色工具。
+- 与组合里另外两个通用委派行不同——`tool-subagent`（`subagent`，continuable）与 `tool-subagent-fork`（`subagent_fork`，continuable）是通用、可续的委派工具，但主 agent 白名单刻意不向其暴露；模型可见的委派面只有上述角色工具（每个角色的会话模式可配，见下）。
 
 ### 需要多轮迭代时的两条路
 
 - **路径 A（推荐，零成本）：集成摘要 → 重委派。** 主 agent 手里已有上轮集成摘要，直接以摘要为起点重委派一个新 one-shot 任务。子 agent 依旧用完即弃，主 agent 的摘要就是跨轮的「记忆」，重派成本可控，不改变任何持久化/生命周期模型。这是默认 SOP 对 `error` / `completed-but-poor` 等场景的处理方式（见上节）。
-- **路径 B（可选增强）：`backgroundMode: continuable`。** 新增一个可续的 `implement` 实例（`implement_cont`，启用方法见第 4 节）。continuable 调用的工具语义（`dsh-tool-subagent` 工具描述）：默认**后台运行**、立即返回一个持久的子 agent id，子会话**跨轮保留**；该轮跑完后运行时向主 agent 发送结果通知（结果 + 最后一条 assistant 消息）；之后主 agent 用 `send_message` 在**同一个子会话**开启后续轮次。收益：失败或产出不满意时无需重推——子 agent 记得自己查过什么、改到哪，`send_message` 就地续修即可。
+- **路径 B（配置直达）：把任一角色设为 continuable。** 面板角色卡把「会话模式」选成「可续（continuable）」，或配置里写 `roles.<toolName>.background_mode: continuable`——内置角色、自定义角色都行，见[配置](configuration.md) 2.6；免面板的手编路径 `implement_cont` 仍保留，见第 4 节。continuable 调用的工具语义（`dsh-tool-subagent` 工具描述）：默认**后台运行**、立即返回一个持久的子 agent id，子会话**跨轮保留**；该轮跑完后运行时向主 agent 发送结果通知（结果 + 最后一条 assistant 消息）；之后主 agent 用 `send_message` 在**同一个子会话**开启后续轮次。收益：失败或产出不满意时无需重推——子 agent 记得自己查过什么、改到哪，`send_message` 就地续修即可；主 persona 的委派失败 SOP 已为此新增分支——可续角色失败或产出不满先同会话续修，重委派退为退路（见上节）。
 
 ### 代价与前提（如实说明）
 
 continuable 不是免费的，启用前请确认以下四点：
 
-1. **前置：continuable 需要 `sessionPersistence` 后端。** standard 设计把 persistence 放在 **host 层**（preset 不拥有它），所以要在 `~/.dsh/cordis.patch.yml` 挂 `@deepseek-ai/dsh-session-persistence-jsonl`（`config.root` **必填**，见插件 schema）。未挂载时 continuable 创建/续跑会直接报错：`continuable subagents require session persistence (load a dsh-session-persistence backend)`（错误码 `PERSISTENCE_UNAVAILABLE`）。这是**机器级全局改动**——persistence 影响该机器上所有会话，不是 preset 内改动，卸载 preset 也不会撤销它。
+1. **前置：continuable 需要 `sessionPersistence` 后端。** standard 设计把 persistence 放在 **host 层**（preset 不拥有它），所以要在 `~/.dsh/cordis.patch.yml` 挂 `@deepseek-ai/dsh-session-persistence-jsonl`（`config.root` **必填**，见插件 schema）。未挂载时 continuable 创建/续跑会直接报错：`continuable subagents require session persistence (load a dsh-session-persistence backend)`（错误码 `PERSISTENCE_UNAVAILABLE`）。「庖丁配置」面板在未探测到 `sessionPersistence` 时会就地警告但不拦截——正常顺序是先挂后端、再开 continuable。这是**机器级全局改动**——persistence 影响该机器上所有会话，不是 preset 内改动，卸载 preset 也不会撤销它。
 2. **持久化会话无 TTL**，会持续写盘累积（`config.root` 目录下按项目/会话组织 JSONL 落盘）。需要自行 `interrupt_agent` 停用不再需要的会话、并清理落盘文件。
-3. **token 成本随轮次上升。** continuable 子 agent 每轮携带自己累积的上下文，长期挂着每轮成本只增不减——这与「用完即弃 / 按需加载」的设计初衷相悖。建议只对 implement 类**多轮打磨**任务用（这正是 `implement_cont` 的名字由来）。
+3. **token 成本随轮次上升。** continuable 子 agent 每轮携带自己累积的上下文，长期挂着每轮成本只增不减——这与「用完即弃 / 按需加载」的设计初衷相悖。建议只对**多轮打磨**类委派用（手编示例 `implement_cont` 的名字就是这么来的）。
 4. **权限规则不变。** continuable 不改变 DSH 的权限语义：被拒操作依然不重试、只能换路；角色失败汇报协议与主 agent 的委派失败 SOP 对 continuable 子 agent 同样适用（SOP 里 `send_message` 分支就是为它写的）。
 
 对照小结：
 
-| 维度 | one-shot（默认角色） | continuable（`implement_cont`） |
+| 维度 | one-shot（默认角色） | continuable（任意可续角色） |
 |---|---|---|
 | 会话生命周期 | 任务结束即弃 | 跨轮保留（durable subagent id） |
 | 续修方式 | 主 agent 摘要 → 重委派新任务 | `send_message` 同一会话就地续修 |
 | 持久化要求 | 无 | host 层 `sessionPersistence` 后端（机器级） |
 | 长期成本 | 每轮只付新任务 | 每轮携带累积上下文，成本上升 |
-| 适用 | 一切委派（默认） | 仅 implement 类多轮任务 |
+| 适用 | 一切委派（默认） | 多轮打磨类委派（按角色开启，见[配置](configuration.md) 2.6） |
 
-## implement_cont 启用示例
+## 进阶：免面板手编 implement_cont
 
-本节把第 3 节的路径 B 落到配置，共 5 步。默认 preset **不含** `implement_cont`——需要时自行启用，用完可整体移除。所有 YAML 均为配置原文（来自 [README.md](../README.md) 的示例，已与源码核对）。
+路径 B 的主路径在面板与配置键——角色卡「会话模式」一键可达（见[配置](configuration.md) 2.6）。本节是等价的免面板手编路径，共 5 步，供想看清生成层到底写了什么、或在不起面板的环境里操作时使用。默认 preset **不含** `implement_cont`——需要时自行启用，用完可整体移除。所有 YAML 均为配置原文（来自 [README.md](../README.md) 的示例，已与源码核对）。
 
 ### 第 1 步 —— host 层挂 persistence 后端（机器级，全局生效）
 
@@ -188,6 +190,7 @@ continuable 不是免费的，启用前请确认以下四点：
         toolFilter:
           allow:
             - read
+            - read_image
             - write
             - edit
             - glob
@@ -222,27 +225,24 @@ continuable 不是免费的，启用前请确认以下四点：
     - implement_cont
   ```
 
-  安装时 `implement_cont`（非 host 依赖名）会被并入生成的 `config.allow`。也可在配置 UI（设置 → **庖丁配置** → 主 agent 卡）勾选，见[配置](configuration.md)。
+  应用时 `implement_cont`（非 host 依赖名）会被并入生成的 `config.allow`。也可在面板（设置 → **庖丁配置** → 主 agent 卡）勾选，见[配置](configuration.md)。
 
-- **或：改 `restrict.mjs` 常量。** 在 `presets/orchestrator/restrict.mjs` 的 `MAIN_AGENT_ALLOW`（21 项白名单常量，`new Set([...])`）中加一行 `'implement_cont'`。注意**覆盖语义**：运行时 `allow = config.allow ?? MAIN_AGENT_ALLOW`（空 allow 拒绝加载）。安装器从 `restrict.mjs` 源码现场解析该常量作为 base，生成 `config.allow = base + main_agent_extra（仅检测到的 host 名保留）− main_agent_remove`，且**只在结果与 base 不同时才注入** `config.allow` 行。因此：改完常量必须重跑安装（base 重新解析、安装副本刷新）；若运行中的 `agent.cordis.yml` 已有注入的 `config.allow`，运行时以它为准、常量只作回退。
+- **或：改 `restrict.mjs` 常量。** 在 `presets/orchestrator/restrict.mjs` 的 `MAIN_AGENT_ALLOW`（21 项白名单常量，`new Set([...])`）中加一行 `'implement_cont'`。注意**覆盖语义**：运行时 `allow = config.allow ?? MAIN_AGENT_ALLOW`（空 allow 拒绝加载）。生成器从 `restrict.mjs` 源码现场解析该常量作为 base，生成 `config.allow = base + main_agent_extra（仅检测到的 host 名保留）− main_agent_remove`，且**只在结果与 base 不同时才注入** `config.allow` 行。因此：改完常量必须重新应用（base 重新解析、安装副本刷新）；若运行中的 `agent.cordis.yml` 已有注入的 `config.allow`，运行时以它为准、常量只作回退。
 
-无论哪条路，改完都需要重跑安装应用（见第 4 步）。
+无论哪条路，改完都需要重新应用（见第 4 步）。
 
 ### 第 4 步 —— 应用
 
-```bash
-cd dsh-paoding
-./install.sh --auto     # 重新生成 preset（含新 delegation 块与白名单变更）
-```
+打开 设置 → **庖丁配置**，点「**保存并应用**」——重新生成 preset（含新 delegation 块与白名单变更），并把手编改动一并应用。
 
-然后**重启 host 或新建会话**生效。第 3 步若走了配置文件路径，配置会持久化到 `~/.dsh/dsh-paoding.config.yml`，之后改动配置重跑 `./install.sh --auto` 幂等应用。
+然后**重启 host 或新建会话**生效。第 3 步若走了配置文件路径，配置会持久化到 `~/.dsh/dsh-paoding.config.yml`，之后改动配置同样在面板点「保存并应用」幂等应用（克隆了仓库的开发者也可用兜底 CLI `node tools/install.mjs --auto`）。
 
 ### 第 5 步 —— 用后清理
 
 continuable 会话**无 TTL**，会持续写盘累积：
 
 - 用 `interrupt_agent` 停掉不再需要的 `implement_cont` 会话；
-- 长期不再用时，移除第 2 步的 delegation 块与第 3 步的白名单项，重跑 `./install.sh --auto`；persistence 插件本身留在 host 层即可（机器级，见第 3 节），也可一并移除并清理 `~/.dsh/sessions/` 下的落盘文件。
+- 长期不再用时，移除第 2 步的 delegation 块与第 3 步的白名单项，再在面板点「保存并应用」重新生成；persistence 插件本身留在 host 层即可（机器级，见第 3 节），也可一并移除并清理 `~/.dsh/sessions/` 下的落盘文件。
 
 ## 上下文隔离
 

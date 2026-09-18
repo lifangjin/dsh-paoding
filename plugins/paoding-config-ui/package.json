@@ -1,10 +1,10 @@
 {
   "name": "paoding-config-ui",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "main": "index.mjs",
-  "description": "庖丁 (dsh-paoding) 可视化配置器 — DSH Web 设置页集成插件（settings.section 分区 + /api/paoding 路由）",
+  "description": "庖丁 (dsh-paoding) 可视化配置器 — DSH Web 左侧栏全页配置插件（侧栏入口 + /api/paoding 路由）",
   "dsh": {
     "client": {
       "platform": "web",

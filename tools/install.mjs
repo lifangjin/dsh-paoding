@@ -3,18 +3,23 @@
  * dsh-paoding installer — CLI 入口 + 公共 API 聚合薄层。
  *
  * 原单文件（2767 行）的功能实现已按模块拆分到 tools/lib/*.mjs（util / yaml /
- * config / host / skills / spans / compose / alloc / wizard / state / cli 模块
- * 树）；本文件仅保留：
+ * config / host / skills / spans / compose / alloc / state / cli / workspaces /
+ * version / upgrade 模块树）；本文件仅保留：
  *   - 公共导出面（与旧单文件完全一致，供 plugins/paoding-config-ui 消费）：
- *     DEFAULT_MAIN_AGENT_PERSONA_EXTRA / collectState / generateAndInstall；
+ *     DEFAULT_MAIN_AGENT_PERSONA_EXTRA / collectState / generateAndInstall
+ *     （外加工作区 slug / preset id 助手 assignSlugs / presetIdOf /
+ *     sanitizeSlugBase / stableHash）；
  *   - 直接运行守卫（CLI entry：import 本模块不触发安装，仅直接执行时经
- *     lib/cli.mjs 的 main() 运行）。
+ *     lib/cli.mjs 的 main() 运行；官方安装通道是 dsh plugin add dsh-paoding，
+ *     本 CLI 仅作仓库内开发兜底）。
  */
 import { pathToFileURL } from 'node:url'
 import { main } from './lib/cli.mjs'
 
 export { DEFAULT_MAIN_AGENT_PERSONA_EXTRA } from './lib/util.mjs'
 export { collectState, generateAndInstall } from './lib/state.mjs'
+// 工作区 slug / preset id（api-core 的 workspaceMeta 等插件侧消费）。
+export { assignSlugs, presetIdOf, sanitizeSlugBase, stableHash } from './lib/workspaces.mjs'
 
 // CLI entry: only run main() when invoked directly (importing this module for
 // the visual config UI must not trigger an install).

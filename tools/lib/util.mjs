@@ -14,6 +14,13 @@ export const SRC_DIR = path.join(REPO_ROOT, 'presets', 'orchestrator')
 export const ROLES = ['search_external', 'design', 'implement']
 
 /**
+ * profile 名白名单（bin/dsh-paoding.mjs 与 lib/cli.mjs 两处共用，抽在此处防两边
+ * 漂移）：首字符字母数字，其余限 [A-Za-z0-9._-] —— profile 名会被拼进 dsh 子进程
+ * 命令行（win32 经 shell 拼接），在解析源头就排除空格与 shell 元字符。
+ */
+export const PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/**
  * 主 agent persona 尾部追加规则（默认值）。
  * 用户可在配置 UI 的「人设追加」里编辑/清空；配置键 main_agent_persona_extra：
  * null/缺省 = 用本默认；'' = 明确清空（不追加）；其他字符串 = 覆盖。

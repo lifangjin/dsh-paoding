@@ -10,7 +10,8 @@
  * would intersect with — and wrongly shrink — those role surfaces.
  *
  * What the main agent keeps:
- *   - orchestration: search_external / design / implement (role delegation),
+ *   - orchestration: 4 role-delegation tools — search_external / design /
+ *     implement / search_internal_deep (the last one a static delegation),
  *     send_message / list_agents / interrupt_agent (child management)
  *   - internal search (hot path, zero delegation round-trip): glob / grep /
  *     read / read_image / bash

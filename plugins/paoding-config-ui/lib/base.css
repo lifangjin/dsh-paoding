@@ -7,15 +7,6 @@
   flex-direction: column;
   gap: 16px;
   width: 100%;
-  max-width: 760px;
-}
-
-.omd-intro {
-  margin: 0;
-  padding: 0 2px;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-tertiary);
 }
 
 /* Group container: the DSH PluginCard recipe — l2 hairline, r16, layer-3. */
@@ -98,6 +89,97 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
+/* 版本提示行：常态弱化（小字、三级文字色，同 omd-hint 观感）；有新版时
+   挂 omd-versionNew 换成醒目警示卡（配色同 omd-statusWarn），链接继承行色。 */
+.omd-versionRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.omd-versionNew {
+  padding: 8px 12px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.omd-versionIcon { display: inline-flex; flex: none; }
+.omd-versionText { min-width: 0; overflow-wrap: anywhere; }
+
+.omd-versionLink {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.omd-versionLink:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: 2px; }
+
+/* 版本警示卡内的「升级」按钮：小号 pill（比操作坞按钮小一号，观感同
+   omd-restorePill），配色随警示卡 warn 主色，busy 时禁用。 */
+.omd-upgradeBtn {
+  flex: none;
+  margin-left: auto;
+  padding: 2px 12px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.omd-upgradeBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 26%, transparent);
+}
+
+.omd-upgradeBtn:disabled { opacity: 0.6; cursor: default; }
+
+.omd-upgradeBtn:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: 1px; }
+
+/* 升级进行中的补充说明（分钟级操作，管理预期）。 */
+.omd-upgradeHint {
+  flex: none;
+  font-size: 11px;
+  line-height: 16px;
+  opacity: 0.85;
+}
+
+/* 页头语境（pd-titleRow 内）的更新卡：比正文警示卡更紧凑，标题旁一行收纳；
+   窄屏放不下时卡内可换行。反馈行（成功 note / 失败 err）也收在卡内。 */
+.pd-titleRow .omd-versionNew {
+  padding: 3px 8px 3px 10px;
+  border-radius: 8px;
+  max-width: min(560px, 100%);
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.pd-titleRow .omd-upgradeBtn { margin-left: 2px; }
+
+.omd-versionNote {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.omd-versionNoteErr {
+  color: inherit;
+  font-weight: 600;
+}
+
 /* Sticky bottom action dock: keeps the primary buttons reachable at the
    bottom of the scroll container while the user edits lower groups. */
 .omd-actionBar {
@@ -128,15 +210,6 @@
   gap: 6px;
   align-items: center;
 }
-
-.omd-chipSecondary {
-  flex-basis: 100%;
-  opacity: 0.62;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.omd-chipErrText { color: var(--dsw-alias-state-error-primary); }
 
 /* Role cards: stacked small cards (l2 hairline, r12, layer-1 fill). */
 .omd-roleCard {
@@ -213,7 +286,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.omd-roleDel {
+.omd-roleDel,
+.omd-roleEdit {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -227,12 +301,14 @@
   transition: color 0.12s ease, background 0.12s ease;
 }
 
-.omd-roleDel:hover {
+.omd-roleDel:hover,
+.omd-roleEdit:hover {
   color: var(--dsw-alias-state-error-primary);
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.omd-roleDel:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: -2px; }
+.omd-roleDel:focus-visible,
+.omd-roleEdit:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: -2px; }
 
 .omd-roleBody {
   display: flex;
@@ -298,7 +374,7 @@
   line-height: 16px;
 }
 
-/* Source badge: "base" neutral, "host" warn-tinted (matches the old amber). */
+/* Source badge: "base" neutral, "mcp"/"plugin" warn-tinted (matches the old amber). */
 .omd-toolTag {
   flex: none;
   margin-left: auto;
@@ -417,6 +493,15 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 运行时识别降级提示（仅 runtimeOk === false 时渲染）：一行小字独立贴在
+   标签行上方，观感同 omd-hint 但不缩进组内、可整行换行。 */
+.omd-runtimeNote {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow-wrap: anywhere;
+}
+
 /* Skill assignment rows: mono name + per-role checkboxes, hairline rows. */
 .omd-skillRow {
   display: flex;
@@ -429,12 +514,11 @@
 .omd-skillRow:last-child { border-bottom: none; }
 
 .omd-skillName {
-  flex: none;
-  width: 150px;
+  /* 全量展示：不截断，长名自然换行（超长占位符名也能看全）；角标与角色勾选列随行顶对齐 */
+  flex: 0 1 auto;
+  max-width: 360px;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12px;
   line-height: 20px;
@@ -456,6 +540,31 @@
   line-height: 20px;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
+}
+
+/* 项目级技能角标：仅工作区视角下、来自该工作区项目根（<ws>/.dsh|.agents
+   skills）的技能显示。观感同 omd-toolTag 的小角标配方，配色换 business 主色
+   软底以示「来自本项目」。 */
+.omd-skillProj {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 35%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+/* 技能网格作用域小字（分组标题旁）：全局 = 仅用户级技能；工作区 = 用户级 +
+   该工作区项目级技能。挂在 groupHeading / glabel 里时重置其大写与字距样式。 */
+.omd-skillScope {
+  min-width: 0;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--dsw-alias-label-tertiary);
 }
 
 /* Preview: success summary + scrollable mono yml block. */
@@ -614,6 +723,346 @@
   outline-offset: 1px;
 }
 
+/* 配置对象标签页：「全局默认」/ 各工作区 tab +「更多」下拉（放不下的工作区
+   收进去）+ 末尾「＋ 添加工作区」（弹窗）。下划线式激活态（::after 主色横条
+   压在容器 border-bottom 上）；preset 已生成的工作区在文案前带一个小圆点
+   （成功色）标记，语义沿自旧 pill 行。 */
+/* 吸顶：面板下滚时标签区钉在滚动视口顶（.pd-page 是滚动容器）。负外边距
+   对冲 .pd-page 的内边距（14px 28px 28px），吸顶时整幅盖住下方滚过的内容、
+   左右不露缝；自身补回同值内边距，静止观感与吸顶前一致。sticky 也是定位
+   元素，「更多」下拉的 absolute 锚点语义不变；z-index 20 压过分组卡与
+   建议下拉（7 / 6），低于页内弹窗遮罩（60）。 */
+.omd-wsTabs {
+  position: sticky;
+  top: -14px; /* 吸顶位上移自身 padding-top：那 14px 补偿层恰好移出视口，
+   标签行贴顶无缝；静止时观感不变（负 top 只是让吸顶落点更低） */
+  z-index: 20;
+  background: var(--dsw-alias-bg-base);
+  margin: -14px -28px 0;
+  padding: 14px 28px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.omd-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 0 2px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  overflow-x: auto;
+  /* 窄窗溢出时保留横向滚动兜底，但滚动条不露面——标签行只有一条下边框，
+     再横着压一条滚动条太突兀 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.omd-tabs::-webkit-scrollbar { display: none; height: 0; }
+
+.omd-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  max-width: 240px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.omd-tab:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.omd-tab:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: -2px;
+}
+
+.omd-tabText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omd-tabActive,
+.omd-tabActive:hover {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+.omd-tabActive::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--dsw-alias-label-primary);
+}
+
+/* 末尾「＋ 添加工作区」：与 tab 同尺寸的 ghost 弱化按钮（点击打开输入弹窗）。 */
+.omd-tabAdd {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.omd-tabAdd:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.omd-tabAdd:disabled { cursor: default; opacity: 0.6; }
+
+/* 「更多」：装填算法按标签行实宽放不下、收进下拉的那批工作区走这个入口，
+   着色沿用「添加工作区」的弱化款（tertiary，hover 转 primary）。激活工作区
+   藏在菜单里时 JS 会双挂 omd-tabMoreActive + omd-tabActive——主色、加粗、
+   底部激活条全部复用 .omd-tabActive 的既有视觉，这里不复制一份。 */
+.omd-tabMore {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.omd-tabMore:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 收纳计数徽标：小号弱化数字，垫一层浅底提示可点。运行时令牌没有注入
+   interactive-bg 的纯底色版，取本文件已验证的 hover 底。 */
+.omd-tabMoreCount {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 「添加工作区」弹窗的输入框（旧 tab 条下方内联输入行已改为弹窗，输入框类名沿用）。 */
+.omd-wsAddInput { flex: 1 1 260px; min-width: 0; }
+
+/* 「添加工作区」弹窗里的组合框：建议下拉挂在 Wrap（相对定位）上，随输入框
+   聚焦展开。下拉要溢出卡片显示，所以 .pd-modalCard 不设 overflow 裁剪。
+   候选多于可视高度时下拉内部滚动，服务端 cap 50 也兜得住。 */
+.omd-wsSuggestWrap {
+  position: relative;
+  flex: 1 1 260px;
+  min-width: 0;
+  display: flex;
+}
+
+/* 弹窗卡片是列向 flex，Wrap 的 260px 基线在列向会变成高度——弹窗内改回
+   自适应高度、宽度撑满卡片。 */
+.pd-modalBody .omd-wsSuggestWrap {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.omd-wsSuggestWrap .omd-wsAddInput { width: 100%; }
+
+/* 「新建角色」弹窗里直接复用 .omd-nameInput：其 flex:1 是给行向 nameRow 的，
+   弹窗卡片是列向 flex，基线同样会变成高度——弹窗内改回自适应高度、宽度撑满。 */
+.pd-modalBody .omd-nameInput {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.omd-wsSuggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 7;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.35);
+  /* 候选多时内部滚动，滚动条同样不露面（与标签行同一套处理） */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.omd-wsSuggest::-webkit-scrollbar { display: none; height: 0; }
+
+.omd-wsSuggestItem {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.omd-wsSuggestItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.omd-wsSuggestItem:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: -2px;
+}
+
+.omd-wsSuggestItem:disabled { cursor: default; opacity: 0.6; }
+
+.omd-wsSuggestName {
+  font-size: 12px;
+  line-height: 17px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omd-wsSuggestPath {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「更多」下拉菜单：绝对定位挂在 .omd-wsTabs（relative）上，从整块标签区
+   下沿展开、盖过下方分组卡；z-index 高过建议下拉（7）与操作坞（6）。
+   候选多时内部滚动，滚动条同样藏起来。 */
+.omd-tabsRow {
+  position: relative;
+}
+
+.omd-tabMenu {
+  position: absolute;
+  top: 100%;
+  left: 2px;
+  z-index: 30;
+  min-width: 280px;
+  max-width: 420px;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.omd-tabMenu::-webkit-scrollbar { display: none; height: 0; }
+
+.omd-tabMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.omd-tabMenuItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.omd-tabMenuItem:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: -2px;
+}
+
+.omd-tabMenuItemActive,
+.omd-tabMenuItemActive:hover {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+/* 名称占满中缝，会话数自然靠右；省略号截断复用 .omd-tabText 既有声明。 */
+.omd-tabMenuItem .omd-tabText { flex: 1 1 auto; }
+
+/* 工作区配置状态三态小标签：项目（专属预设已生成）/ 待应用（存了条目、
+   预设未生成）/ 全局（跟随全局配置）。挤在 tab 里所以字很小、用色区分，
+   tooltip 有完整口径。 */
+.omd-tabTag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.omd-tabTagProject {
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.omd-tabTagPending {
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.omd-tabTagGlobal {
+  border: 1px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.omd-tabCount {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 宽度测量层：常驻但不可见不可交互，只负责把每个 tab 的自然宽度喂给
+   装填算法（offsetWidth 读取）。left 挪出视口 + visibility 双保险，
+   flex 行不换行，子项宽度与真实 tab 一致（同款 .omd-tab 类）。 */
+.omd-tabsMeasure {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  display: flex;
+  gap: 4px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .omd-roleHead,
   .omd-roleDel,
@@ -623,10 +1072,602 @@
   .omd-chevron,
   .omd-textarea,
   .omd-extraRestore,
+  .omd-upgradeBtn,
   .omd-nameInput,
   .omd-restorePill,
-  .omd-spin {
+  .omd-tab,
+  .omd-tabMenuItem,
+  .omd-wsSuggestItem,
+  .omd-spin,
+  .pd-sbEntry,
+  .pd-closeBtn,
+  .pd-modalClose,
+  .pd-toast {
     transition: none;
     animation: none;
   }
+}
+
+/* ── 侧栏入口（data-dsh-paoding-entry）─────────────────────────────────────
+   照 dsh-mnemon 侧栏入口观感：整行按钮、24×24 图标槽位，hover/active 跟随
+   官方侧栏行；[data-sidebar-collapsed] 为官方折叠态的向前兼容写法（当前侧栏
+   未必下发该属性，写上无害）。 */
+
+.pd-sbEntry {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.pd-sbEntry:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.pd-sbEntry:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: -2px;
+}
+
+.pd-sbEntry[data-active] {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-active);
+  font-weight: 600;
+}
+
+.pd-sbEntryIcon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.pd-sbEntryIcon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.pd-sbEntryLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-sidebar-collapsed] .pd-sbEntry {
+  width: 36px;
+  min-height: 36px;
+  justify-content: center;
+  margin: 0 auto 12px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+[data-sidebar-collapsed] .pd-sbEntryIcon svg { width: 20px; height: 20px; }
+
+[data-sidebar-collapsed] .pd-sbEntryLabel { display: none; }
+
+/* ── 全页 overlay（data-dsh-paoding-view / html[data-dsh-paoding-active]）──
+   机制照 dsh-mnemon：会话中栏转 relative 容器，overlay 绝对铺满；打开态靠
+   <html> 的 active 属性切换显隐，并把中栏其余子元素一并藏掉。四个全页面板
+   （mnemon / taskboard / ssh / paoding）互斥，active 属性相互排他（:not() 链），
+   点亮谁谁显示。 */
+
+[data-pane="conversation"],
+[class*="centerCol"],
+.dshDesktopConversationSurface {
+  position: relative;
+}
+
+[data-dsh-paoding-view] {
+  z-index: 60;
+  background: var(--dsw-alias-bg-base);
+  min-width: 0;
+  min-height: 0;
+  display: none;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.pd-panelView { isolation: isolate; }
+
+html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [data-dsh-paoding-view] { display: block; }
+
+html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [data-pane="conversation"] > :not([data-dsh-paoding-view]),
+html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) [class*="centerCol"] > :not([data-dsh-paoding-view]),
+html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskboard-active]):not([data-dsh-ssh-active]) .dshDesktopConversationSurface > :not([data-dsh-paoding-view]) {
+  display: none !important;
+}
+
+/* ── 全页配置页骨架（PageShell）──────────────────────────────────────────── */
+
+.pd-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+}
+
+.pd-pageHeader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 18px 28px 10px;
+  box-sizing: border-box;
+}
+
+.pd-pageTitles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pd-pageTitle {
+  margin: 0;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 页头标题旁的版本号（vX.Y.Z）：小号弱化文本，与标题同基线。 */
+/* 标题行：标题（含版本号）与页头更新卡并排，窄屏换行收纳。 */
+.pd-titleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  row-gap: 6px;
+  min-width: 0;
+}
+
+.pd-versionTag {
+  margin-left: 8px;
+  font-size: 12px;
+  line-height: inherit;
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pd-pageSubtitle {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.pd-closeBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.pd-closeBtn:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.pd-closeBtn:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: -2px;
+}
+
+.pd-closeGlyph {
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* 页面内容容器：全宽（跟随中栏宽度），自身即滚动容器（omd-actionBar 的
+   sticky bottom 在其中成立，官方分组卡观感不变）。height 100% 供非 flex
+   宿主兜底，flex 宿主里由 flex: 1 1 0 接管。 */
+.pd-page {
+  flex: 1 1 0;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  padding: 14px 28px 28px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+/* ── 「添加工作区」弹窗 ─────────────────────────────────────────────────
+   语义与视觉对齐宿主设置页的对话框：fixed 全屏遮罩盖住中栏滚动区 + 居中卡片。
+   卡片明暗两主题都用 bg-layer-1（深色下是深底、浅色下近白，与设置页卡片
+   一致）；卡片不设 overflow 裁剪——输入框的建议下拉要溢出卡片显示。
+   遮罩无过渡动效，不必进 reduced-motion 清单。 */
+.pd-modalMask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.pd-modalCard {
+  width: min(560px, 100%);
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+}
+
+/* 确认弹窗卡片：只有一段正文 + 两个按钮，比表单弹窗窄一档更合比例。 */
+.pd-modalCard.pd-confirmCard {
+  width: min(460px, 100%);
+}
+
+.pd-modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 0;
+}
+
+.pd-modalTitle {
+  margin: 0;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 弹窗右上关闭钮：复用页头 pd-closeBtn 的视觉，缩成 28px 方块。 */
+.pd-modalClose {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.pd-modalClose:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.pd-modalClose:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: -2px;
+}
+
+.pd-modalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 20px 4px;
+}
+
+.pd-modalLabel {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 确认弹窗正文（confirmModalOf）：多行文案（内置角色删除的恢复引导、升级
+   说明等）用 pre-line 保留源串里的换行；字色用主标签色，与次级 label 拉开
+   层级——正文是用户要做决定的内容，得是最重的一档。 */
+.pd-modalText {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-primary);
+  white-space: pre-line;
+}
+
+.pd-modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 16px;
+}
+
+/* 确认弹窗的危险确认钮（删除类操作）：背景 / 边框走危险色 token，文字用反
+   色标签 token——明暗两主题都由主题层自适应，不在样式里写死色值。选择器带
+   .pd-modalFooter 前缀（0,2,0）压过 P.Button 变体类（0,1,0），不依赖样式表
+   加载顺序；hover 用 85% 透明混合，深色下变暗、浅色下变淡，均读作「轻后退」。 */
+.pd-modalFooter .pd-dangerBtn {
+  background: var(--dsw-alias-state-error-primary);
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-label-primary-inverted);
+}
+
+.pd-modalFooter .pd-dangerBtn:hover {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 85%, transparent);
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 85%, transparent);
+}
+
+.pd-modalFooter .pd-dangerBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Toast 反馈（fixed 悬浮于操作坞上方）──────────────────────────────── */
+.pd-toastHost {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;            /* 操作坞（sticky 底部，约 64px）上方留出一截 */
+  transform: translateX(-50%);
+  z-index: 70;             /* 高于弹窗遮罩 z-60：应用类操作不来自弹窗，不冲突 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: min(640px, calc(100vw - 32px));
+  pointer-events: none;    /* host 不挡下方内容，只有 toast 本体接事件 */
+}
+
+.pd-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-left: 3px solid var(--dsw-alias-border-l3);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  pointer-events: auto;
+  animation: pd-toastIn 0.18s ease;
+}
+
+@keyframes pd-toastIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.pd-toastOk { border-left-color: var(--dsw-alias-state-success-primary); }
+.pd-toastWarn { border-left-color: var(--dsw-alias-state-warn-primary); }
+.pd-toastErr { border-left-color: var(--dsw-alias-state-error-primary); }
+
+.pd-toastIcon { flex: none; font-size: 13px; line-height: 18px; }
+
+.pd-toastText {
+  min-width: 0;
+  max-height: 200px;       /* 错误文本可能很长（npx 输出尾部等），限高滚动 */
+  overflow-y: auto;
+  scrollbar-width: thin;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pd-toastClose {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  /* 视觉复用 pd-closeBtn 的透明底做法 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pd-toastClose:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.pd-toastClose:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+/* ── 事件流委派行（tool.call.toolview 键控行替换）────────────────────── */
+
+.pd-delegateRow {
+  margin: 1px 0;
+  min-width: 0;
+}
+
+.pd-delegateHead {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  line-height: 20px;
+  min-width: 0;
+  transition: background 0.12s ease;
+}
+
+.pd-delegateHead:hover,
+.pd-delegateHead:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+  outline: none;
+}
+
+.pd-delegateState {
+  flex: none;
+  width: 14px;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.pd-delegateDone { color: var(--dsw-alias-state-success-primary); }
+.pd-delegateFailed { color: var(--dsw-alias-state-error-primary); }
+.pd-delegateStopped { color: var(--dsw-alias-label-tertiary); }
+
+.pd-delegateRunning {
+  animation: pd-delegatePulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pd-delegatePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.pd-delegateTitle {
+  flex: none;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pd-delegateDesc {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.pd-delegateChev {
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform 0.12s ease;
+}
+
+.pd-delegateChevOpen { transform: rotate(90deg); }
+
+.pd-delegateBody {
+  margin: 2px 0 6px 22px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow: auto;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+}
+
+.pd-delegateErr .pd-delegateTitle { color: var(--dsw-alias-state-error-primary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .pd-delegateRunning { animation: none; }
+  .pd-delegateChev { transition: none; }
+  .pd-delegateHead { transition: none; }
+}
+
+/* ── 侧栏底部入口（sidebar.footer.action）────────────────────────── */
+/* 观感对齐宿主：宽栏 = 42px 圆角行（图标 + 文案），与设置触发钮 / cordis
+   徽章同族；窄栏（56px rail）= 36px 圆形图标钮，外距对齐设置行的 railRow。 */
+
+.pd-footerBtn {
+  box-sizing: border-box;
+  width: calc(100% + 4px);
+  height: 42px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  background: 0 0;
+  border: none;
+  border-radius: 12px;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -2px;
+  padding: 0 10px 0 8px;
+  font-family: inherit;
+  font-size: 14px;
+  display: inline-flex;
+  overflow: hidden;
+}
+
+.pd-footerBtn:hover,
+.pd-footerBtn[data-active="true"] {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.pd-footerLabel {
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* footerActions 默认横向 flex，多个动作并排一行；用户要「一行一个」。
+   注意层级：footerActions > div[data-slot="sidebar.footer.action"]（宿主
+   SlotOutlet 锚点，display: contents 透传）> 各家按钮——所以 flex-direction
+   要落在锚点的父容器上，落在锚点自身无效（display: contents 不生成盒）。
+   :has() 不支持的老浏览器回落并排，不破坏功能。窄栏下 36px 圆钮同样
+   纵向排列、由 footArea 居中。 */
+div:has(> div[data-slot="sidebar.footer.action"]) {
+  flex-direction: column;
+}
+
+.pd-footerBtn.pd-footerRail {
+  corner-shape: round;
+  border-radius: 50%;
+  justify-content: center;
+  gap: 0;
+  width: 36px;
+  height: 36px;
+  margin: 8px 0 10px;
+  padding: 0;
 }

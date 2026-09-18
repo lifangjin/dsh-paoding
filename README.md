@@ -9,12 +9,15 @@ dsh-paoding（中文品牌「庖丁」，典出《庄子》——庖丁顺纹理
 
 - **一支分工明确的小团队**：主 agent 当指挥，拆解任务、分派验收；联网调研、UI 设计、写代码、全仓深搜四位专属帮手各司其职，随叫随到、干完即走。
 - **高频小事不过手他人**：找代码、查引用、读文件这类顺手的事，主 agent 自己直接办，不绕委派的圈子。
-- **可招募专属帮手**：内置四角色只是起点——给新角色配好工具和技能（比如装上 `html-ppt` 技能的 PPT 帮手），之后一句「把这份大纲做成 PPT」就有人接活。向导、配置文件、图形界面三个入口都能建。
+- **可招募专属帮手**：内置四角色只是起点——给新角色配好工具和技能（比如装上 `html-ppt` 技能的 PPT 帮手），之后一句「把这份大纲做成 PPT」就有人接活。配置文件、图形界面两个入口都能建。
 - **帮手还能指定专用模型**：写代码的用强档、查资料的用轻快档，各配各的模型；不配就跟随主 agent 当前会话的模型。
+- **帮手能就地续修**：把某个角色的「会话模式」切成可续（continuable），活干砸了或干得不满意，主 agent 用 `send_message` 在同一个子会话接着修，不用从头重派；默认全员一次性（one-shot）用完即弃，不开启就一切照旧。
 - **省钱省上下文**：帮手的工具只在被叫到时才加载，用一次付一次；主 agent 每次请求的工具开销约降三分之二，上下文只收摘要，不再被搜索结果和代码改动撑爆。
-- **角色随改随用**：删掉用不上的内置角色、给角色改显示名、给主 agent 改名，都是配置里一行的事；改完跑一条命令重新生成，即刻生效。
-- **装了什么都能认出来**：MCP 服务器、本地插件、已装技能，安装与配置时全程检测；默认只装 dsh 基础工具，检测到的 host 工具在「庖丁配置」里按需勾选（或 `--suggest` 自动分派）；停用哪个，重跑一遍后相关工具自动剔除。
-- **图形界面配置**：不习惯改配置文件的话，「设置 → 庖丁配置」里点选即可，「保存并应用」与命令行走同一条生成管线。
+- **角色随改随用**：删掉用不上的内置角色、给角色改显示名、给主 agent 配显示名，都是配置里一行的事；改完在面板点一次「保存并应用」，即刻生效。
+- **装了什么都能认出来**：MCP 服务器、本地插件、已装技能，安装与配置时全程检测；默认只装 dsh 基础工具，检测到的 host 工具在「庖丁配置」里按需勾选；停用哪个，重新应用后相关工具自动剔除。
+- **按工作区各有各的班底**：不同项目可以配不同的主/子 agent——「庖丁配置」里选定工作区单独配置，每个工作区生成自己的预设（`orchestrator-<目录名>`），新建会话时选对应预设即可，全局默认不受影响。
+- **图形界面配置**：不习惯改配置文件的话，点开左侧栏「新会话」下方的「庖丁配置」入口，整页点选即可，「保存并应用」与命令行走同一条生成管线。
+- **版本更新有提醒，面板一键升级**：面板会对比 npm registry（GitHub release 兜底）上的最新版本，发现新版就地提示并附上发布页链接；点「升级」就地执行 `dsh plugin update dsh-paoding`（profile 自动探测）换上新版，重启 DSH 后生效，编排预设会在重启时按新版自动重生成。开发检出的 link 形态无法就地升级，面板会提示切回 registry 版的办法；检测失败（比如断网）就静默跳过，不影响任何使用。
 - **来去自由**：不改 DSH 一行源码；装完新会话即用，卸载即删目录。
 
 ## 插件截图
@@ -33,32 +36,33 @@ dsh-paoding（中文品牌「庖丁」，典出《庄子》——庖丁顺纹理
 
 ## 快速开始
 
-前置：**Node.js ≥ 18** 与一台已装好的 DSH host。
+前置：**Node.js ≥ 18**、**pnpm** 与一台已装好的 DSH host（**@deepseek-ai/dsh ≥ 0.1.5**，最低支持版本）。
 
-**npx 一键安装（推荐）**——不用克隆仓库，一条命令：
-
-```bash
-npx dsh-paoding@latest             # npm 发布后可用
-npx github:lifangjin/dsh-paoding   # 发布前从 GitHub 仓库直装，效果相同
-```
-
-这一条等价于 `--auto --config-ui`：生成编排预设、写好基础配置模板，并把「庖丁配置」挂进 DSH 设置页。开箱默认只带 DSH 自带的基础工具，检测到的 MCP/host 工具不会自动写入——装完在**设置 → 庖丁配置**里按需勾选工具与角色，「保存并应用」即生效；想逐项过一遍就跑 `npx dsh-paoding --wizard`，想沿用自动分配就加 `--suggest`。
-
-偏好官方插件通道的话，`dsh plugin --profile web add dsh-paoding@latest` 也能把「庖丁配置」按 profile 装进设置页（preset 本体仍走 npx / `./install.sh`），详见[安装文档](docs/installation.md)。
-
-**克隆仓库安装**——老路线原样保留：
+**官方插件通道（唯一安装入口）**——不用克隆仓库，一条命令，装完重启即用：
 
 ```bash
-git clone https://github.com/lifangjin/dsh-paoding.git dsh-paoding
-cd dsh-paoding
-./install.sh              # 交互向导，一路回车即用默认
-./install.sh --auto       # 非交互：有配置应用配置，没配置写基础模板（--suggest 用智能默认）
-./install.sh --config-ui  # 顺带挂上图形配置界面（可与 --auto 同用）
-./install.sh --dry-run    # 只预览将生成的内容，不写盘
-./install.sh --help       # 全部参数
+dsh plugin --profile web add dsh-paoding
 ```
 
-装完**重启 DSH（`dsh web`）或新建会话**，在预设选择器里选「编排模式 (Orchestrator)」即可；要设为默认，在 Settings → Agent Presets 里选。已有 `dsh-paoding.config.yml` 的话，重跑任何入口都按配置文件应用、不覆写。卸载删掉 `~/.dsh/.agent-presets/orchestrator` 即可（npx/npm 安装的还多一个 `~/.dsh/dsh-paoding`）。详细步骤与排查见 [安装文档](docs/installation.md)。
+等价捷径：`npx dsh-paoding@latest`（内部转成上面这条命令，默认 profile web，需本机已装 dsh）。
+
+`dsh plugin` 是 pnpm 的透明转发器：包被 pnpm 装进 profile，包内声明的 bundle patch 把「庖丁配置」面板挂进 DSH Web 左侧栏。**重启 DSH（`dsh web`）**即完成全部安装——插件启动时会自动检测，编排预设缺失或版本不符就自动生成一次（有 `~/.dsh/dsh-paoding.config.yml` 按配置应用，没有则写基础模板），无需再点任何按钮。新会话的预设选择器里选「编排模式 (Orchestrator)」即可；要设为默认，在 Settings → Agent Presets 里选。
+
+开箱默认只带 DSH 自带的基础工具，检测到的 MCP/host 工具不会自动写入——装完点开左侧栏的**「庖丁配置」**按需勾选工具与角色，「保存并应用」即生效。不想要了，卸载也干净：
+
+```bash
+dsh plugin --profile web remove dsh-paoding
+rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"
+```
+
+**开发检出自装**——想改插件或预设源码时，用 link 形态直连仓库（改动经 HMR/重启生效）：
+
+```bash
+git clone https://github.com/lifangjin/dsh-paoding.git
+dsh plugin --profile web add link:"$PWD/dsh-paoding"
+```
+
+升级走面板「升级」按钮（等价 `dsh plugin update dsh-paoding`）。详细步骤、升级与排查见 [安装文档](docs/installation.md)。
 
 ## 怎么用
 
@@ -75,16 +79,16 @@ cd dsh-paoding
 
 ## 配置
 
-所有偏好都写在 `~/.dsh/dsh-paoding.config.yml`：角色增删改、技能分配、专用模型、主 agent 的工具与技能……改完跑一遍 `./install.sh --auto` 即同步生效。预设每次由「静态源 + 配置」重新生成，不攒手工补丁。全部配置键说明见 [配置文档](docs/configuration.md)；背后机制与成本账见 [架构文档](docs/architecture.md)。
+所有偏好都写在 `~/.dsh/dsh-paoding.config.yml`：角色增删改、技能分配、专用模型、会话模式（one-shot / continuable）、主 agent 的工具与技能……改完打开 设置 → 庖丁配置，点「保存并应用」即同步生效。预设每次由「静态源 + 配置」重新生成，不攒手工补丁。全部配置键说明见 [配置文档](docs/configuration.md)；背后机制与成本账见 [架构文档](docs/architecture.md)。
 
 ## 文档
 
 | 文档 | 内容 |
 |---|---|
 | [架构](docs/architecture.md) | 为什么这样设计——概述、成本账、角色与工具、对应 DSH 原生机制、Token 治理、已知边界。 |
-| [安装](docs/installation.md) | npx 一键安装、官方插件通道装 UI、前置要求、交互向导六阶段、CLI 参数、host patch 检测机制、应用/升级/卸载、配置 UI 挂载、排查。 |
+| [安装](docs/installation.md) | 官方插件通道一条命令安装、首装自动化与版本标记、升级、开发检出自装、host patch 检测机制、庖丁配置面板、卸载、排查。 |
 | [编排](docs/orchestration.md) | 编排总览、失败如何呈现与三层处理、one-shot vs continuable、上下文隔离。 |
-| [配置](docs/configuration.md) | 配置键全参考、内置角色微调、主 agent 工具与技能、自定义角色、按角色分模型。 |
+| [配置](docs/configuration.md) | 配置键全参考、内置角色微调、主 agent 工具与技能、自定义角色、按角色分模型、角色会话模式。 |
 
 ## 贡献
 

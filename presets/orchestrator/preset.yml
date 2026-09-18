@@ -1,6 +1,7 @@
 name: 编排模式 (Orchestrator)
 description: 按角色分工的编排架构——主 agent 只做编排与内部搜索（glob/grep/read/codegraph），
-  通过 search_external / design / implement 三个委派工具把联网调研、设计、实现分别交给
-  各自只加载必要工具的子 agent；主 agent 不加载任何外部搜索、写文件或技能工具，
+  通过 search_external / design / implement / search_internal_deep 四个委派工具（search_internal_deep
+  为静态委派）把联网调研、设计、实现、内部深搜分别交给各自只加载必要工具的子 agent；
+  主 agent 不加载任何外部搜索、写文件或技能工具，
   每请求工具税从 ~16.2k tokens 降到 ~5.5k。主 agent 技能目录注入亦归零（实测 ≈1.3k tokens/轮）。
 order: 5

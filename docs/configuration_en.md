@@ -4,27 +4,27 @@
 
 # Configuration
 
-dsh-paoding makes the role-based orchestration preset **configuration-driven**: you hand-write (or let the interactive wizard / Web config UI write for you) a YAML config file, and the installer (`tools/install.mjs`; the CLI and the config UI share the same generation pipeline, `collectState` / `generateAndInstall`) rewrites the target preset — `~/.dsh/.agent-presets/orchestrator/agent.cordis.yml` — at install time, covering the role allows, role personas, the main-agent allow list (`config.allow` injection) and the main-agent persona's skill rows / inlines and persona extra.
+dsh-paoding makes the role-based orchestration preset **configuration-driven**: you hand-write (or click together in the 庖丁配置 panel) a YAML config file, and the generator (`tools/`; the panel's Save & Apply and the in-repo fallback CLI share the same generation pipeline, `collectState` / `generateAndInstall`) rewrites the target preset — `~/.dsh/.agent-presets/orchestrator/agent.cordis.yml` — when it is applied, covering the role allows, role personas, the main-agent allow list (`config.allow` injection) and the main-agent persona's skill rows / inlines and persona extra.
 
-The config file describes **declarative intent**. The target file is regenerated from scratch every time — "source preset + this config file": edit the config → re-run the install = idempotent sync, with no accumulating hand patches.
+The config file describes **declarative intent**. The target file is regenerated from scratch every time — "source preset + this config file": edit the config → hit Save & Apply in the panel = idempotent sync, with no accumulating hand patches.
 
 ## 1. Configuration file
 
 ### 1.1 Location and precedence
 
-The config file's default location is `$DSH_HOME/dsh-paoding.config.yml`; when `$DSH_HOME` is unset, it defaults to `~/.dsh`. The CLI flag `--config <file>` selects any other path.
+The config file's default location is `$DSH_HOME/dsh-paoding.config.yml`; when `$DSH_HOME` is unset, it defaults to `~/.dsh`. The `DSH_PAODING_CONFIG` environment variable moves the path for the panel; the in-repo fallback CLI's `--config <file>` flag selects any other path.
+
+How an edit gets applied ("re-apply" below always means the first row):
 
 | Scenario | Behavior |
 |---|---|
-| Interactive wizard (`./install.sh`) | After detection and assignment, **persists** your choices to the config file (default `~/.dsh/dsh-paoding.config.yml`, written with `0o600` permissions) upon confirmation; a later wizard run seeds its suggested values from the existing config |
-| `./install.sh --auto` | Non-interactive: applies the config file when present, otherwise smart defaults (≈ the static preset as-is, zero regression). Re-running after an edit applies it idempotently |
-| `./install.sh --dry-run` | Prints only the detection report and the allow / persona changes that would be generated — writes nothing (including the config file). Use it to preview before committing |
-| `./install.sh --auto --config <file>` | Uses the given file instead of the default location |
-| Web config UI (Settings → 庖丁配置) | The panel's「保存并应用」(save & apply) writes the preset and saves the assignments to the config file — equivalent to `--auto` plus the wizard's save |
+| Web panel (庖丁配置 in the left sidebar) | **The main path**: opening the panel loads the existing config as the current values;「保存并应用」(Save & Apply) writes the preset and saves the assignments to the config file (default `~/.dsh/dsh-paoding.config.yml`, written with `0o600` permissions). If you hand-edited the file, open the panel first and then apply |
+| First-install automation | At startup the plugin applies the config file automatically once it finds the preset missing or carrying a stale version marker (no config → base template) — no manual trigger needed in day-to-day use |
+| Fallback CLI (developers who cloned the repo only) | `node tools/install.mjs --auto`: applies the config file idempotently when present, else writes the base template; `--dry-run` prints only the detection report and the allow / persona changes that would be generated — writes nothing (including the config file), good for previewing first; `--config <file>` uses the given file instead of the default location |
 
-A config file that **exists but fails to parse** is a hard error (the installer aborts); a **missing** file simply means "no configuration" (smart defaults or the wizard apply). Top-level keys such as `profile` and `roles` are described in the next subsection.
+A config file that **exists but fails to parse** is a hard error (the pipeline aborts); a **missing** file simply means "no configuration" (the base template). Top-level keys such as `profile` and `roles` are described in the next subsection.
 
-CLI precedence: an explicit `--profile` overrides the `profile` key in the config file; otherwise the config file's value wins; the fallback is `web`.
+Fallback-CLI precedence: an explicit `--profile` overrides the `profile` key in the config file; otherwise the config file's value wins; the fallback is `web`.
 
 ### 1.2 Top-level keys
 
@@ -33,15 +33,16 @@ The key names below match `normalizeConfig` in `tools/install.mjs` — the singl
 | Top-level key | Type | Semantics |
 |---|---|---|
 | `profile` | string | Which profile's patch layer (`$DSH_HOME/profiles/<profile>/cordis.patch.yml`) is scanned during detection; default `web` |
-| `roles` | map | `toolName` → `{ persona?, name?, tools[], model?, provider? }`. For the three built-in roles (`search_external` / `design` / `implement`): overrides the persona and the allow intent, and may carry a `name` display name (rewrites only the subject of that role's default persona identity sentence — see 2.4) and a dedicated model (`model` / `provider`, see 2.5). Any other key is a **custom role**: the installer emits a fresh `delegation-<toolName>` block and injects the toolName into the main agent's `config.allow` (sections 2 and 6) |
+| `roles` | map | `toolName` → `{ persona?, name?, tools[], model?, provider?, background_mode? }`. For the three built-in roles (`search_external` / `design` / `implement`): overrides the persona and the allow intent, and may carry a `name` display name (rewrites only the subject of that role's default persona identity sentence — see 2.4), a dedicated model (`model` / `provider`, see 2.5) and a session mode (`background_mode`, see 2.6). Any other key is a **custom role**: the installer emits a fresh `delegation-<toolName>` block and injects the toolName into the main agent's `config.allow` (sections 2 and 6) |
 | `roles_remove` | string[] | toolNames of built-in roles deleted wholesale (only `search_external` / `design` / `implement` are accepted; other names are ignored with a warning; default `[]`). Deleting means the delegation block / tool surface / role persona / main-agent delegation guidance are no longer generated (see 2.3) |
 | `skills` | map | `skill` → the list of role toolNames the skill is assigned to; the installer appends an `Available skills: …` guidance sentence to those roles' personas (section 7) |
-| `main_agent_extra` | string[] | Tools appended to the main-agent allow list (host tools such as `mcp__codegraph__codegraph_explore`, `memory_search`, `mnemon_*`); intersected with the detection inventory — undetected names are not injected |
+| `main_agent_extra` | string[] | Tools appended to the main-agent allow list (host tools such as `mcp__codegraph__codegraph_explore`, `memory_search`, `mnemon_*`); names are checked against the preset's own tool face ∪ the detection inventory — a name in neither is not injected |
 | `main_agent_remove` | string[] | Base tools stripped from the main-agent allow list (e.g. the goal family, `exit_plan_mode`); names absent from the current allow are warned about and skipped; removing everything is a hard error |
 | `main_agent_skills` | string[] | Main-agent skills in soft-guidance mode (the default channel): one compact skill row + a `Read full rules:` path per skill, appended to the persona |
 | `main_agent_skills_inline` | string[] | Main-agent skills in hard-inline mode (optional): the selected SKILL.md bodies are inlined into the persona and apply to every response |
 | `main_agent_persona_extra` | string \| null | Text appended to the tail of the main-agent persona. `null` / absent = use the default constant; `''` = append nothing; any other string = override the default |
-| `main_agent_name` | string \| null | The main agent's name — one key, two changes: the deployed preset display name and the persona identity line `You are the <name> agent powered by the {{model}} model.` Trimmed, 1–60 chars, no newlines; empty / absent = keep the default (section 5) |
+| `main_agent_display_name` | string \| null | The main agent's display name — changes **only the deployed preset display name** (the name shown in the GUI preset picker), never the persona identity line. Constraints: trimmed, 1–60 chars, no newlines; empty / absent = the default「编排模式 (Orchestrator)」(workspace presets use the derived name; see 5.1) |
+| `workspaces` | map | Absolute workspace (project) directory → that workspace's own config entry, same fields as the top level (except `profile`); each entry generates its own `orchestrator-<slug>` preset, independent of the global one (section 9) |
 
 `roles` details:
 
@@ -50,6 +51,7 @@ The key names below match `normalizeConfig` in `tools/install.mjs` — the singl
 - `roles.<toolName>.name`: an optional `string | null` display name for the built-in trio only (absent / `null` = the role's built-in default identity). It rewrites only the **subject of that role's default persona identity sentence** — design's default `You are the design agent.` with `name: UI 设计` becomes `You are the UI 设计 agent.`, with the rest of the sentence untouched; constraints, boundaries and an example are in 2.4.
 - `roles.<toolName>.model`: a dedicated model id for the role (optional `string`). When set, every sub-agent the role spawns runs on that model instead of following the main agent's current session model; absent = nothing is injected and the child inherits the main agent's model (see 2.5).
 - `roles.<toolName>.provider`: the provider route the role's model lives on (optional `string`). It only takes effect paired with `model`; a lone `provider` is warned about and ignored by the installer, while a lone `model` rides the main agent's provider route (see 2.5).
+- `roles.<toolName>.background_mode`: the role's session mode (optional `'one-shot' | 'continuable'`; default `one-shot`) — run-and-discard, or continuable: the child conversation is kept across turns so the main agent can resume in place with `send_message`. Built-in and custom role entries share the semantics; the continuable prerequisites, costs and panel path are in 2.6.
 - Keys under `roles` outside the built-in trio are **custom roles** (section 6). Do not put the static role `search_internal_deep` under `roles` (see 2.2).
 - Built-in roles can be **deleted wholesale**: the `roles_remove` key accepts only the trio's names — deletion effect, consistency with the `roles` key, and the restore paths are in 2.3.
 
@@ -57,11 +59,10 @@ When `main_agent_extra` is absent or empty it falls back to the smart defaults o
 
 ### 1.3 Complete minimal example
 
-A config file covering all commonly used keys (the key order matches `serializeConfig`, which is what the installer writes):
+A config file covering all commonly used keys (the key order matches `serializeConfig`, which is what the panel writes):
 
 ```yaml
-# dsh-paoding installation config — hand-editable; after editing, re-run ./install.sh --auto to apply.
-# The interactive wizard / config UI also writes this file (0o600).
+# dsh-paoding installation config — hand-editable; after editing, apply in Settings → 庖丁配置 (Paoding Config), or re-run node tools/install.mjs --auto.
 
 profile: web            # scan profiles/<profile>/cordis.patch.yml during detection
 
@@ -116,7 +117,7 @@ skills:                 # skill -> the roles it is assigned to (writes the Avail
 
 Notes:
 
-- The `tools` under `roles.search_external` express **intent**: if tavily is not enabled, the installer drops the five `mcp__tavily__*` names and keeps the rest (the `--dry-run` "removed" list states the reason for each).
+- The `tools` under `roles.search_external` express **intent**: if tavily is not enabled, the generator drops the five `mcp__tavily__*` names and keeps the rest (the Preview "removed" list states the reason for each).
 - `roles.design` omits `tools`, so the static allow is kept and only the persona is replaced.
 - After installation, `roles.code-reviewer` becomes a generated `delegation-code-reviewer` block, `code-reviewer` joins the main-agent allow list, and the main agent can delegate to it directly by calling that toolName.
 - `{{cwd}}` and `{{model}}` inside `main_agent_persona_extra` are persona placeholders that DSH substitutes at runtime — keep them verbatim.
@@ -143,6 +144,7 @@ roles:
       operation: report the failure compactly so the orchestrator can re-delegate.
     tools:
       - read
+      - read_image
       - write
       - edit
       - glob
@@ -168,11 +170,11 @@ Therefore:
 
 - **Do not** put `search_internal_deep` under the `roles` key of the config file — keys outside the trio are treated as **custom roles**, and the installer would emit a second, duplicate `delegation-search-internal-deep` block that clashes with the static one.
 - It is likewise **outside** the `roles_remove` deletable set (that key accepts only the trio's names, see 2.3) — it is deliberately kept as a static role, appears in no config key or UI, and this key cannot delete it either.
-- To change its persona or tool surface, edit the `persona` and `toolFilter.allow` of the `delegation-search-internal-deep` block in `presets/orchestrator/agent.cordis.yml` directly, then re-run `./install.sh --auto`. The installer rewrites only the limited spans of the trio roles and the main-agent persona; everything else in the static source (including your edit) carries over verbatim into the generated file.
+- To change its persona or tool surface, edit the `persona` and `toolFilter.allow` of the `delegation-search-internal-deep` block in `presets/orchestrator/agent.cordis.yml` directly, then hit Save & Apply in 庖丁配置 to regenerate (developers can also run the fallback CLI, `node tools/install.mjs --auto`). The generator rewrites only the limited spans of the trio roles and the main-agent persona; everything else in the static source (including your edit) carries over verbatim into the generated file.
 
 ### 2.3 Deleting built-in roles: roles_remove
 
-The optional top-level key `roles_remove` (string[], default `[]`) deletes built-in delegation roles **wholesale**; its values are the toolNames of the roles to remove. The only deletable names are `search_external` / `design` / `implement` — exactly the three default roles the `roles` key can override (the three cards with the「内置」("built-in") badge in the config UI). Names outside that set are **ignored with a warning**; `search_internal_deep` cannot be deleted (it is a deliberately static role, see 2.2).
+The optional top-level key `roles_remove` (string[], default `[]`) deletes built-in delegation roles **wholesale**; its values are the toolNames of the roles to remove. The only deletable names are `search_external` / `design` / `implement` — exactly the three default roles the `roles` key can override (the three cards with the「内置」("built-in") badge in the panel). Names outside that set are **ignored with a warning**; `search_internal_deep` cannot be deleted (it is a deliberately static role, see 2.2).
 
 Deletion removes the role entirely — none of the following is generated anymore:
 
@@ -193,8 +195,8 @@ Relationship with the `roles` key: `roles` keeps the entries of built-in roles t
 
 Restoring:
 
-- **Hand-editing**: remove the name from `roles_remove` (and, if you want your custom persona / tools back, put the entry back under `roles`), then re-run `./install.sh --auto` — the role regenerates with its SRC-default persona and tool surface.
-- **Config UI**: the「已删除的内置角色」("deleted built-in roles") area at the end of the role list restores it with one click (restored to the SRC-default tool surface).
+- **Hand-editing**: remove the name from `roles_remove` (and, if you want your custom persona / tools back, put the entry back under `roles`), then hit Save & Apply in 庖丁配置 — the role regenerates with its SRC-default persona and tool surface.
+- **Panel**: the「已删除的内置角色」("deleted built-in roles") area at the end of the role list restores it with one click (restored to the SRC-default tool surface).
 
 ### 2.4 Built-in role display names: roles.\<toolName>.name
 
@@ -217,10 +219,10 @@ Boundaries:
 - **Deleted roles are not involved**: a role deleted wholesale by `roles_remove` has no persona left to rewrite (see 2.3).
 - **The static role is out of scope**: `search_internal_deep` is outside the installer-managed trio and has no such sub-key (see 2.2).
 
-Applying it mirrors renaming the main agent (see 5.1):
+Applying it works just like the main-agent display name (see 5.1):
 
-- **Hand-editing**: write the sub-key and re-run `./install.sh --auto`, then restart DSH or open a new session.
-- **Config UI**: Settings → 庖丁配置 → the「角色显示名」("role display name") input at the top of a built-in role card (the「内置」("built-in") badge); empty = the default; after「保存并应用」(save & apply) it takes effect on a **GUI restart / new session**.
+- **Hand-editing**: write the sub-key and hit Save & Apply in 庖丁配置, then restart DSH or open a new session.
+- **Panel**: 庖丁配置 (left sidebar) → the「角色显示名」("role display name") input at the top of a built-in role card (the「内置」("built-in") badge); empty = the default; after「保存并应用」(save & apply) it takes effect on a **GUI restart / new session**.
 
 ### 2.5 A dedicated model per role: roles.\<toolName>.model / .provider
 
@@ -244,11 +246,38 @@ Rules and boundaries:
 - **Deleted roles are not involved**: for a role deleted wholesale by `roles_remove`, any `model` / `provider` left in its entry is ignored with a warning (see 2.3).
 - **The static role is out of scope**: `search_internal_deep` has neither sub-key (see 2.2).
 
-In the config UI (Settings → 庖丁配置 → the「专用模型」("dedicated model") control on a role card) this is a dropdown fed by the model routes registered in your DSH deployment; values outside the catalog (e.g. from a hand-edited config) are preserved as a「当前配置」("current config") option instead of silently disappearing.
+In the config page (庖丁配置 in the left sidebar → the「专用模型」("dedicated model") control on a role card) this is a dropdown fed by the model routes registered in your DSH deployment; values outside the catalog (e.g. from a hand-edited config) are preserved as a「当前配置」("current config") option instead of silently disappearing.
 
-Applying works exactly like every other config key: re-apply (`./install.sh --auto`, or「保存并应用」(save & apply) in the config UI), then restart DSH or open a new session.
+Applying works exactly like every other config key: after editing, hit「保存并应用」(save & apply) in 庖丁配置, then restart DSH or open a new session.
 
 These two sub-keys are the config-layer equivalent of the static-source `agentOptions` in 8.1 (no source edits — prefer them); drop to the static source only when you also need `maxTokens` (see 8.1).
+
+### 2.6 Role session mode: roles.\<toolName>.background_mode
+
+The optional `background_mode` sub-key of a role entry decides how that role's child sessions end: `'one-shot'` (run-and-discard) or `'continuable'` (kept across turns). Default `one-shot`; built-in and custom role entries share the semantics, with no per-role differences.
+
+```yaml
+roles:
+  implement:
+    background_mode: continuable   # this role's delegations run in the background and persist across turns; the main agent resumes in place with send_message
+```
+
+Generation semantics: the base template ships a `backgroundMode: one-shot` row in each of the four built-in roles' delegation blocks (pure visibility, so the generated file never makes you guess the default); a role configured as `continuable` has that row **rewritten in place** to `backgroundMode: continuable` (a fallback insert happens only when the row is missing — two rows can never appear), while `one-shot` / absent keeps it as is. Custom-role blocks always carry the row too. For the orchestration-level trade-offs and the failure-recovery branch of each mode, see "One-shot vs continuable" in [Orchestration](orchestration_en.md).
+
+Prerequisites and costs of continuable (stated plainly):
+
+- **Prerequisite: a `sessionPersistence` backend mounted at the host layer.** Mount `@deepseek-ai/dsh-session-persistence-jsonl` in `~/.dsh/cordis.patch.yml` (`config.root` required). Without it, continuable creation/resumption fails loudly (error code `PERSISTENCE_UNAVAILABLE`). This is a machine-level, global change; uninstalling the preset does not undo it.
+- **Costs: no TTL, on-disk accumulation, and accumulated context on every turn.** Persisted sessions have no TTL and keep writing to disk; a continuable child carries the context it has accumulated on every turn, so a long-lived child only gets more expensive. Reserve it for multi-round polishing delegations; `interrupt_agent` sessions you no longer need and clean up the on-disk files.
+
+Panel path: 庖丁配置 in the left sidebar → the「会话模式」("session mode") radio on a role card (「一次性（one-shot）」/「可续（continuable）」). When `sessionPersistence` is not detected the panel warns in place but does not block — the warning only reminds you to mount the persistence backend first; saving works as usual.
+
+Boundaries:
+
+- **The static role is out of scope**: `search_internal_deep` is not configured through the `roles` key (see 2.2). Its delegation block carries the same explicit `backgroundMode: one-shot` marker in the base template; to make it continuable, edit that row in the static source and re-apply (the generator never rewrites that row, it carries over verbatim).
+- **Deleted roles are not involved**: for a role deleted wholesale by `roles_remove`, any `background_mode` left in its entry is ignored with a warning (see 2.3).
+- **The main persona already carries the matching branch**: when a continuable role fails or disappoints, the main agent's delegation SOP resumes it in the same session with `send_message` first, and re-delegation drops to a fallback (see [Orchestration](orchestration_en.md)).
+
+Applying works exactly like every other config key: after editing, hit「保存并应用」(save & apply) in 庖丁配置, then restart DSH or open a new session.
 
 ## 3. Main-agent tool surface
 
@@ -256,7 +285,7 @@ These two sub-keys are the config-layer equivalent of the static-source `agentOp
 
 The main agent's tool surface is filtered against an allow list by `presets/orchestrator/restrict.mjs` (the `orchestrator-restrict` plugin) on the `system-prompt/assemble` waterfall. The filter is **fail-open** (a bug in the filter itself can never brick a session); names are matched one-by-one against the resolved tools, so **unmounted names are simply absent — never an error**.
 
-The `MAIN_AGENT_ALLOW` constant in `restrict.mjs` is the **base** (21 names) that the generated `config.allow` starts from; at runtime the filter falls back to it when no `config.allow` is injected. To reshape the main-agent tool surface, **do not edit `restrict.mjs`** — always use the config file (`main_agent_extra` / `main_agent_remove`) or the wizard's remove/restore step instead.
+The `MAIN_AGENT_ALLOW` constant in `restrict.mjs` is the **base** (21 names) that the generated `config.allow` starts from; at runtime the filter falls back to it when no `config.allow` is injected. To reshape the main-agent tool surface, **do not edit `restrict.mjs`** — always use the config file (`main_agent_extra` / `main_agent_remove`) or the main-agent card in the panel instead.
 
 | Group | Tools (21) |
 |---|---|
@@ -280,9 +309,9 @@ main_agent_extra:
 
 Points:
 
-- The entries land in the generated `orchestrator-restrict config.allow`. `mcp__*` and plugin tools are **host-dependent**: the installer injects only what was **actually detected**; undetected names (MCP disabled, typo) are silently not injected — no error.
-- The concrete host tools checkable on the wizard / config-UI "main agent" card are those shown by the detection panel (the tool pool).
-- When `main_agent_extra` is absent or empty the installer falls back to smart defaults (detected codegraph / `memory_search` tools are suggested for the main agent).
+- The entries land in the generated `orchestrator-restrict config.allow`. Injection follows the same whitelist: a name must belong to the **preset's own tool face** (the `restrict.mjs` main-agent allow ∪ the static role allows in the source preset) or to the **detection inventory**, and host tools (`mcp__*`, plugin tools like `mnemon_*`) go by what was actually detected — undetected names (MCP/plugin disabled, typo) are silently not injected, and the removed list in Preview shows the reason.
+- The concrete MCP / plugin tools checkable on the panel's "main agent" card are those shown by the detection results (the tool pool).
+- When `main_agent_extra` is absent or empty the generator falls back to smart defaults (detected codegraph / `memory_search` tools are suggested for the main agent).
 
 ### 3.3 Removing base tools: main_agent_remove
 
@@ -362,28 +391,35 @@ The generator inlines the full body of the selected SKILL.md (**YAML frontmatter
 | No matching SKILL.md found | **Warning and skip** (does not abort the install); warned once per name across both keys |
 | SKILL.md exists but its body is empty | Treated as not found; skipped |
 | `description` parsing | Handles single-line, quoted (single/double), folded (`>`) and literal (`\|`) blocks (including a block marker on its own line); collapses whitespace, strips one pair of surrounding quotes, caps at 200 chars; empty string when absent |
-| SKILL.md scan roots | `$DSH_HOME/skills` (default `~/.dsh/skills`), `$DSH_AGENTS_HOME/skills` (default `~/.agents/skills`), `<cwd>/.dsh/skills`, `<cwd>/.agents/skills`; within a root, `<root>/<name>/SKILL.md` wins over a bare `<root>/<name>.md` |
+| SKILL.md scan roots | Global (fallback CLI / panel "Global default") scans the two user roots only: `$DSH_HOME/skills` (default `~/.dsh/skills`), `$DSH_AGENTS_HOME/skills` (default `~/.agents/skills`); generating for a workspace additionally scans that workspace's `.dsh/skills` and `.agents/skills` (section 9). Within a root, `<root>/<name>/SKILL.md` wins over a bare `<root>/<name>.md` |
 
-Skill names come from install-time skill detection (the same four roots); the wizard and config UI only offer detected skills.
+Skill names come from apply-time skill detection (the same four roots); the panel only offers detected skills.
 
 ## 5. Main-agent persona
 
-### 5.1 Main-agent name: main_agent_name
+### 5.1 Display name only: main_agent_display_name
 
-The optional top-level key `main_agent_name` (string | null) renames the main agent — **one key, two places**:
+`main_agent_display_name` (an optional top-level key, string | null) changes **only the deployed preset display name** — the name shown in the GUI preset picker — and leaves the persona identity line `You are the orchestrator agent powered by the {{model}} model.` untouched. The orchestrator's identity is part of the orchestration preset's prompt semantics and **cannot be renamed** (the legacy "main agent name" key has been removed; leftover lines in old configs are dropped automatically the next time you hit Save & Apply, and the installer notes that the key is ignored).
 
-- **The deployed preset display name**: the `name` in `preset.yml` — the name shown in the GUI preset picker, default「编排模式 (Orchestrator)」("orchestration mode");
-- **The persona identity line**: `You are the <name> agent powered by the {{model}} model.` in the main-agent persona, with `<name>` = this key's value.
+Constraints: 1–60 characters after trimming, no newlines; violations raise a hard error. Empty / absent = the default「编排模式 (Orchestrator)」(workspace presets use the derived name).
 
-Constraints: after trimming, 1–60 characters and no newlines; an empty string / an absent key keeps the default (without this key, both the display name and the identity line stay verbatim from the SRC — the installer substitutes nothing).
+When generating `preset.yml`, the display name is resolved in this order:
+
+1. `main_agent_display_name` (this key, highest priority when non-empty);
+2. the derived「SRC 名·目录名」name (workspace presets only, see 9.2);
+3. the SRC name verbatim.
+
+Without this key, behavior stays byte-for-byte identical to before (backward compatible; existing configs upgrade with zero friction).
 
 ```yaml
-main_agent_name: orchestration-lead   # absent = the default orchestration name (preset display「编排模式 (Orchestrator)」, "orchestration mode")
+main_agent_display_name: 庖丁   # only the preset display name becomes「庖丁」; the identity line stays
 ```
 
-- **Hand-editing**: write the key and re-run `./install.sh --auto`, then restart DSH or open a new session.
-- **Config UI**: Settings → 庖丁配置 → the「主 agent 名称」("main agent name") input at the top of the main-agent card, with its「恢复默认」("restore default") button; after「保存并应用」(save & apply) it takes effect on a **GUI restart / new session**.
-- For contrast: this key renames only the **main agent**. A built-in role's display name is the role-level sub-key `roles.<toolName>.name` — it rewrites only the subject of that role's default persona identity sentence and never the tool call name (see 2.4). The two renaming lines are independent and configured separately.
+Where to set it:
+
+- **Hand-editing**: write the key and hit Save & Apply in 庖丁配置, then restart the GUI or open a new session.
+- **Panel**: 庖丁配置 (left sidebar) → main-agent card, the「主 agent 显示名（仅 preset 显示名）」("main agent display name (preset display name only)") input, with its「恢复默认」("restore default") button; after「保存并应用」(save & apply) it takes effect on a **GUI restart / new session**.
+- For contrast: there are two independent naming lines that never interfere with each other: `main_agent_display_name` (the main agent's preset display name only, see 5.1) and `roles.<toolName>.name` (the subject of a built-in role's default persona identity sentence, never the tool call name — see 2.4). Configure each on its own.
 
 ### 5.2 Persona extra: three-state semantics
 
@@ -407,9 +443,8 @@ It matters only when the codegraph MCP is mounted (it constrains codegraph tools
 
 ### 5.4 Where to edit
 
-- **Hand-editing**: edit the `main_agent_persona_extra` key in the config file and re-run `./install.sh --auto`.
-- **Config UI**: Settings → 庖丁配置 → main-agent card, the「人设追加」(persona extra) editor (with a "restore default" button) lets you edit / clear / restore the default; after「保存并应用」(save & apply) the change takes effect on a **GUI restart / new session**.
-- The interactive wizard has no dedicated prompt step for the persona extra (it inherits the existing config value) — under the CLI, hand-edit the file or use the UI.
+- **Hand-editing**: edit the `main_agent_persona_extra` key in the config file, then hit Save & Apply in 庖丁配置.
+- **Panel**: 庖丁配置 (left sidebar) → main-agent card, the「人设追加」(persona extra) editor (with a "restore default" button) lets you edit / clear / restore the default; after「保存并应用」(save & apply) the change takes effect on a **GUI restart / new session**.
 
 ## 6. Custom roles
 
@@ -421,29 +456,39 @@ loads skill rules on demand through the skill tool) plus `read` / `write` / `edi
 that says to build HTML slides with the `html-ppt` skill, and assign the `html-ppt` skill to it (section 7).
 After install, a main-agent "turn this outline into a PPT" delegates to a dedicated slide-making sub-agent
 instead of asking a generalist role to handle it. Any installed skill can become a specialized role the same
-way (frontend drafts, charts, document layout, …). This section covers the wizard/UI path (6.1), the
+way (frontend drafts, charts, document layout, …). This section covers the panel path (6.1), the
 hand-written static-source path (6.2), and configuration examples (6.3, including a skill-typed PPT agent).
 
 Two generation-time behaviors are worth stating up front. First, **a custom role with an empty tool
 surface is rejected at apply time** — a missing or empty `tools` list yields a blank allow list
 (`toolFilter.allow:` collapses to YAML null), leaving the sub-agent without a single tool; the generator
-treats custom roles exactly like built-ins here and refuses to install such a role, so give the role at
-least one tool before applying (the wizard keeps re-asking until you do). Second, the generator
+treats custom roles exactly like built-ins here and refuses to apply such a role, so give the role at
+least one tool before applying. Second, the generator
 **appends the role's persona first line — its duty sentence — to the main-agent persona as a delegation
 row** (`- <duty>: delegate to <toolName>.`, right after the existing delegation rows); that row is the
 main agent's only routing hint for the role, so make the persona's first line a short duty sentence
 (e.g. "Find the skill that matches the user's need").
 
-### 6.1 Path 1: interactive wizard / config UI (recommended)
+### 6.1 Path 1: the 庖丁配置 panel (recommended)
 
-The wizard flow (`./install.sh` interactive, or the config UI's agent tool assignment):
+The panel flow (庖丁配置 in the left sidebar → agent tool assignment → "Create a custom agent role" at the bottom):
 
 1. Create a role: enter a `toolName` matching `/^[a-z][a-z0-9_]*$/`;
-2. Multi-select tools from the tool pool (the trio's static allows ∪ detected host tools);
-3. Write a one-line persona (the wizard auto-expands it to `You are the <name> agent. <your description>`; the config UI accepts a full persona);
-4. The wizard automatically injects the new `toolName` into the main agent's `orchestrator-restrict config.allow` — **`restrict.mjs` itself is never touched** — and persists the assignment to the config file (a new entry under the `roles` key).
+2. Multi-select tools from the tool pool (the trio's static allows ∪ detected MCP / plugin tools);
+3. Write a persona (a full persona is accepted; make the first line a short duty sentence);
+4. Hit Save & Apply — the generator automatically injects the new `toolName` into the main agent's `orchestrator-restrict config.allow` — **`restrict.mjs` itself is never touched** — and persists the assignment to the config file (a new entry under the `roles` key).
 
-You can then delegate to that role directly by calling the toolName in conversation. To delete a role, remove the entry from the config file and re-run `--auto` (the target file is regenerated from scratch each run — no leftover blocks). Deleting a **built-in** role wholesale is different — that is `roles_remove` (see 2.3); simply not writing it under `roles` only stops overriding it.
+A note on where the role card's tool checklist comes from. Candidates are the static allow face from the
+source preset (built-in roles have it, core tools included) ∪ the main agent's core allow list (`restrictBase`,
+the fallback for custom roles) ∪ the detection inventory, presented in three groups: "**Base tools**" = core
+names that are neither `mcp__`-prefixed nor in the inventory (`read` / `glob` / `grep` / `bash` / `todo_write`
+etc.; the delegation names `search_external` / `design` / `implement` / `search_internal_deep` are not toggled
+in the grid); "**MCP tools**" = `mcp__`-prefixed names (including rows shipped in the source preset, such as
+tavily); "**Plugin tools**" = inventory names registered by plugins under their own names, no `mcp__` prefix
+(`mnemon_*` etc.). A newly created role ships with the core face plus the inventory pre-checked in its factory
+`tools`; trim or extend it before Save & Apply.
+
+You can then delegate to that role directly by calling the toolName in conversation. To delete a role, delete its card in the panel (or remove the entry from the config file) and hit Save & Apply again (the target file is regenerated from scratch each run — no leftover blocks). Deleting a **built-in** role wholesale is different — that is `roles_remove` (see 2.3); simply not writing it under `roles` only stops overriding it.
 
 ### 6.2 Path 2: hand-written static source
 
@@ -452,7 +497,7 @@ When you prefer to skip the config layer, add the role in the source preset dire
 1. Copy a `delegation-*` block inside the delegation group of `presets/orchestrator/agent.cordis.yml`;
 2. Change its `toolName` / `persona` / `toolFilter.allow`;
 3. Add the new `toolName` to `MAIN_AGENT_ALLOW` in `presets/orchestrator/restrict.mjs` (that constant is the base of the generated `config.allow`; without the name in the main-agent allow list the delegation tool is not callable);
-4. Re-run `./install.sh --auto` (the installer rewrites only the limited trio/main-agent persona spans — your added block carries over verbatim).
+4. Re-apply (Save & Apply in 庖丁配置; developers can also run `node tools/install.mjs --auto`) — the generator rewrites only the limited trio/main-agent persona spans, so your added block carries over verbatim.
 
 Both paths produce the same structure (`delegation-<toolName>` plus the toolName in the allow list); path 1 needs no source edits and is UI-manageable — prefer it.
 
@@ -476,7 +521,7 @@ roles:
       - todo_write
 ```
 
-After re-running `./install.sh --auto`: a `delegation-code-reviewer` block is generated (persona as-is, tools verbatim into its allow) and `code-reviewer` is injected into the main agent's `config.allow`. Note that a custom role's `tools` are written into the allow **verbatim — no detection intersection** (the wizard/UI tool pool guarantees the choices exist in the registry) — when hand-writing, list only actually-mounted tools, otherwise child-agent creation is rejected by `tools.restrict()` for unknown tools.
+After Save & Apply in 庖丁配置: a `delegation-code-reviewer` block is generated (persona as-is, tools verbatim into its allow) and `code-reviewer` is injected into the main agent's `config.allow`. Note that a custom role's `tools` are written into the allow **verbatim — no detection intersection** (the panel's tool pool guarantees the choices exist in the registry) — when hand-writing, list only actually-mounted tools, otherwise child-agent creation is rejected by `tools.restrict()` for unknown tools.
 
 **Skill-typed example: a `ppt` agent (a dedicated slide-making sub-agent)** — the tool surface includes
 `skill` plus read/write/edit, the persona guides the agent to the `html-ppt` skill, and the `skills` key
@@ -508,14 +553,14 @@ The effect is the same as `code-reviewer` (a `delegation-ppt` block is generated
 the difference is the extra `skills` mapping. Once the sub-agent exists, the skill catalog is visible to it in
 full (a DSH mechanism), so the persona guidance line is only a **soft constraint** — the actual work happens
 when the sub-agent loads the rules via the `skill` tool; mounting other skills (resumes, charts, …) works the
-same way. The wizard / config UI can build the same role: tick `skill` plus read/write/edit in the tool pool,
-write a one-line persona, and assign `html-ppt` to `ppt` in the skill-assignment panel.
+same way. The 庖丁配置 panel can build the same role: tick `skill` plus read/write/edit in the tool pool,
+write a one-line persona, and assign `html-ppt` to `ppt` in the skill-assignment grid.
 
 ## 7. Skills to roles
 
 ### 7.1 Writing and effect
 
-The top-level `skills` key assigns skills to roles (the value is a list of role toolNames — the same mapping as the wizard's skill-assignment step and the config UI's skill panel):
+The top-level `skills` key assigns skills to roles (the value is a list of role toolNames — the same mapping as the panel's skill-assignment grid):
 
 ```yaml
 skills:
@@ -557,4 +602,54 @@ Omitting `agentOptions` means inheriting the main agent's model. The config sub-
 
 ### 8.3 Syncing after disabling MCPs / plugins
 
-When you disable tavily / codegraph / magic-memory (comment out the entry in `~/.dsh/cordis.patch.yml` or the profile patch), **no manual allow editing is needed**: re-run `./install.sh --auto` and the installer automatically prunes the matching `mcp__tavily__*` / `memory_search` names from the trio's allows (use `--dry-run` to preview the pruned names first). MCP servers that cannot be detected or whose handshake fails are skipped: the affected roles simply lack those tools and the install does not error. Detection and patch-layer details chain to [Installation](installation_en.md).
+When you disable tavily / codegraph / magic-memory (comment out the entry in `~/.dsh/cordis.patch.yml` or the profile patch), **no manual allow editing is needed**: hit Save & Apply once in 庖丁配置 and the generator automatically prunes the matching `mcp__tavily__*` / `memory_search` names from the trio's allows (use Preview to see the pruned names first). MCP servers that cannot be detected or whose handshake fails are skipped: the affected roles simply lack those tools and applying does not error. Detection and patch-layer details chain to [Installation](installation_en.md).
+
+## 9. Per-workspace configuration
+
+### 9.1 One global set, one per workspace
+
+DSH organizes sessions by workspace (the project directory). The top-level `workspaces` key gives each workspace its own main/sub-agent configuration: the global entry keeps generating the shared `orchestrator` preset, while each workspace entry generates its own `orchestrator-<slug>` preset. They coexist in the preset roster and never overwrite each other.
+
+Each workspace entry is a **complete configuration set**, not a delta: same fields as the top level (except `profile` — detection layers stay global). Role sub-keys carry over as-is — `background_mode` (see 2.6) works per workspace too: let `implement` run continuable in one project while every other project stays one-shot. The first time you configure a workspace in the panel, it starts from the current global config; edit, then hit "Save & Apply" to generate that workspace's preset.
+
+```yaml
+workspaces:
+  '/Users/me/code/shop-api':     # key = absolute workspace directory (normalized on write, always quoted)
+    main_agent_display_name: Shop Backend Lead   # that workspace preset's display name only
+    roles:
+      implement:
+        model: deepseek-reasoner # this project codes with the reasoning model
+  '/Users/me/code/blog':
+    roles_remove: [design]       # no design helper needed here
+```
+
+### 9.2 Preset naming
+
+- The **slug** comes from the workspace directory's basename: lowercased, invalid characters collapsed to `-`; if that yields an empty string or exactly `orchestrator` (colliding with the global preset), `ws` is used instead.
+- When multiple workspaces share a basename, a path-hash suffix (first 6 hex chars of sha1) is appended — two projects both named `Shop` become `orchestrator-shop-acd95b` and `orchestrator-shop-34b6aa`. Rename or move the directory and re-apply; stale preset directories are not cleaned automatically — remove the ones you no longer want on the DSH presets page.
+- Preset display name: the entry's `main_agent_display_name` if set; otherwise the default name gets the `·<basename>` suffix (e.g. `编排模式 (Orchestrator)·Shop`) so entries are distinguishable at a glance in the roster.
+
+### 9.3 Using the panel
+
+At the top of the 庖丁配置 page sits the **configuration target** tab strip:
+
+- **Global default**: edits and writes the shared `orchestrator` preset, exactly as before;
+- **Workspace tabs**: the list comes from the host workspace registry (directories register once a session has opened there); a green dot means the preset has been generated, and hovering shows the path, session count, and preset id;
+- **Add workspace**: type an absolute directory path to register it (idempotent). If the registry is unreachable, the panel falls back to showing only the workspaces already in the config file — everything else keeps working.
+
+With a workspace selected, preview and apply target it alone; the success note reports the preset id.
+
+### 9.4 How it takes effect, and boundaries
+
+- **Preset choice happens at session creation**: pick the workspace on the new-session screen, then pick the matching `orchestrator-<slug>` in the preset selector. The global default preset is untouched. A new session (or a DSH restart) is needed for a freshly generated preset to appear.
+- Preset directories live under `$DSH_HOME/.agent-presets/` and are shared machine-wide: separate DSH instances launched from different projects never clobber each other, because their slugs differ.
+- The fallback CLI still targets the global entry only; the `workspaces` section survives a CLI apply unchanged.
+- A running session never switches presets — a session's roles and tool surfaces are assembled at creation and fixed for its lifetime; to change the lineup, start a new session with the new preset.
+
+### 9.5 Skill scan roots follow the configuration target
+
+Skill candidates do not follow the directory the GUI was launched from: the **global default** view scans the two user roots (`~/.dsh/skills`, `~/.agents/skills`), while a **workspace** view additionally scans that workspace's `.dsh/skills` and `.agents/skills`. Consequences:
+
+- A skill installed only inside one project (say `bento-slides` living in a knowledge-base repo) is invisible — and unassignable — in the global config; select that workspace and it appears in the skill grid with a "project" badge, assignable to that workspace preset's main agent or roles.
+- Generation resolves skills through the same lens: a workspace preset can emit the absolute SKILL.md path of a project-local skill (the main agent reads it on demand with `read` — any on-disk path is readable); the global preset resolves user roots only and warns-and-skips project-local skill names — a global preset travels across all projects and should not reference a single project's skill anyway.
+- The fallback CLI has no workspace concept and scans the two user roots only (same as the global default).

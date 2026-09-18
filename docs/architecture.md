@@ -31,7 +31,7 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 | 维度 | 单体模式（默认） | 编排模式（本 preset） |
 |---|---|---|
 | 职责 | 一个 agent 承担全部任务 | 主 agent 拆任务与集成，角色子 agent 各干一摊 |
-| 开销 | 每请求固定承载 ~16.2k tokens 工具定义 | 主 agent ~5.5k；角色工具面 ~3.0k–3.7k，仅委派时发生 |
+| 开销 | 每请求固定承载 ~16.2k tokens 工具定义 | 主 agent ~5.5k；角色工具面 ~3.0k–3.8k，仅委派时发生 |
 | 上下文 | 每次搜索 dump、每轮设计稿、每段 diff 都累积进主上下文 | worker 上下文小而专、用完即弃，主 agent 只收摘要 |
 
 组合的静态源是 `presets/orchestrator/agent.cordis.yml`（叠加在 DSH builtin `standard` preset 全量组合
@@ -58,14 +58,15 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
    （外部调研·按需）  （设计·按需）     （实现·按需）     （全仓深搜·按需）
         │               │               │               │
         ▼               ▼               ▼               ▼
-   web_search       read/read_image  read/write/edit  glob/grep/read/
-   mcp__tavily__*   glob/grep/bash/  glob/grep/bash/  read_image/bash/
-   (5 个)           skill/write/     skill/web_search ask_user_question/
-   glob/grep/read   edit/ask_user_   ask_user_question todo_write/
-   ask_user_        question/        todo_write/      job_output/job_list/
-   question         todo_write/      job_output/      job_kill
-   （无 write/edit） job_output/      job_list/job_kill/   （只读、不改文件、
-                    job_list/        get_goal/          无网络）
+   web_search       read/read_image  read/read_image  glob/grep/read/
+   mcp__tavily__*   glob/grep/bash/  write/edit/      read_image/bash/
+   (5 个)           skill/           glob/grep/bash/  ask_user_question/
+   glob/grep/read   web_search       skill/web_search todo_write/
+   ask_user_        ask_user_        ask_user_question job_output/job_list/
+   question         question/        todo_write/      job_kill
+   （无 write/edit） todo_write/        job_output/      （只读、不改文件、
+                    job_output/      job_list/job_kill/ 无网络）
+                    job_list/        get_goal/
                     job_kill         create_goal/update_goal
 ```
 
@@ -79,18 +80,18 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 | 单体（现状，未裁剪） | 60 工具全量 | **~16.2k** | 每请求固定注入 |
 | 编排主 agent | 21 项白名单（∩ 注册面） | **~5.5k** | ↓66%；内部搜索零委派延迟 |
 | search_external 子 agent | 10 项 allow | ~3.0k | 仅实际联网调研时才产生 |
-| design 子 agent | 13 项 allow | ~3.2k | 仅实际委派设计时才产生 |
-| implement 子 agent | 16 项 allow | ~3.7k | 仅实际委派实现时才产生 |
+| design 子 agent | 12 项 allow | ~3.3k | 仅实际委派设计时才产生 |
+| implement 子 agent | 17 项 allow | ~3.8k | 仅实际委派实现时才产生 |
 | search_internal_deep 子 agent | 10 项 allow | 未单独估算 | 仅实际委派全仓深搜时才产生 |
 
-注：表中角色工具数按 `agent.cordis.yml` 实际 allow 条目数计（design 13 / implement 16），README 旧表
+注：表中角色工具数按 `agent.cordis.yml` 实际 allow 条目数计（design 12 / implement 17），README 旧表
 中的 14 / 17 与白名单 22 已过时。
 
 **真正的收益是上下文隔离，而不是省下的几千 token 本身**：
 
 - 单体 agent 的上下文会累积每一次搜索 dump、每一轮设计稿、每一段 diff——即使某工具本请求没用上，
   它过往的产物仍占着窗口；
-- 编排架构里每个 worker 上下文小而专（各自只带本角色的工具与产物），角色默认 one-shot、用完即弃；
+- 编排架构里每个 worker 上下文小而专（各自只带本角色的工具与产物），角色默认 one-shot、用完即弃（会话模式按角色可配——确需多轮打磨的角色可切 continuable，见[编排](orchestration.md)）；
   主 agent 只接收结构化摘要并集成，不会把子 agent 的完整上下文倒进自己的窗口；
 - 因而主 agent 的窗口大小与"本轮派了多少活"解耦，长会话的 token 水位主要由编排者自身的
   摘要与决策构成（配合压缩治理，见「Token 治理（性能调优）」一节）。
@@ -135,7 +136,7 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 [docs/orchestration.md](orchestration.md)。
 
 内置四角色只是**出厂分工**：任何「工具 + 技能」组合都能以同一机制成为新委派工具——在配置文件 `roles`
-键写一个 toolName（或经向导 / 配置 UI 新建），安装器生成 `delegation-<toolName>` 块、把 toolName
+键写一个 toolName（或在庖丁配置面板新建），生成器生成 `delegation-<toolName>` 块、把 toolName
 注入主 agent 白名单，并把角色 persona 首行职责句自动追加为主 agent persona 的委派行（tools 为空的
 角色应用时会被拒绝安装），详见 [docs/configuration.md](configuration.md) 第 6 节；自定义角色同样支持 `model` / `provider` 专用模型（与内置角色同一子键、同一生成机制，见 2.5）。例如建一个装配 `html-ppt`
 技能的 `ppt` agent，做 PPT 这类任务就有了专属子 agent。
@@ -143,16 +144,16 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 | 委派工具 | 实例 ID | persona 一句话职责 | 加载成本 |
 |---|---|---|---|
 | `search_external` | `delegation-search-external` | 只做联网调研（web_search + tavily），绝不改文件；返回结构化研究摘要（发现、来源、待答问题） | ~3.0k，仅委派时 |
-| `design` | `delegation-design` | 产出 UI/UX 设计、线框与前端 spec，可用 skill 工具加载设计技能（frontend-design、html-ppt）；先读参考再交付 spec，不写最终代码 | ~3.2k，仅委派时 |
-| `implement` | `delegation-implement` | 写与改代码：先读上下文 → 精准修改 → 验证（build/test/grep）；不改架构 | ~3.7k，仅委派时 |
+| `design` | `delegation-design` | 产出 UI/UX 设计、线框与前端 spec，可用 skill 工具加载设计技能（frontend-design、html-ppt）；先读参考再交付 spec，不写最终代码 | ~3.3k，仅委派时 |
+| `implement` | `delegation-implement` | 写与改代码：先读上下文 → 精准修改 → 验证（build/test/grep）；不改架构 | ~3.8k，仅委派时 |
 | `search_internal_deep` | `delegation-search-internal-deep` | 只做仓库探索：不改文件、不联网；处理主 agent 上下文装不下的任务（全仓 grep dump、超页大文件通读、跨目录符号/定义追踪），只回浓缩摘要 | 未单独估算，仅委派时 |
 
-上表是出厂默认形态，配置层可再裁剪与定制（详见 [docs/configuration.md](configuration.md)）：`search_external` / `design` / `implement` 三个可经 `roles_remove` 整条删除（2.3，`search_internal_deep` 删不掉）；内置角色可配显示名 `roles.<toolName>.name`，只替换该角色 persona 首行身份句主语（2.4）；可配专用模型 `roles.<toolName>.model` / `.provider`，生成器在委派块注入 `agentOptions`，不配则跟随主 agent（2.5）；主 agent 可经 `main_agent_name` 改名，一改两处（第 5 节）。
+上表是出厂默认形态，配置层可再裁剪与定制（详见 [docs/configuration.md](configuration.md)）：`search_external` / `design` / `implement` 三个可经 `roles_remove` 整条删除（2.3，`search_internal_deep` 删不掉）；内置角色可配显示名 `roles.<toolName>.name`，只替换该角色 persona 首行身份句主语（2.4）；可配专用模型 `roles.<toolName>.model` / `.provider`，生成器在委派块注入 `agentOptions`，不配则跟随主 agent（2.5）；可配会话模式 `roles.<toolName>.background_mode`，配成 `continuable` 时委派块注入 `backgroundMode` 行、子会话跨轮保留（2.6）；主 agent 的 persona 身份行不可改名（编排主 agent 的身份不属于可配置项），另有 `main_agent_display_name` 只改 preset 显示名、不动 persona 身份行（见 configuration.md 第 5 节）。
 
 ### 角色 toolFilter.allow 明细
 
-以下 allow 列表逐字抄录自 `agent.cordis.yml`（安装期生成器会按运行时检测到的 host 工具对列表做
-「配置/静态意图 ∩ 实际检测工具」重写，见 [docs/configuration.md](configuration.md)）。
+以下 allow 列表逐字抄录自 `agent.cordis.yml`（安装期生成器按「preset 自带工具面 ∪ 运行时检测库存」
+白名单对账重写各列表，两头都不占的名字剔除并说明原因，见 [docs/configuration.md](configuration.md)）。
 
 **`search_external`（外部调研，10 项）**
 
@@ -162,21 +163,21 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 | toolFilter.allow | `web_search`、`mcp__tavily__tavily_search`、`mcp__tavily__tavily_crawl`、`mcp__tavily__tavily_extract`、`mcp__tavily__tavily_map`、`mcp__tavily__tavily_research`、`glob`、`grep`、`read`、`ask_user_question` |
 | 加载成本 | ~3.0k tokens，仅实际联网调研时发生 |
 
-**`design`（设计，13 项）**
+**`design`（设计，12 项）**
 
 | 字段 | 值 |
 |---|---|
 | persona 职责 | 产出 UI/UX 设计、线框与前端 spec；经 skill 工具加载设计技能（frontend-design、html-ppt）；先读参考再交付 spec，不实现最终代码 |
-| toolFilter.allow | `read`、`read_image`、`glob`、`grep`、`bash`、`skill`、`write`、`edit`、`ask_user_question`、`todo_write`、`job_output`、`job_list`、`job_kill` |
-| 加载成本 | ~3.2k tokens，仅实际委派设计时发生 |
+| toolFilter.allow | `read`、`read_image`、`glob`、`grep`、`bash`、`skill`、`web_search`、`ask_user_question`、`todo_write`、`job_output`、`job_list`、`job_kill` |
+| 加载成本 | ~3.3k tokens，仅实际委派设计时发生 |
 
-**`implement`（实现，16 项）**
+**`implement`（实现，17 项）**
 
 | 字段 | 值 |
 |---|---|
 | persona 职责 | 写与改代码：先读上下文 → 精准修改 → 验证（build/test/grep）并汇报改动与验证方式；不做架构重设计 |
-| toolFilter.allow | `read`、`write`、`edit`、`glob`、`grep`、`bash`、`skill`、`web_search`、`ask_user_question`、`todo_write`、`job_output`、`job_list`、`job_kill`、`get_goal`、`create_goal`、`update_goal` |
-| 加载成本 | ~3.7k tokens，仅实际委派实现时发生 |
+| toolFilter.allow | `read`、`read_image`、`write`、`edit`、`glob`、`grep`、`bash`、`skill`、`web_search`、`ask_user_question`、`todo_write`、`job_output`、`job_list`、`job_kill`、`get_goal`、`create_goal`、`update_goal` |
+| 加载成本 | ~3.8k tokens，仅实际委派实现时发生 |
 
 **`search_internal_deep`（全仓深搜，10 项）**
 
@@ -241,9 +242,13 @@ SOP（按 stop reason 分流：error 重委派一次 / max-tokens 拆小 / refus
 重试 / 产出差带具体缺失点补做；同一任务失败两次即停止，向用户报告；重委派必须携带上次集成摘要），
 详见 [docs/orchestration.md](orchestration.md)。
 
-**⑦ 热插拔 = preset 是静态目录。** 安装、卸载、修改都是文件操作：生成器把静态源复制/改写为
-`$DSH_HOME/.agent-presets/orchestrator`，编辑 YAML / mjs、重跑生成器、重启 host 或新建会话即生效；
-卸载即删目录。DSH 源码零改动，preset 可整体移除、不残留。
+**⑦ 热插拔 = preset 是静态目录 + 插件通道挂载。** 插件本体经 `dsh plugin add`（pnpm + 包内 bundle patch）装入 profile，侧栏面板即挂即卸；编排预设本身是一个静态目录——生成器把静态源复制/改写为
+`$DSH_HOME/.agent-presets/orchestrator`，编辑 YAML / mjs、面板「保存并应用」重新生成、重启 host 或新建会话即生效；
+卸载 = `dsh plugin remove` 加删目录（见[安装](installation.md)）。DSH 源码零改动，preset 可整体移除、不残留。
+
+## Web 配置页 client bundle：源头多文件，产物单文件
+
+配置页的前端代码按分区存放在 `plugins/paoding-config-ui/src/client/`，是十几个带两位序号前缀的片段文件，文件名顺序即拼接顺序；`scripts/build-client.mjs` 把它们按序原样相连，写出 `plugins/paoding-config-ui/lib/client.js`——不转译、不压缩、不插入任何分隔符，产物与片段逐字节对得上。DSH 平台对每个插件包只认 `exports["./client"]` 这一个入口，所以发布物必须仍是这一个单文件。要改前端就改片段，跑一次拼接脚本重新生成产物；直接手改 `lib/client.js` 会被 `prepublishOnly` 钩子里的 `--check` 当场拦下。
 
 ## Token 治理（性能调优）
 
@@ -269,7 +274,7 @@ grep inline cap 与对照同设计）后，根因锁定为：**默认压缩从�
 | 0.45（本 preset 已落地） | 117,965 tokens | ~80K | 保留 ~16% 尾部 ≈42K + 摘要 checkpoint |
 | 0.35（可选更激进） | ~92K tokens | ~67K | 更省 token，摘要更频繁 |
 
-改阈值后重跑 `./install.sh --auto` 应用。同组合内另有配套组件：
+改阈值后在「庖丁配置」点「保存并应用」重新生成。同组合内另有配套组件：
 
 - `tool-result-pruner`：超长工具结果按 `thresholdChars: 8192 / headChars: 4096 / tailChars: 1024`
   截头留尾，防止单条巨型输出撑大窗口；
@@ -286,7 +291,7 @@ grep inline cap 与对照同设计）后，根因锁定为：**默认压缩从�
 - **`toolFilter.allow` 是精确名匹配，不支持 glob**：tavily 的 5 个工具必须逐个写全
   （`mcp__tavily__tavily_search/crawl/extract/map/research`）。
 - **主 agent 白名单里未挂载的工具不会报错**：瀑布过滤只在已解析的 `assembly.tools` 里按名匹配，
-  某工具（如被注释的 MCP）不在其中就只是不出现，安装与运行都静默通过——配置意图与实际挂载
-  靠安装期检测（`install.sh --auto` / `--dry-run`）对齐，改动 host patch 后需重跑。
+  某工具（如被注释的 MCP）不在其中就只是不出现，生成与运行都静默通过——配置意图与实际挂载
+  靠生成期检测对齐，改动 host patch 后在「庖丁配置」点「保存并应用」同步即可（「预览生成」可先看清单）。
 - **超大仓库全量探索场景应委派 `search_internal_deep` 而非主 agent 自做**：全仓 grep dump、大文件
   通读反复灌满主上下文，正是该角色的隔离价值所在（只读、无网络、只回浓缩摘要）。

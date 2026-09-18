@@ -1,16 +1,19 @@
 /**
  * 公共状态管线：collectState（patch 分层扫描 / MCP 工具名解析 / 插件与技能检测 /
- * smart defaults，含可选 runtimeFacts 合并）与 generateAndInstall（compose +
- * yaml 校验 + dst 目录落盘 + saveConfig）。install.mjs 的公共导出
- * （collectState / generateAndInstall）即来自本模块。
- * 依赖 util / yaml / config / host / skills / spans / compose / alloc 与
- * node:fs / node:path；被 cli 与 plugins/paoding-config-ui 引用。
+ * smart defaults，含可选 runtimeFacts 合并 / 已落盘 preset 目录扫描）与
+ * generateAndInstall（compose + yaml 校验 + dst 目录落盘 + saveConfig，支持按
+ * 工作区落到 orchestrator-<slug> 独立 preset 目录并把条目并进配置 workspaces 段；
+ * 配置读取失败 / 状态不可信时拒绝破坏性落盘，成功后回收孤儿工作区 preset）。
+ * install.mjs 的公共导出（collectState / generateAndInstall）即来自本模块。
+ * 依赖 util / yaml / config / host / skills / spans / compose / alloc / workspaces
+ * 与 node:fs / node:path；被 cli 与 plugins/paoding-config-ui 引用。
  */
 import {
   chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -19,7 +22,15 @@ import {
 import path from 'node:path'
 import { DEFAULT_MAIN_AGENT_PERSONA_EXTRA, ROLES, SRC_DIR, warn } from './util.mjs'
 import { flattenEntries, loadYaml, parsePatchFile } from './yaml.mjs'
-import { loadConfig, normalizeMainAgentName, saveConfig, yamlScalar } from './config.mjs'
+import {
+  loadConfig,
+  normalizeRoleName,
+  normalizeTargetFields,
+  saveConfig,
+  stripNonTargetKeys,
+  yamlScalar,
+} from './config.mjs'
+import { assignSlugs, presetIdOf } from './workspaces.mjs'
 import {
   extractMcp,
   isEntryEnabled,
@@ -69,21 +80,12 @@ export async function collectState({ dshHome, configFile, profile = null, patche
   } catch (err) {
     throw new Error(`cannot locate role blocks in ${path.join(SRC_DIR, 'agent.cordis.yml')}: ${err.message}`)
   }
-  let restrictBase
-  try {
-    restrictBase = extractMainAgentAllow(restrictSrc)
-  } catch (err) {
-    throw new Error(err.message)
-  }
+  // 这层包装无增值（错误文案原样透传），让原始错误直接上抛。
+  const restrictBase = extractMainAgentAllow(restrictSrc)
 
   // Load the existing config (null when absent); its profile wins unless an
-  // explicit profile was given.
-  let existing = null
-  try {
-    existing = loadConfig(configFile, yamlMod)
-  } catch (err) {
-    throw new Error(err.message)
-  }
+  // explicit profile was given. 读失败（存在但解析不了等）原样上抛，不做静默降级。
+  const existing = loadConfig(configFile, yamlMod)
   const effectiveProfile = profile ?? existing?.profile ?? 'web'
 
   // Scan the patch layers (home, profile, extra --patch files) in order.
@@ -145,7 +147,11 @@ export async function collectState({ dshHome, configFile, profile = null, patche
     for (const tool of plugin.tools) inventory.add(tool)
   }
 
-  const skills = detectSkills(dshHome, cwd)
+  // 技能检测走全局语义（cwd 传 null，只扫用户级两根）：state.skills 是全局
+  // 视角的用户级技能，不再跟随进程启动目录（GUI 场景下启动目录没有「当前
+  // 项目」含义）；工作区视角的项目级技能由插件路由按工作区目录另行检测。
+  // cwd 入参保留不动（patch 扫描外的其余用途与透传照旧）。
+  const skills = detectSkills(dshHome, null)
   const staticBase = {}
   for (const role of ROLES) staticBase[role] = blocks.get(role).names
   const suggested = smartDefaults(mcpReports, inventory, staticBase)
@@ -205,6 +211,19 @@ export async function collectState({ dshHome, configFile, profile = null, patche
     }
   }
 
+  // 已落盘 preset 目录扫描（编排类）：.agent-presets 下的 orchestrator 基础
+  // preset 与 orchestrator-<slug> 工作区专属 preset。扫描失败（目录尚不存在、
+  // 无读权限等）一律降级为空列表，绝不影响检测结果本体；generateAndInstall
+  // 成功落盘后以它为对账清单做孤儿工作区 preset 回收。
+  let installedPresets = []
+  try {
+    installedPresets = readdirSync(path.join(dshHome, '.agent-presets'))
+      .filter((name) => /^orchestrator(-[a-z0-9-]+)?$/.test(name))
+      .sort()
+  } catch {
+    installedPresets = []
+  }
+
   return {
     dshHome,
     cwd,
@@ -226,6 +245,9 @@ export async function collectState({ dshHome, configFile, profile = null, patche
     skills,
     staticBase,
     suggested,
+    // 已落盘的编排类 preset 目录名列表（含基础 orchestrator 与各工作区专属），
+    // 供 UI 的 workspaceMeta 对账「该工作区 preset 是否已生成」。
+    installedPresets,
     // 主 persona 尾部追加的默认常量（配置键 main_agent_persona_extra 缺省值）：
     // 供 UI state（serializeState → /api/paoding/state）展示与「恢复默认」用。
     mainPersonaExtraDefault: DEFAULT_MAIN_AGENT_PERSONA_EXTRA,
@@ -240,30 +262,73 @@ export async function collectState({ dshHome, configFile, profile = null, patche
 /**
  * Compose, validate and (unless dry-run) install the generated preset from an
  * assignments object. Shared by the CLI and the visual config UI.
- * Returns { text, roleResults, staleNote, wrote }.
+ * Returns { text, roleResults, staleNote, wrote, presetId }.
+ *
+ * 破坏性落盘护栏：配置读取失败直接抛错中止（不静默降级 prev=null 继续装）；
+ * 配置缺失（prev=null）而目标 preset 目录已存在时同样拒绝重建。落盘成功后对
+ * state.installedPresets 做孤儿工作区 preset 回收（不被 workspaces 引用的
+ * orchestrator-<slug> 目录 rmSync + warn；基础 preset 永不清）。
+ *
+ * workspacePath（可选）：传工作区绝对路径时生成落到 orchestrator-<slug> 独立
+ * preset 目录（slug 由磁盘配置现有 workspaces 键 ∪ 本路径统一分配，同名目录
+ * 冲突自动加 hash 后缀），preset 显示名按 main_agent_display_name >
+ * （工作区预设派生名）「SRC 名·目录名」取值，
+ * 存盘只把该条目并进配置 workspaces 段（顶层字段维持磁盘现状）；不传（null）
+ * 走全局路径，落点与存盘行为和旧版完全一致。
  */
-export function generateAndInstall(state, assignments, { dryRun = false, saveConfigOnWrite = false } = {}) {
-  const { srcText, blocks, personaBlocks, inventory, restrictBase, yamlMod, dshHome, cwd, dstDir, dstAgentFile, configFile, scanned, effectiveProfile } = state
+export function generateAndInstall(state, assignments, { dryRun = false, saveConfigOnWrite = false, workspacePath = null } = {}) {
+  const { srcText, blocks, personaBlocks, inventory, restrictBase, yamlMod, dshHome, configFile, scanned, effectiveProfile } = state
+
+  // assignments 剥污染键：profile / workspaces 不属于目标字段，UI/CLI 透传
+  // 一律丢弃，防其混进生成的 preset 或覆盖配置文件里对应的段。
+  assignments = stripNonTargetKeys(assignments)
+
+  // 工作区定位：路径归一（容忍尾斜杠 / 相对写法），空值一律视为全局。
+  const wsPath = workspacePath === null || workspacePath === undefined || workspacePath === ''
+    ? null
+    : path.normalize(path.resolve(workspacePath))
+  let dstDir = state.dstDir
+  let presetId = 'orchestrator'
+
+  // 配置现状读取（下方 slug 分配与 saveConfig 合并共用这一次，避免双读漂移）：
+  // 读失败（存在但解析不了 / 权限错）直接抛错中止 —— 旧版静默降级 prev=null 后
+  // 继续 rmSync / 覆写配置，等于对着不可信状态做破坏性落盘，已收紧为硬错误。
+  let prev = null
+  try {
+    prev = loadConfig(configFile, yamlMod)
+  } catch (err) {
+    throw new Error(`现有配置 ${configFile} 读取失败，已中止（未做任何落盘）: ${err.message}`)
+  }
+
+  if (wsPath !== null) {
+    // slug 取自磁盘配置的 workspaces 键集合 ∪ 本路径（prev 已在上方统一读取）：
+    // 整组统一分配才能让同 basename 的冲突方都拿到稳定的 hash 后缀。
+    const wsPaths = Object.keys(prev?.workspaces ?? {})
+    if (!wsPaths.includes(wsPath)) wsPaths.push(wsPath)
+    presetId = presetIdOf(assignSlugs(wsPaths).get(wsPath))
+    dstDir = path.join(dshHome, '.agent-presets', presetId)
+  }
+  const dstAgentFile = path.join(dstDir, 'agent.cordis.yml')
 
   // Pre-read the SKILL.md metas of the skills selected for the main-agent
   // persona (soft rows via main_agent_skills + optional hard inlining via
-  // main_agent_skills_inline; union, deduped).  Names whose file is missing
+  // main_agent_skills_inline; union, deduped).  技能按生成目标解析：工作区
+  // 目标用该工作区目录（wsPath，已归一为绝对路径）追加项目级两根，可解析该
+  // 工作区项目根里的技能（SKILL.md 绝对路径写进 persona，供主 agent read 按
+  // 需读）；全局目标传 null 只解析用户级。Names whose file is missing
   // simply do not enter the map — composeGenerated warns about them.
+  const skillCwd = wsPath
   const softNames = (assignments?.main_agent_skills ?? []).filter((n) => typeof n === 'string' && n !== '')
   const hardNames = (assignments?.main_agent_skills_inline ?? []).filter((n) => typeof n === 'string' && n !== '')
   const mainAgentSkillMetas = {}
   for (const name of [...new Set([...softNames, ...hardNames])]) {
-    const hit = findSkillMeta(name, dshHome, cwd)
+    const hit = findSkillMeta(name, dshHome, skillCwd)
     if (hit) mainAgentSkillMetas[name] = hit
   }
 
   // Compose the generated config; a composition error is a hard error.
-  let composed
-  try {
-    composed = composeGenerated(srcText, blocks, personaBlocks, assignments, inventory, restrictBase, mainAgentSkillMetas)
-  } catch (err) {
-    throw new Error(err.message)
-  }
+  //（这层包装无增值，让 composeGenerated 的原始错误直接上抛。）
+  const composed = composeGenerated(srcText, blocks, personaBlocks, assignments, inventory, restrictBase, mainAgentSkillMetas)
   const generatedText = composed.text
   const roleResults = composed.roleResults
 
@@ -292,23 +357,50 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
     )
   }
 
+  // preset.yml 显示名，两级优先：main_agent_display_name（仅显示名键，persona
+  // 身份行不可改名）> 工作区预设派生名（wsPath 非空且未设显示名时取
+  // 「SRC preset.yml 的 name 值·工作区目录名」，让预设选择器能分清多个工作区）；
+  // 全局路径未设显示名时维持 SRC 原名（行为与旧版一致）。displayNameSource
+  // 记住显示名来自哪个键：找不到可替换的 name: 行时 warn 按真实来源归因
+  // （派生名不来自任何键，单独措辞）。
+  let displayName = normalizeRoleName(assignments?.main_agent_display_name ?? null, 'main_agent_display_name')
+  let displayNameSource = displayName !== null ? 'main_agent_display_name' : null
+  if (displayName === null && wsPath !== null) {
+    try {
+      const srcPresetText = readFileSync(path.join(SRC_DIR, 'preset.yml'), 'utf8')
+      const m = /^name:[ \t]*(.+?)[ \t]*$/m.exec(srcPresetText)
+      if (m) displayName = `${m[1]}·${path.basename(wsPath)}`
+    } catch {
+      /* SRC preset 不可读 / 无 name 行：维持原名不改 */
+    }
+  }
+
   let wrote = false
   if (!dryRun) {
+    // 破坏性落盘护栏：配置不可信（读取失败已在上方抛错中止；此处 prev=null =
+    // 配置文件缺失）而目标 preset 目录已存在时，拒绝 rmSync 重建与随后的配置
+    // 覆写 —— 对着未知状态动刀可能毁掉用户仅存的落盘 preset。全新安装（无配置
+    // 且无目录）不受影响，仍照常装。
+    if (prev === null && existsSync(dstDir)) {
+      throw new Error(
+        `配置文件 ${configFile} 缺失但 preset 目录已存在（${dstDir}），已拒绝破坏性重建；` +
+          '请先恢复配置文件，或手动删除该目录后重试',
+      )
+    }
     mkdirSync(path.join(dshHome, '.agent-presets'), { recursive: true })
     rmSync(dstDir, { recursive: true, force: true })
     mkdirSync(dstDir, { recursive: true })
     for (const name of ['preset.yml', 'restrict.mjs']) {
       const src = path.join(SRC_DIR, name)
       const dst = path.join(dstDir, name)
-      const mainAgentName = normalizeMainAgentName(assignments?.main_agent_name ?? null)
-      if (name === 'preset.yml' && mainAgentName !== null) {
-        // main_agent_name 非空：preset 显示名改为配置名。读 SRC 文本、把首个
-        // （非注释的）顶层 `name:` 行值替换为安全 yaml 标量（含 ':' / '#' 等时
-        // 单引号包裹转义），其余字节原样；chmod 与下方一致。
+      if (name === 'preset.yml' && displayName !== null) {
+        // 显示名非空（配置了 main_agent_display_name 或工作区预设派生名）：读
+        // SRC 文本、把首个（非注释的）顶层 `name:` 行值替换为安全 yaml 标量
+        //（含 ':' / '#' 等时单引号包裹转义），其余字节原样；chmod 与下方一致。
         const presetText = readFileSync(src, 'utf8')
-        const next = presetText.replace(/^name:.*$/m, `name: ${yamlScalar(mainAgentName)}`)
+        const next = presetText.replace(/^name:.*$/m, `name: ${yamlScalar(displayName)}`)
         if (next === presetText) {
-          warn('preset.yml: 未找到可替换的顶层 name: 行（main_agent_name 未生效），已按原样写入')
+          warn(`preset.yml: 未找到可替换的顶层 name: 行（${displayNameSource ?? '工作区派生显示名'} 未生效），已按原样写入`)
         }
         writeFileSync(dst, next)
       } else {
@@ -319,10 +411,50 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
     writeFileSync(path.join(dstDir, 'agent.cordis.yml'), generatedText)
     chmodSync(path.join(dstDir, 'agent.cordis.yml'), statSync(path.join(SRC_DIR, 'agent.cordis.yml')).mode & 0o777)
     if (saveConfigOnWrite) {
-      saveConfig(configFile, { profile: effectiveProfile, ...assignments })
+      // 合并写盘（prev 已在函数开头读过，读失败早已中止，此处不做二次静默降
+      // 级）：全局应用只写顶层目标字段、workspaces 段原样保留；工作区应用只把
+      // 该条目并进 workspaces 段、顶层字段（含 profile）维持磁盘现状——两个对
+      // 象互不踩。顶层字段经 normalizeTargetFields 保留键存在性标记
+      // （has_main_agent_extra），老配置没有的键保存后仍缺省。
+      const next = wsPath === null
+        ? {
+            profile: effectiveProfile,
+            ...normalizeTargetFields(assignments),
+            workspaces: prev?.workspaces ?? {},
+          }
+        : {
+            profile: prev?.profile ?? effectiveProfile,
+            ...normalizeTargetFields(prev),
+            workspaces: { ...(prev?.workspaces ?? {}), [wsPath]: normalizeTargetFields(assignments) },
+          }
+      saveConfig(configFile, next)
     }
     wrote = true
   }
 
-  return { text: generatedText, roleResults, staleNote, wrote }
+  // ── 孤儿工作区 preset 回收（成功落盘后对账）──
+  // installedPresets 里 orchestrator-<slug> 形态、且不被配置 workspaces 任一条目
+  // （含本次并入的 wsPath）引用的目录按孤儿回收（rmSync + warn 行）。护栏：基础
+  // preset（orchestrator）与本次刚重建的 dstDir 永不清；prev 不可信（null，配置
+  // 缺失 / 未读到）时整体跳过 —— 没有可信引用清单可对账，宁可残留也不误删；
+  // 删除失败只 warn 保留，绝不让回收拖垮本次安装结果。
+  if (wrote && prev !== null && Array.isArray(state.installedPresets)) {
+    const wsEntries = Object.keys(prev.workspaces ?? {})
+    if (wsPath !== null && !wsEntries.includes(wsPath)) wsEntries.push(wsPath)
+    const referenced = new Set([...assignSlugs(wsEntries).values()].map(presetIdOf))
+    for (const name of state.installedPresets) {
+      if (name === 'orchestrator' || referenced.has(name)) continue
+      const dir = path.join(dshHome, '.agent-presets', name)
+      if (dir === dstDir) continue // 本次刚写出的目标目录绝不清
+      if (!existsSync(dir)) continue // 扫描后已被外部删除：无事可做
+      try {
+        rmSync(dir, { recursive: true, force: true })
+        warn(`孤儿工作区 preset 已回收: ${dir}（配置 workspaces 已无引用）`)
+      } catch (err) {
+        warn(`孤儿工作区 preset 回收失败（已保留）: ${dir}: ${err?.message ?? err}`)
+      }
+    }
+  }
+
+  return { text: generatedText, roleResults, staleNote, wrote, presetId }
 }

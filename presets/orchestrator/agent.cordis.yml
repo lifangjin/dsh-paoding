@@ -7,11 +7,11 @@
 #   · orchestrator-restrict → restrict.mjs 在 system-prompt/assemble 瀑布上把
 #     主 agent 的工具面裁剪为「编排 + 内部搜索」白名单；子 agent（origin:
 #     'subagent'）放行，由各自 toolFilter 决定工具面
-#   · delegation-*       → 3 个角色委派工具（dsh-tool-subagent），子 agent 创建时
+#   · delegation-*       → 4 个角色委派工具（dsh-tool-subagent，search_internal_deep 为静态委派），子 agent 创建时
 #     以 per-child tools.restrict() 只保留各自 allow 的工具
 #
-# 工具税（每请求估算）：主 agent 全量 ~16.2k → 白名单后 ~5.5k（含 3 个委派工具）；
-# search_external ~3.0k / design ~3.2k / implement ~3.7k，仅实际委派时发生。
+# 工具税（每请求估算）：主 agent 全量 ~16.2k → 白名单后 ~5.5k（含 4 个委派工具）；
+# search_external ~3.0k / design ~3.3k / implement ~3.8k，仅实际委派时发生。
 
 # ── identity ────────────────────────────────────────────────────────────────
 
@@ -19,11 +19,11 @@
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    text: |-
+    prefix: |-
       You are the orchestrator agent powered by the {{model}} model. Your working directory is {{cwd}}.
 
       Decompose the task, delegate to role agents, integrate results.
-      - Internal file questions (finding code, references, reading files): solve yourself with glob/grep/read/codegraph — never delegate them.
+      - Internal file questions (finding code, references, reading files): solve yourself with glob/grep/read (and codegraph if enabled) — never delegate them.
       - External research: delegate to search_external.
       - UI/design work: delegate to design.
       - Code implementation: delegate to implement.
@@ -43,6 +43,11 @@
         · aborted → only re-delegate when the cancellation was accidental.
         · completed but poor output → re-delegate with concrete missing points, or send_message
           to ask a continuable child to finish the gaps.
+      - Continuable roles (background_mode: continuable): when a delegated run fails or
+        the output falls short, first send_message in the SAME child session to continue
+        and fix in place — resuming keeps the child's accumulated context, while
+        re-delegating starts a cold task and repeats finished work. Only re-delegate
+        when the child session is gone or the task needs a different role.
       - If the same task fails twice, stop retrying: report to the user what failed, why,
         and what you already tried. Never loop a failing delegation.
       - When re-delegating (fresh task or continuation), always include your integration
@@ -167,6 +172,7 @@
     - id: tool-subagent-list-agents
       name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
 
+    # subagent / subagent_fork / workflow-worker-thread / workflow / ralph 仅当用户经 main_agent_extra 显式开启时对主 agent 可达；保留以对齐 standard 全量组合。
     - id: tool-subagent
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
@@ -207,6 +213,7 @@
       config:
         provider: spawn
         toolName: search_external
+        backgroundMode: one-shot
         persona: |-
           You are the external-research agent. Your job is web research only — use web_search and the tavily tools; you never modify files. Search the web, extract key facts, and return a concise structured research summary (findings, sources, open questions).
           On tool failure, do not retry a denied operation: report the failure compactly — what you completed, the exact error, which tool/permission you lack, and your suggested next step — so the orchestrator can re-delegate or adjust.
@@ -223,12 +230,13 @@
             - read
             - ask_user_question
 
-    # design：设计（读参考 + 设计技能 + 出 spec，不写最终代码）~3.2k
+    # design：设计（读参考 + 设计技能 + 出 spec，不写最终代码）~3.3k
     - id: delegation-design
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
         provider: spawn
         toolName: design
+        backgroundMode: one-shot
         persona: |-
           You are the design agent. You produce UI/UX designs, wireframes, and frontend specs — and may load design skills (frontend-design, html-ppt) via the skill tool. Read reference material first, then deliver a concrete design spec. You do not implement final code.
           On tool failure, do not retry a denied operation: report the failure compactly — what you completed, the exact error, which tool/permission you lack, and your suggested next step — so the orchestrator can re-delegate or adjust.
@@ -240,26 +248,27 @@
             - grep
             - bash
             - skill
-            - write
-            - edit
+            - web_search
             - ask_user_question
             - todo_write
             - job_output
             - job_list
             - job_kill
 
-    # implement：实现（读上下文 → 外科手术式修改 → 验证）~3.7k
+    # implement：实现（读上下文 → 外科手术式修改 → 验证）~3.8k
     - id: delegation-implement
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
         provider: spawn
         toolName: implement
+        backgroundMode: one-shot
         persona: |-
           You are the implementation agent. You write and edit code: read surrounding context first, make surgical changes, then verify (build/test/grep). Report what you changed and how you verified. You do not redesign architecture.
           On tool failure, do not retry a denied operation: report the failure compactly — what you completed, the exact error, which tool/permission you lack, and your suggested next step — so the orchestrator can re-delegate or adjust.
         toolFilter:
           allow:
             - read
+            - read_image
             - write
             - edit
             - glob
@@ -287,6 +296,7 @@
       config:
         provider: spawn
         toolName: search_internal_deep
+        backgroundMode: one-shot
         persona: |-
           You are the internal deep-search agent. Your job is repository exploration only — you never modify files and you never use the network. Handle exactly the tasks the orchestrator can't afford in its own context: whole-repo grep dumps, full-file reads beyond a page, cross-directory symbol/definition tracking. Search thoroughly, then return a CONCISE structured summary: what you searched, key files with line numbers, definitions/symbols found, and the takeaway the orchestrator needs to decide next. Never echo large dumps back — condense aggressively; the orchestrator re-delegates or reads specific ranges itself if it needs details.
           On tool failure, do not retry a denied operation: report the failure compactly — what you completed, the exact error, which tool/permission you lack, and your suggested next step — so the orchestrator can re-delegate or adjust.

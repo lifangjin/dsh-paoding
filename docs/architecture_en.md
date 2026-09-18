@@ -36,7 +36,7 @@ The essential differences from monolithic mode:
 | Dimension | Monolithic mode (default) | Orchestrator mode (this preset) |
 |---|---|---|
 | Responsibility | One agent does everything | Main agent decomposes and integrates; role sub-agents each do one job |
-| Cost | ~16.2k tokens tool tax paid on every request | Main agent ~5.5k; role surfaces ~3.0k–3.7k, paid only when delegated |
+| Cost | ~16.2k tokens tool tax paid on every request | Main agent ~5.5k; role surfaces ~3.0k–3.8k, paid only when delegated |
 | Context | Every search dump, design draft and diff accumulates in the main context | Worker contexts are small and specialized and discarded after use; the main agent receives only summaries |
 
 The static source of the composition is `presets/orchestrator/agent.cordis.yml`, layered on top of DSH's
@@ -68,16 +68,17 @@ allow lists are in the "Roles & tool surfaces" section below):
       (on demand)            (on demand)      (on demand)        (on demand)            
             │                   │                   │                   │               
             ▼                   ▼                   ▼                   ▼               
-    web_search           read/read_image      read/write/edit      glob/grep/read       
-    mcp__tavily__*       glob/grep/bash       glob/grep/bash       read_image/bash      
-    (5 tools)            skill/write/edit     skill/web_search     ask_user_question    
-    glob/grep/read       ask_user_question    ask_user_question    todo_write           
-    ask_user_question    todo_write           todo_write           job_output           
-    (no write/edit)      job_output           job_output           job_list             
-                         job_list             job_list/job_kill    job_kill             
-                         job_kill             get_goal             (read-only; no       
-                                              create_goal          file writes,         
-                                              update_goal          no network)          
+    web_search           read/read_image      read/read_image      glob/grep/read
+    mcp__tavily__*       glob/grep/bash       write/edit           read_image/bash
+    (5 tools)            skill/web_search     glob/grep/bash       ask_user_question
+    glob/grep/read       ask_user_question    skill/web_search     todo_write
+    ask_user_question    todo_write           ask_user_question    job_output
+    (no write/edit)      job_output           todo_write           job_list
+                         job_list             job_output           job_kill
+                         job_kill             job_list/job_kill    (read-only; no
+                                              get_goal             file writes,
+                                              create_goal          no network)
+                                              update_goal 
 ```
 
 In the diagram:
@@ -89,8 +90,9 @@ In the diagram:
   job_kill);
 - Four arrows fan out to the **role sub-agents**, each created on demand (cold path). search_external
   carries web_search, the five `mcp__tavily__*` tools, plus glob/grep/read and ask_user_question, with no
-  write/edit; design carries read/read_image/glob/grep/bash/skill/write/edit plus coordination tools;
-  implement carries read/write/edit/glob/grep/bash/skill/web_search plus coordination and goal tools;
+  write/edit; design carries read/read_image/glob/grep/bash/skill/web_search plus coordination tools;
+  implement carries read/read_image/write/edit/glob/grep/bash/skill/web_search plus coordination and
+  goal tools;
   search_internal_deep carries the full read-only internal-search surface (glob/grep/read/read_image/bash
   plus ask_user_question and job tools) — no file modification, no network.
 
@@ -105,19 +107,21 @@ measured calibration; figures are order-of-magnitude estimates):
 | Monolithic (status quo, untrimmed) | All 60 tools | **~16.2k** | Paid in full on every request |
 | Orchestrator main agent | 21-entry whitelist (∩ registry) | **~5.5k** | ↓66%; zero delegation latency for internal search |
 | search_external sub-agent | 10 allowed entries | ~3.0k | Paid only when web research actually runs |
-| design sub-agent | 13 allowed entries | ~3.2k | Paid only when a design task is delegated |
-| implement sub-agent | 16 allowed entries | ~3.7k | Paid only when an implementation task is delegated |
+| design sub-agent | 12 allowed entries | ~3.3k | Paid only when a design task is delegated |
+| implement sub-agent | 17 allowed entries | ~3.8k | Paid only when an implementation task is delegated |
 | search_internal_deep sub-agent | 10 allowed entries | not separately estimated | Paid only when a deep repo search is delegated |
 
-Note: role tool counts above follow the actual `allow` entries in `agent.cordis.yml` (design 13 / implement
-16); the old README figures of 14 / 17 and a 22-entry whitelist are outdated.
+Note: role tool counts above follow the actual `allow` entries in `agent.cordis.yml` (design 12 / implement
+17); the old README figures of 14 / 17 and a 22-entry whitelist are outdated.
 
 **The real win is context isolation, not the few thousand tokens saved per se**:
 
 - A monolithic agent's context accumulates every search dump, every design draft and every diff — even when a
   tool is unused in the current request, its past outputs still occupy the window;
 - In the orchestrator architecture every worker keeps a small, specialized context (its own role tools and
-  outputs only); roles are one-shot by default and discarded after use. The main agent receives only
+  outputs only); roles are one-shot by default and discarded after use (the session mode is per-role
+  configurable — a role that genuinely needs multi-round polishing can switch to continuable, see
+  [Orchestration](orchestration_en.md)). The main agent receives only
   structured summaries and integrates them — it never pours a sub-agent's full context into its own window;
 - Consequently the main agent's window size is decoupled from "how much work this round delegated"; in long
   sessions the token level is dominated by the orchestrator's own summaries and decisions (combined with
@@ -168,7 +172,7 @@ persona and the delegation-failure SOP live in [docs/orchestration_en.md](orches
 
 The four built-in roles are just the factory division of labor: through the same mechanism, any combination
 of tools and skills becomes a new delegation tool — write a toolName under the config `roles` key (or create
-it in the wizard / config UI), the installer generates a `delegation-<toolName>` block, injects the
+it in the 庖丁配置 panel), the generator produces a `delegation-<toolName>` block, injects the
 toolName into the main-agent allow list, and appends the role's persona first line (its duty sentence)
 to the main-agent persona as a delegation row (a role with no tools is rejected at apply time); see
 section 6 of [docs/configuration_en.md](configuration_en.md).
@@ -179,8 +183,8 @@ For example, a `ppt` agent carrying the `html-ppt` skill gives slide-making its 
 | Delegation tool | Instance ID | Persona in one sentence | Load cost |
 |---|---|---|---|
 | `search_external` | `delegation-search-external` | Web research only (web_search + tavily), never modifies files; returns a structured research summary (findings, sources, open questions) | ~3.0k, only when delegated |
-| `design` | `delegation-design` | Produces UI/UX designs, wireframes and frontend specs; may load design skills (frontend-design, html-ppt) via the skill tool; reads reference material first, delivers a spec, does not implement final code | ~3.2k, only when delegated |
-| `implement` | `delegation-implement` | Writes and edits code: read surrounding context → surgical change → verify (build/test/grep); does not redesign architecture | ~3.7k, only when delegated |
+| `design` | `delegation-design` | Produces UI/UX designs, wireframes and frontend specs; may load design skills (frontend-design, html-ppt) via the skill tool; reads reference material first, delivers a spec, does not implement final code | ~3.3k, only when delegated |
+| `implement` | `delegation-implement` | Writes and edits code: read surrounding context → surgical change → verify (build/test/grep); does not redesign architecture | ~3.8k, only when delegated |
 | `search_internal_deep` | `delegation-search-internal-deep` | Repository exploration only: never modifies files, never uses the network; handles tasks too heavy for the main agent's context (whole-repo grep dumps, full-file reads beyond a page, cross-directory symbol/definition tracking); returns condensed summaries only | not separately estimated, only when delegated |
 
 The table above is the factory default; the configuration layer can trim and customize it (see
@@ -188,13 +192,18 @@ The table above is the factory default; the configuration layer can trim and cus
 deleted wholesale via `roles_remove` (2.3; `search_internal_deep` cannot); a built-in role can carry a display
 name `roles.<toolName>.name`, which rewrites only the subject of its persona identity sentence (2.4); it can
 also be pinned to a dedicated model `roles.<toolName>.model` / `.provider`, injected by the generator as
-`agentOptions` in the delegation block, defaulting to following the main agent (2.5); and the main agent itself
-can be renamed via `main_agent_name` — one key, two places (section 5).
+`agentOptions` in the delegation block, defaulting to following the main agent (2.5); and it can carry a session
+mode `roles.<toolName>.background_mode` — configured as `continuable`, the delegation block gets a
+`backgroundMode` row and the child conversation is kept across turns (2.6); the main agent's persona
+identity line cannot be renamed (the orchestrator's identity is not a configurable item); `main_agent_display_name`
+(see configuration_en.md section 5) changes only the preset display name and leaves the persona
+identity line untouched.
 
 ### Per-role toolFilter.allow detail
 
 The allow lists below are transcribed verbatim from `agent.cordis.yml` (at install time the generator
-rewrites each list as "config/static intent ∩ runtime-detected host tools", see
+rewrites each list against the whitelist "preset's own tool face ∪ runtime detection inventory"; names in
+neither are dropped with a stated reason, see
 [docs/configuration_en.md](configuration_en.md)).
 
 **`search_external` (external research, 10 entries)**
@@ -205,21 +214,21 @@ rewrites each list as "config/static intent ∩ runtime-detected host tools", se
 | toolFilter.allow | `web_search`, `mcp__tavily__tavily_search`, `mcp__tavily__tavily_crawl`, `mcp__tavily__tavily_extract`, `mcp__tavily__tavily_map`, `mcp__tavily__tavily_research`, `glob`, `grep`, `read`, `ask_user_question` |
 | Load cost | ~3.0k tokens, incurred only when web research actually runs |
 
-**`design` (design, 13 entries)**
+**`design` (design, 12 entries)**
 
 | Field | Value |
 |---|---|
 | Persona job | Produces UI/UX designs, wireframes and frontend specs; loads design skills (frontend-design, html-ppt) via the skill tool; reads reference material first, then delivers a spec; does not implement final code |
-| toolFilter.allow | `read`, `read_image`, `glob`, `grep`, `bash`, `skill`, `write`, `edit`, `ask_user_question`, `todo_write`, `job_output`, `job_list`, `job_kill` |
-| Load cost | ~3.2k tokens, incurred only when a design task is delegated |
+| toolFilter.allow | `read`, `read_image`, `glob`, `grep`, `bash`, `skill`, `web_search`, `ask_user_question`, `todo_write`, `job_output`, `job_list`, `job_kill` |
+| Load cost | ~3.3k tokens, incurred only when a design task is delegated |
 
-**`implement` (implementation, 16 entries)**
+**`implement` (implementation, 17 entries)**
 
 | Field | Value |
 |---|---|
 | Persona job | Writes and edits code: read surrounding context first → surgical changes → verify (build/test/grep), reporting what changed and how it was verified; does not redesign architecture |
-| toolFilter.allow | `read`, `write`, `edit`, `glob`, `grep`, `bash`, `skill`, `web_search`, `ask_user_question`, `todo_write`, `job_output`, `job_list`, `job_kill`, `get_goal`, `create_goal`, `update_goal` |
-| Load cost | ~3.7k tokens, incurred only when an implementation task is delegated |
+| toolFilter.allow | `read`, `read_image`, `write`, `edit`, `glob`, `grep`, `bash`, `skill`, `web_search`, `ask_user_question`, `todo_write`, `job_output`, `job_list`, `job_kill`, `get_goal`, `create_goal`, `update_goal` |
+| Load cost | ~3.8k tokens, incurred only when an implementation task is delegated |
 
 **`search_internal_deep` (whole-repo deep search, 10 entries)**
 
@@ -298,11 +307,17 @@ stop reason: `error` → re-delegate once; `max-tokens` → split the task; `ref
 failures of the same task, stop and report to the user; every re-delegation must carry the previous
 integration summary) — see [docs/orchestration_en.md](orchestration_en.md).
 
-**⑦ Hot-swap means presets are static directories.** Install, uninstall and modification are plain file
-operations: the generator copies/rewrites the static sources into `$DSH_HOME/.agent-presets/orchestrator`;
-editing the YAML / mjs, re-running the generator, and restarting the host or opening a new session takes
-effect. Uninstalling means deleting the directory. No DSH source changes; the preset leaves nothing behind
-when removed.
+**⑦ Hot-swap means a static preset directory plus plugin-channel mounting.** The plugin itself is installed
+into a profile via `dsh plugin add` (pnpm plus the in-package bundle patch), so the sidebar panel mounts and
+unmounts with it; the orchestrator preset is a static directory — the generator copies/rewrites the static
+sources into `$DSH_HOME/.agent-presets/orchestrator`; editing the YAML / mjs, hitting Save & Apply in the
+panel to regenerate, and restarting the host or opening a new session takes effect. Uninstall = `dsh plugin
+remove` plus deleting the directory (see [Installation](installation_en.md)). No DSH source changes; the
+preset leaves nothing behind when removed.
+
+## Web config panel client bundle: multi-file sources, single-file artifact
+
+The panel's front-end code lives in `plugins/paoding-config-ui/src/client/` as a dozen-odd fragment files whose two-digit filename prefixes fix the concatenation order; `scripts/build-client.mjs` concatenates them verbatim into `plugins/paoding-config-ui/lib/client.js` — no transpiling, no minifying, no inserted separators, so the artifact matches the fragments byte for byte. The DSH platform serves exactly one entry per package (`exports["./client"]`), which is why the published artifact stays that single file. Edit the fragments, then rerun the build script to regenerate the artifact; hand-editing `lib/client.js` is caught by the `--check` mode wired into the `prepublishOnly` hook.
 
 ## Performance: token governance
 
@@ -334,7 +349,7 @@ summarizing too frequently.
 | 0.45 (landed in this preset) | 117,965 tokens | ~80K | ~16% tail ≈42K + summary checkpoint |
 | 0.35 (optional, more aggressive) | ~92K tokens | ~67K | Saves more tokens, summarizes more often |
 
-After changing the threshold, re-run `./install.sh --auto` to apply. Companion components in the same
+After changing the threshold, hit Save & Apply in 庖丁配置 to regenerate. Companion components in the same
 composition:
 
 - `tool-result-pruner`: oversized tool results are trimmed with `thresholdChars: 8192 / headChars: 4096 /
@@ -356,8 +371,9 @@ composition:
   listed in full (`mcp__tavily__tavily_search/crawl/extract/map/research`).
 - **Tools absent from the main-agent whitelist raise no error**: the waterfall filter only matches by name
   against the resolved `assembly.tools`, so a tool that is not mounted (e.g. a commented-out MCP) simply
-  never appears — install and runtime both pass silently. Config intent and actual mounts are reconciled by
-  install-time detection (`install.sh --auto` / `--dry-run`); re-run it after changing host patches.
+  never appears — generation and runtime both pass silently. Config intent and actual mounts are reconciled
+  by generation-time detection; after changing host patches, hit Save & Apply in 庖丁配置 to sync (Preview
+  shows the list first).
 - **Whole-repo exploration tasks should be delegated to `search_internal_deep` rather than done by the
   main agent**: whole-repo grep dumps and full-file reads that repeatedly flood the main context are
   exactly what that role isolates (read-only, no network, condensed summaries only).

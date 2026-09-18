@@ -1,17 +1,20 @@
 /**
  * 主机层（host）工具检测与 MCP 工具名解析：KNOWN_MCP_TOOLS / KNOWN_HOST_PLUGINS
- * 静态表、JSON-RPC initialize + tools/list 握手（stdio / streamable-http /
+ * 静态表（前者仅作握手失败时的降级回落，返回对象带 warning）、JSON-RPC
+ * initialize + tools/list 握手（stdio / streamable-http /
  * postMcp / parseHttpMessage）、host 相关判定与文案（isHostDependent /
  * pluginLabel / removedReason）与错误收尾（sanitizeError / truncate）。
  * 仅依赖 node:child_process（spawn）；fetch / AbortSignal 为 Node 全局。
- * 被 state / compose / wizard / cli 引用。
+ * 被 state / compose / cli / alloc 引用。
  */
 import { spawn } from 'node:child_process'
 
 /**
  * Exact tool names of well-known MCP servers (restrict() does not support
- * globs, so the names must be spelled out).  Servers listed here are resolved
- * without a live handshake; unknown servers go through one.
+ * globs, so the names must be spelled out).  Servers listed here still go
+ * through a live handshake first; this table is only the degraded fallback
+ * when the handshake fails (unreachable / unsupported transport), so a
+ * temporary outage does not silently drop their tools.
  */
 export const KNOWN_MCP_TOOLS = {
   tavily: [
@@ -60,7 +63,12 @@ export function isMcpEntry(entry) {
   const serverName = typeof cfg.serverName === 'string' ? cfg.serverName : ''
   const transport = typeof cfg.transport === 'string' ? cfg.transport : ''
   const hasCommand = typeof cfg.command === 'string' && cfg.command.length > 0
-  if (name.endsWith('dsh-mcp-client')) return true
+  // 精确匹配（包名段相等）：endsWith 会把 'not-dsh-mcp-client-foo' 这类恰好
+  // 同后缀的名字误判成 MCP 条目。unscoped 取首段；scoped 包（@scope/pkg）的
+  // 包名是 @ 后那段；带子路径时同样取包名所在段。
+  const segments = name.split('/')
+  const pkgName = segments[0].startsWith('@') ? (segments[1] ?? '') : (segments[0] ?? '')
+  if (name === 'dsh-mcp-client' || pkgName === 'dsh-mcp-client') return true
   return serverName !== '' && (['stdio', 'streamable-http', 'sse'].includes(transport) || hasCommand)
 }
 
@@ -96,12 +104,13 @@ export function truncate(text, max) {
 }
 
 /**
- * Resolve the exact tool names of one MCP server.  Static table first, then a
- * live JSON-RPC handshake.  Never throws: failures return { tools: [], error }.
+ * Resolve the exact tool names of one MCP server.  A live JSON-RPC handshake
+ * first (工具面随服务器实际版本变化，静态表可能过时)；握手失败才回落静态表
+ * （仅 KNOWN_MCP_TOOLS 内的服务器，降级不丢工具），返回对象带 `warning` 字段
+ * 供上游报告可见。  Never throws: unreachable unknown servers return
+ * { tools: [], error }.
  */
 export async function resolveMCP(mcp) {
-  const known = KNOWN_MCP_TOOLS[mcp.serverName]
-  if (known) return { tools: [...known], source: 'static' }
   try {
     if (mcp.transport === 'stdio') {
       if (!mcp.command) throw new Error('stdio transport requires config.command')
@@ -116,7 +125,12 @@ export async function resolveMCP(mcp) {
     }
     throw new Error(`unsupported transport: ${mcp.transport ?? '(none)'}`)
   } catch (err) {
-    return { tools: [], source: 'failed', error: sanitizeError(err?.message ?? err) }
+    const message = sanitizeError(err?.message ?? err)
+    // 已知服务器握手失败：回落静态表，降级不丢工具；warning 让上游报告
+    // 能看见「这是过时的静态表，不是实时握手结果」。
+    const known = KNOWN_MCP_TOOLS[mcp.serverName]
+    if (known) return { tools: [...known], source: 'static', warning: `static table used; server unreachable (${message})` }
+    return { tools: [], source: 'failed', error: message }
   }
 }
 
@@ -138,22 +152,14 @@ export function handshakeStdio(mcp) {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        /* already gone */
-      }
+      killChild()
       reject(new Error(sanitizeError(message)))
     }
     function finish(tools) {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        /* already gone */
-      }
+      killChild()
       resolve(tools)
     }
     function send(payload) {
@@ -162,6 +168,23 @@ export function handshakeStdio(mcp) {
       } catch {
         /* the exit handler will surface the failure */
       }
+    }
+    // kill 后挂一次性 close 清理：销毁残留 stdio 流（幂等），调用方不等 close
+    // 返回也不残留句柄、不把事件循环挂住。
+    function killChild() {
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        /* already gone */
+      }
+      child.once('close', () => {
+        child.stdin.destroy()
+        child.stdout.destroy()
+        child.stderr.destroy()
+      })
+      child.stdin.destroy()
+      child.stdout.destroy()
+      child.stderr.destroy()
     }
 
     child.stdout.on('data', (chunk) => {
@@ -178,6 +201,12 @@ export function handshakeStdio(mcp) {
           continue
         }
         if (msg.id === 1) {
+          // initialize 失败必须立刻走 fail 路径：继续发 tools/list 只会把错误
+          // 归因到 tools/list（或超时），掩盖真实失败原因。
+          if (msg.error) {
+            fail(`initialize error: ${JSON.stringify(msg.error).slice(0, 300)}`)
+            return
+          }
           send(LIST_REQUEST)
         } else if (msg.id === 2) {
           if (msg.error) {
@@ -260,9 +289,11 @@ export function parseHttpMessage(text) {
 }
 
 /**
- * Whether `name` can only be provided by the host patch layer.  Only these
- * names are filtered against the detection inventory; everything else is
- * guaranteed by the standard composition and stays untouched.
+ * Whether `name` can only be provided by the host patch layer.  These names
+ * survive generation only when actually detected; every other name must at
+ * least belong to the preset universe (restrict base ∪ the preset's own role
+ * allow lists) or be detected — both halves are enforced by the compose layer
+ * (usableWith in compose.mjs).
  */
 export function isHostDependent(name) {
   if (name.startsWith('mcp__')) return true
@@ -284,5 +315,5 @@ export function removedReason(name, mcpReports) {
   }
   const plugin = KNOWN_HOST_PLUGINS.find((p) => p.tools.includes(name))
   if (plugin) return `${pluginLabel(plugin)} 已停用`
-  return 'host 工具未启用'
+  return '不在 preset 自带工具面与检测库存中（对应插件 / MCP 未启用，或名字有误），已移除'
 }

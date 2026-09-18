@@ -62,8 +62,9 @@ function collectToolNames(value, out, seen) {
     } else if (item && typeof item === 'object') {
       if (typeof item.name === 'string') {
         pushName(item.name, out, seen)
-      } else {
-        // 兜底：{ [key]: def } 形态的对象，按 key/def.name 处理
+      } else if (Object.keys(item).length === 1) {
+        // 兜底：{ [key]: def } 形态的对象，按 key/def.name 处理——仅接受单键
+        // 对象（多键对象没有唯一「工具名」语义，跳过）
         for (const [k, v] of Object.entries(item)) pushPair(k, v, out, seen)
       }
     }
@@ -93,25 +94,15 @@ function getService(ctx, key) {
   return undefined
 }
 
-/** 收集一个对象的可调用方法名（沿原型链，去重，限量）。 */
-function collectMethodNames(svc) {
-  const methods = []
-  for (let proto = Object.getPrototypeOf(svc); proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
-    for (const m of Object.getOwnPropertyNames(proto)) {
-      if (m !== 'constructor' && typeof svc[m] === 'function' && !methods.includes(m)) methods.push(m)
-    }
-  }
-  return methods
-}
-
 /**
  * 读取运行时插件清单。返回 { entries, ok }：ok 表示成功拿到 list() 结果
  * （空清单也算成功，区别于服务不可用）。
  */
 function collectPluginEntries(ctx, errors) {
   const pi = getService(ctx, 'pluginInventory')
-  if (pi == null || typeof pi.list !== 'function') return { entries: [], ok: false }
   try {
+    // 服务属性访问也纳入 try（cordis 代理 getter 理论上可能抛）：兑现「永不抛」契约
+    if (pi == null || typeof pi.list !== 'function') return { entries: [], ok: false }
     const result = pi.list()
     // list() 官方返回 { entries: [...] }；兼容直接返回数组的形态
     const raw = Array.isArray(result) ? result : Array.isArray(result?.entries) ? result.entries : null
@@ -135,7 +126,7 @@ function collectPluginEntries(ctx, errors) {
     }
     return { entries, ok: true }
   } catch (err) {
-    errors.push(`pluginInventory.list() threw: ${String(err?.message ?? err)}`)
+    errors.push(`pluginInventory.list() failed: ${String(err?.message ?? err)}`)
     return { entries: [], ok: false }
   }
 }
@@ -145,20 +136,26 @@ function collectPluginEntries(ctx, errors) {
  *   1) t.entries() 若可调用（Map / 迭代器 / 数组 归一化）；
  *   2) t.schemas() 若可调用（返回 [{ name, description, ... }]，全局视图 =
  *      全部已注册工具，含 mcp__<server>__<tool>）；
- *   3) 在方法名里找含 entries/list/schemas/keys 的可调用方法逐个 try 调用
- *      （不硬猜 presentAs/visible 这类语义方法）；
- *   4) 全部失败返回空数组。返回 { names, ok }。
+ *   3) 兜底：只试白名单里的只读枚举方法名（entries/schemas/list/keys/
+ *      listKeys），不做正则泛配（避免误调写方法）；
+ *   4) 全部失败返回空数组（原因记入 errors）。返回 { names, ok }。
  */
 function readRegisteredToolNames(ctx, errors) {
   const out = []
   const seen = new Set()
   const t = getService(ctx, 'tools')
-  if (t == null) return { names: [], ok: false }
+  if (t == null) {
+    // 单侧失败也留痕：UI 可区分「无工具」与「tools 服务不可用」
+    errors.push('tools service unavailable')
+    return { names: [], ok: false }
+  }
   const tried = new Set()
   const attempt = (method, source) => {
-    if (typeof t[method] !== 'function' || tried.has(method)) return false
+    if (tried.has(method)) return false
     tried.add(method)
     try {
+      // 方法属性读取也纳入 try（cordis 代理 getter 可能抛）
+      if (typeof t[method] !== 'function') return false
       const result = t[method]()
       // 拿到可迭代结果即视为“服务可用”（即使为空清单）；无结果 / 抛错都跳过
       if (result != null && typeof result[Symbol.iterator] === 'function') {
@@ -176,13 +173,16 @@ function readRegisteredToolNames(ctx, errors) {
   let acquired = attempt('entries', 'tools.entries()')
   if (!acquired) acquired = attempt('schemas', 'tools.schemas()')
 
-  // 3) 兜底：在方法列表里找名字含 entries/list/schemas/keys 的函数逐个尝试
+  // 3) 兜底：只试白名单里的只读枚举方法名（不做正则泛配）；已在 1)/2) 试过
+  //    的 entries/schemas 由 tried 去重，不会重复调用
   if (!acquired) {
-    const hint = /entries|list|schemas|keys/
-    for (const m of collectMethodNames(t)) {
-      if (!hint.test(m)) continue
+    for (const m of ['entries', 'schemas', 'list', 'keys', 'listKeys']) {
       if (attempt(m, `tools.${m}()`)) { acquired = true; break }
     }
+  }
+  // 有服务但枚举口全不可读：同样留痕（区别于「服务可用但工具清单为空」）
+  if (!acquired) {
+    errors.push('tools service present but no readable enumeration (entries/schemas/list/keys/listKeys)')
   }
   return { names: out, ok: acquired }
 }
@@ -197,9 +197,10 @@ export function collectRuntimeFacts(ctx) {
   const tools = readRegisteredToolNames(ctx, errors)
 
   // ok 语义：pluginInventory 与 tools 至少一个服务真正可用即为成功；
-  // 两个都拿不到才整体失败（UI 据此提示“已回退文件扫描”）。
+  // 两个都拿不到才整体失败（UI 据此提示“已回退文件扫描”）。单侧失败的原因
+  // 也已各自记入 errors（上方），UI 可区分「无工具」与「tools 服务不可用」。
   const ok = plugin.ok || tools.ok
-  if (!ok) errors.unshift('tools service unavailable (pluginInventory/tools both missing)')
+  if (!ok) errors.unshift('pluginInventory/tools both unavailable: fell back to file scan')
 
   let error = errors.join('; ')
   if (error.length > MAX_ERROR_LEN) error = error.slice(0, MAX_ERROR_LEN) + '…'

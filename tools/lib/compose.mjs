@@ -6,19 +6,28 @@
  * （renderCustomRoleBlocks / firstLine / insertCustomRoles）、roles_remove 委派行
  * span 删除（delegationRowSpan / composeMainPersonaEdit）、角色专用模型注入
  * （injectRoleAgentOptions，roles.<toolName>.model / .provider → 内置角色委派块
- * 的 agentOptions 子块）、restrict config.allow 注入（computeRestrictAllow /
- * injectRestrictAllow / filterHostTools）与整文 compose（composeGenerated）。
- * 自定义角色另有两道防护/自动化：tools 为空时拒绝安装零工具角色
- * （renderCustomRoleBlocks 直接 throw，防 `toolFilter.allow:` 空白名单）；并把
- * 角色 persona 首行职责句自动追加为主 agent persona 委派行
- * （composeMainPersonaEdit 第 4 参 customBullets → `- <职责>: delegate to
- * <toolName>.`），否则主 agent 永远不会委派给自定义角色。
+ * 的 agentOptions 子块）、角色可续模式改写/兜底注入（injectRoleBackgroundMode，
+ * roles.<toolName>.background_mode = 'continuable' → 内置角色委派块的
+ * backgroundMode 行：源模板已预置该行时原位改写其值，块内无该行时在 toolName
+ * 行行尾兜底注入；'one-shot' 不动源行 —— 源模板四块各预置
+ * `backgroundMode: one-shot`（可见性），全默认产物与源零 diff）、
+ * restrict config.allow 注入（computeRestrictAllow /
+ * injectRestrictAllow / filterUsableTools）与整文 compose（composeGenerated）。
+ * allow 过滤走白名单语义（usableWith / presetUniverse ∪ inventory，见
+ * filterUsableTools 上方说明）：手写进配置、既不在 preset 自带工具面也不在
+ * 检测库存的名字一律从 allow 丢弃，不再「非 host 依赖名直通」。
+ * 自定义角色另有三道防护/自动化：toolName 保留名校验（assertCustomToolName，
+ * 内置角色 / restrictBase / subagent* / mcp__ 前缀 / YAML 字面量一律 throw）；
+ * tools 为空时拒绝安装零工具角色（renderCustomRoleBlocks 直接 throw，防
+ * `toolFilter.allow:` 空白名单）；并把角色 persona 首行职责句自动追加为主
+ * agent persona 委派行（composeMainPersonaEdit 第 4 参 customBullets →
+ * `- <职责>: delegate to <toolName>.`），否则主 agent 永远不会委派给自定义角色。
  * 依赖 util（ROLES / warn / DEFAULT_MAIN_AGENT_PERSONA_EXTRA）、config
- * （normalizeMainAgentName / normalizeModelRef / yamlScalar）与 host
- * （isHostDependent）；被 wizard / state 引用。
+ * （normalizeModelRef / yamlScalar）与 host
+ * （isHostDependent）；被 state 引用。
  */
 import { DEFAULT_MAIN_AGENT_PERSONA_EXTRA, ROLES, warn } from './util.mjs'
-import { normalizeMainAgentName, normalizeModelRef, yamlScalar } from './config.mjs'
+import { normalizeModelRef, yamlScalar } from './config.mjs'
 import { isHostDependent } from './host.mjs'
 
 // ── restrict.mjs main-agent allow base ──────────────────────────────────────
@@ -31,9 +40,60 @@ import { isHostDependent } from './host.mjs'
 export function extractMainAgentAllow(restrictSrc) {
   const match = restrictSrc.match(/const MAIN_AGENT_ALLOW = new Set\(\[([\s\S]*?)\]\)/)
   if (!match) throw new Error('MAIN_AGENT_ALLOW block not found in restrict.mjs')
-  const names = [...match[1].matchAll(/'([^']+)'/g)].map((m) => m[1])
+  // 先按行剥 // 注释再提取引号串：注释里的撇号（如 don't）会被当成工具名的
+  // 引号对，产生幽灵工具名（allow 段常带中英文注释）。
+  const body = match[1]
+    .split('\n')
+    .map((line) => line.replace(/\/\/.*$/, ''))
+    .join('\n')
+  const names = [...body.matchAll(/'([^']+)'/g)].map((m) => m[1])
   if (names.length === 0) throw new Error('MAIN_AGENT_ALLOW block is empty in restrict.mjs')
   return names
+}
+
+// ── shared helpers ──────────────────────────────────────────────────────────
+
+/** 名字可用性判定（allow 过滤多处共用，白名单语义）：名字必须落在 preset 自带
+ * 工具面（presetUniverse = restrict.mjs 主 agent 白名单 ∪ 源 preset 各角色 allow）
+ * 或检测清单 inventory 之中，两者都不在 → 不可用（插件停用后的 mnemon_*、手写
+ * 错名等不再「非 host 依赖名直通」，与文档「配置意图 ∩ 实际启用工具」口径对齐）；
+ * host 依赖名（mcp__* / 已知插件工具）即便在 presetUniverse 里也必须真的被检测
+ * 到才保留。 */
+function usableWith(name, presetUniverse, inventory) {
+  if (inventory.has(name)) return true
+  return !isHostDependent(name) && presetUniverse.has(name)
+}
+
+/** 角色专用模型归一（自定义块渲染与内置角色注入两处共用）：model / provider 过
+ * normalizeModelRef；仅 model 非 null 才有效，provider-alone warn 后置 null。 */
+function normalizeRoleModel(toolName, rawModel, rawProvider) {
+  const model = normalizeModelRef(rawModel, `roles.${toolName}.model`)
+  let provider = normalizeModelRef(rawProvider, `roles.${toolName}.provider`)
+  if (model === null && provider !== null) {
+    warn(`roles.${toolName}.provider: '${provider}' 仅在同时配置 model 时生效，已忽略`)
+    provider = null
+  }
+  return { model, provider }
+}
+
+/**
+ * 自定义角色 toolName 保留名校验：与内置角色（ROLES）、restrict.mjs 主 agent
+ * allow 白名单（restrictBase）、顶层 subagent / subagent_fork 撞名的 toolName
+ * 会静默遮蔽既有工具面；mcp__ 前缀闯 host MCP 工具名空间；true/false/null 等
+ * YAML 字面量会让生成的 `toolName: <名>` 行解析成布尔/null —— 一律在生成期
+ * throw（错误信息带角色名），宁可拒绝安装也不静默产出坏 preset。
+ */
+export function assertCustomToolName(toolName, restrictBase = []) {
+  const reserved = new Set([...ROLES, ...restrictBase, 'subagent', 'subagent_fork'])
+  if (reserved.has(toolName)) {
+    throw new Error(`role "${toolName}": toolName 与保留名冲突（内置角色 / restrict 主 agent 白名单 / subagent*），请换一个名字`)
+  }
+  if (String(toolName).startsWith('mcp__')) {
+    throw new Error(`role "${toolName}": toolName 不得使用 mcp__ 前缀（与 host MCP 工具名空间冲突）`)
+  }
+  if (/^(true|false|null|~)$/i.test(toolName)) {
+    throw new Error(`role "${toolName}": toolName 是 YAML 字面量，生成的委派行会被解析成布尔/null，请换一个名字`)
+  }
 }
 
 /** Render a persona block scalar with a given content indent. */
@@ -85,14 +145,16 @@ export function replaceRoleIdentity(text, displayName) {
  * Render the delegation block(s) for custom roles, matching the existing
  * delegation-* indentation (4-space list items).
  */
-export function renderCustomRoleBlocks(roles, skillsMap) {
+export function renderCustomRoleBlocks(roles, skillsMap, restrictBase = []) {
   const custom = Object.entries(roles).filter(([toolName]) => !ROLES.includes(toolName))
   if (custom.length === 0) return ''
   const chunks = []
   for (const [toolName, role] of custom) {
-    // 零工具防护（与 composeGenerated 内置角色循环同款）：tools 为空（缺省或
-    // `tools:` 空列表）会生成 `toolFilter.allow:`（YAML null），子 agent 创建后
-    // 零工具——宁可拒绝安装，也不静默生成一个干不了活的角色。
+    // 保留名校验（见 assertCustomToolName）+ 零工具防护（与 composeGenerated
+    // 内置角色循环同款）：tools 为空（缺省或 `tools:` 空列表）会生成
+    // `toolFilter.allow:`（YAML null），子 agent 创建后零工具——宁可拒绝安装，
+    // 也不静默生成一个干不了活的角色。
+    assertCustomToolName(toolName, restrictBase)
     if ((role.tools ?? []).length === 0) {
       throw new Error(`role "${toolName}" would end up with an empty toolFilter.allow — refusing to install a zero-tool role.`)
     }
@@ -101,16 +163,14 @@ export function renderCustomRoleBlocks(roles, skillsMap) {
       toolName,
       skillsMap,
     )
-    // 角色专用模型（roles.<toolName>.model / .provider）：自定义角色与内置角色
-    // 同形状（provider: spawn / toolName / agentOptions? / persona / toolFilter）。
-    // 先归一再判 provider-alone（防 UI / 手工构造的 assignments 绕过规范化）；
-    // 仅 model 非 null 才插 agentOptions 子块，provider-alone 仅 warn 忽略。
-    const model = normalizeModelRef(role.model ?? null, `roles.${toolName}.model`)
-    let provider = normalizeModelRef(role.provider ?? null, `roles.${toolName}.provider`)
-    if (model === null && provider !== null) {
-      warn(`roles.${toolName}.provider: '${provider}' 仅在同时配置 model 时生效，已忽略`)
-      provider = null
-    }
+    // 角色专用模型与可续模式（roles.<toolName>.model / .provider / .background_mode）：
+    // 自定义角色与内置角色同形状（provider: spawn / toolName / agentOptions? /
+    // backgroundMode / persona / toolFilter）。先归一再判 provider-alone（防 UI /
+    // 手工构造的 assignments 绕过规范化）；仅 model 非 null 才插 agentOptions 子块，
+    // provider-alone 仅 warn 忽略。backgroundMode 行恒写（与内置块源模板预置口径
+    // 一致：行始终可见），continuable → continuable，one-shot/缺省/异常值 →
+    // one-shot（与 config 解析回落口径一致）。
+    const { model, provider } = normalizeRoleModel(toolName, role.model ?? null, role.provider ?? null)
     // agentOptions 子行（键序固定 provider 在前、model 在后，与 dsh-tool-subagent
     // Config 字段序一致）；model 缺省时整块不出现。
     const agentOptionsLines = []
@@ -119,6 +179,9 @@ export function renderCustomRoleBlocks(roles, skillsMap) {
       if (provider !== null) agentOptionsLines.push(`          provider: ${yamlScalar(provider)}`)
       agentOptionsLines.push(`          model: ${yamlScalar(model)}`)
     }
+    // backgroundMode 行恒写（键序固定在 agentOptions? 之后、persona 之前，与内置
+    // 角色委派块的预置/注入落点键序一致）；非 continuable 一律落 one-shot。
+    const backgroundModeLines = [`        backgroundMode: ${role.background_mode === 'continuable' ? 'continuable' : 'one-shot'}`]
     chunks.push(
       [
         `    # ${toolName}：自定义角色（${firstLine(role.persona || '')}）`,
@@ -126,13 +189,16 @@ export function renderCustomRoleBlocks(roles, skillsMap) {
         `      name: '@deepseek-ai/dsh-tool-subagent'`,
         '      config:',
         '        provider: spawn',
-        `        toolName: ${toolName}`,
+        // toolName / 工具条目过 yamlScalar：纯数字、YAML 字面量形态等歧义名
+        // 必须带引号落盘，否则委派行会被解析成数字/布尔/null。
+        `        toolName: ${yamlScalar(toolName)}`,
         ...agentOptionsLines,
+        ...backgroundModeLines,
         '        persona: |-',
         ...persona.split('\n').map((l) => `          ${l}`),
         '        toolFilter:',
         '          allow:',
-        ...(role.tools ?? []).map((t) => `            - ${t}`),
+        ...(role.tools ?? []).map((t) => `            - ${yamlScalar(t)}`),
       ].join('\n'),
     )
   }
@@ -146,21 +212,21 @@ export function firstLine(text) {
 
 /**
  * Compute the orchestrator-restrict config.allow: restrict.mjs base, minus
- * host-dependent names not detected, plus main-agent extra tools and custom
- * role toolNames, minus main_agent_remove entries and removed builtin role
- * toolNames (roles_remove).  Returns null when the result equals the base (no
- * injection needed) — but only when no builtin role was removed: once
- * roles_remove is non-empty the explicit allow MUST be injected, otherwise the
- * static restrict.mjs MAIN_AGENT_ALLOW would keep delegating to the deleted
- * role (删除不生效).
+ * names outside the preset universe and detection inventory, plus main-agent
+ * extra tools and custom role toolNames, minus main_agent_remove entries and
+ * removed builtin role toolNames (roles_remove).  Returns null when the result
+ * equals the base (no injection needed) — but only when no builtin role was
+ * removed: once roles_remove is non-empty the explicit allow MUST be injected,
+ * otherwise the static restrict.mjs MAIN_AGENT_ALLOW would keep delegating to
+ * the deleted role (删除不生效).
  */
-export function computeRestrictAllow(base, inventory, mainAgentExtra, mainAgentRemove, customToolNames, removedRoleNames = []) {
+export function computeRestrictAllow(base, presetUniverse, inventory, mainAgentExtra, mainAgentRemove, customToolNames, removedRoleNames = []) {
   const kept = []
   for (const name of base) {
-    if (!isHostDependent(name) || inventory.has(name)) kept.push(name)
+    if (usableWith(name, presetUniverse, inventory)) kept.push(name)
   }
   for (const name of mainAgentExtra) {
-    if (!kept.includes(name) && (!isHostDependent(name) || inventory.has(name))) kept.push(name)
+    if (!kept.includes(name) && usableWith(name, presetUniverse, inventory)) kept.push(name)
   }
   for (const name of customToolNames) {
     if (!kept.includes(name)) kept.push(name)
@@ -187,7 +253,8 @@ export function injectRestrictAllow(srcText, allowList) {
  * used to inline the selected skills' full SKILL.md bodies (composeGenerated,
  * the main-agent skills step) and to append the user-editable persona tail
  * (main_agent_persona_extra).  Locates the block structurally (same scan as
- * locatePersonaBlocks' regex branch): marker row → `text: |-` → first content
+ * locatePersonaBlocks' regex branch): marker row → `prefix: |-` (legacy
+ * `text: |-`) → first content
  * line sets the indent (6 in the source preset) → block ends at the first
  * non-empty line indented shallower than the content.  Replaces the span
  * [dashStart, end) with the original content + suffixText re-rendered as a
@@ -197,9 +264,17 @@ export function appendToMainPersona(srcText, suffixText) {
   const marker = `- id: persona\n  name: '@deepseek-ai/dsh-persona'`
   const idx = srcText.indexOf(marker)
   if (idx === -1) throw new Error('main agent persona block (`- id: persona` / @deepseek-ai/dsh-persona) not found')
-  const personaStart = srcText.indexOf('text: |-', idx)
-  if (personaStart === -1) throw new Error('main agent persona block: `text: |-` scalar not found')
-  const dashStart = personaStart + 'text: '.length // points at the `|` of `|-`
+  // Persona config scalar: `prefix: |-` per the current dsh-persona schema
+  // (required `prefix`); `text: |-` is the legacy pre-rename name, still
+  // located so old files compose unchanged.
+  const prefixStart = srcText.indexOf('prefix: |-', idx)
+  const textStart = prefixStart === -1 ? srcText.indexOf('text: |-', idx) : -1
+  if (prefixStart === -1 && textStart === -1) {
+    throw new Error('main agent persona block: `prefix: |-` (or legacy `text: |-`) scalar not found')
+  }
+  const keyStart = prefixStart !== -1 ? prefixStart : textStart
+  const keyLen = prefixStart !== -1 ? 'prefix: '.length : 'text: '.length
+  const dashStart = keyStart + keyLen // points at the `|` of `|-`
   const contentStart = dashStart + '|-'.length + 1
   const firstLineEnd = srcText.indexOf('\n', contentStart)
   const firstLine = srcText.slice(contentStart, firstLineEnd === -1 ? srcText.length : firstLineEnd)
@@ -223,7 +298,9 @@ export function insertCustomRoles(srcText, customBlock) {
   const marker = '# ── remaining model-facing rows'
   const idx = srcText.indexOf(marker)
   if (idx === -1) throw new Error('remaining model-facing rows marker not found')
-  return srcText.slice(0, idx) + customBlock + srcText.slice(idx)
+  // 自定义块与 marker 注释之间补一个空行，与全文「块间空行分隔」的风格一致
+  // （customBlock 自带行尾换行；marker 前原有的空行留在 customBlock 之前）。
+  return srcText.slice(0, idx) + customBlock + '\n' + srcText.slice(idx)
 }
 
 /**
@@ -280,22 +357,17 @@ export function delegationRowSpan(srcText, role) {
 }
 
 /**
- * 角色专用模型注入（roles.<toolName>.model / .provider 生效路径）：在 role（内置
- * 角色名，下划线）的既有委派块内、`toolName:` 行行尾插入 agentOptions 子块，返回
- * 零宽 span edit { start, end, text }（start = end = toolName 行行尾换行符下标；
- * 原换行符保留在 text 之后，故 text 不带尾换行）。子块键序固定 provider 在前、
- * model 在后（与 dsh-tool-subagent Config 字段序一致），provider 缺省时不出该行。
- * 块定位：`- id: delegation-<rowId>`（rowId = 角色名 `_` 换 `-`，找不到 throw）；
+ * 内置角色委派块边界定位（roleToolNameLineEnd / injectRoleBackgroundMode 共用）：
+ * 块定位 `- id: delegation-<rowId>`（rowId = 角色名 `_` 换 `-`，找不到 throw）；
  * 块结束 = min(其后首个 `\n    - id: delegation-` 下标, '# ── remaining
- * model-facing rows' 注释下标, srcText.length)，保证 toolName 搜索不越界命中
- * 别的块。返回坐标为源文本原坐标，与 allow/persona/删除 edits 一起按 start 降序
- * 应用。
+ * model-facing rows' 注释下标, srcText.length)，保证块内行搜索不越界命中
+ * 别的块。errorKey 用于把报错归因到具体配置键（model / background_mode）。
  */
-export function injectRoleAgentOptions(srcText, role, model, provider) {
+function roleDelegationBlockBounds(srcText, role, errorKey) {
   const rowId = role.replace(/_/g, '-') // 委派行 id 用连字符（toolName 用下划线）
   const marker = `- id: delegation-${rowId}`
   const idx = srcText.indexOf(marker)
-  if (idx === -1) throw new Error(`委派行缺失（roles.${role}.model 引用了 '${role}'，但源文本里找不到 "${marker}"）`)
+  if (idx === -1) throw new Error(`委派行缺失（roles.${role}.${errorKey} 引用了 '${role}'，但源文本里找不到 "${marker}"）`)
   const nextIdx = srcText.indexOf('\n    - id: delegation-', idx + marker.length)
   const tailIdx = srcText.indexOf('# ── remaining model-facing rows')
   // 块结束取三者最小（无下一条/无尾注释时以 srcText.length 兜底）。
@@ -304,13 +376,41 @@ export function injectRoleAgentOptions(srcText, role, model, provider) {
     tailIdx === -1 ? srcText.length : tailIdx,
     srcText.length,
   )
+  return { idx, blockEnd }
+}
+
+/**
+ * 定位内置角色委派块内 8 空格缩进的 `toolName:` 行行尾换行符下标
+ * （injectRoleAgentOptions / injectRoleBackgroundMode 兜底注入共用的插入点）：
+ * 块边界见 roleDelegationBlockBounds，toolName 搜索限定块内不越界命中别的块。
+ * errorKey 用于把报错归因到具体配置键（model / background_mode）。
+ */
+function roleToolNameLineEnd(srcText, role, errorKey) {
+  const { idx, blockEnd } = roleDelegationBlockBounds(srcText, role, errorKey)
   const toolNameMarker = '\n        toolName: ' // 8 空格缩进 = config 键层
   const toolNameIdx = srcText.indexOf(toolNameMarker, idx)
   if (toolNameIdx === -1 || toolNameIdx >= blockEnd) {
-    throw new Error(`委派块缺 toolName 行（roles.${role}.model："${marker}" 块内找不到 8 空格缩进的 "toolName: " 行）`)
+    throw new Error(`委派块缺 toolName 行（roles.${role}.${errorKey}："${marker}" 块内找不到 8 空格缩进的 "toolName: " 行）`)
   }
   // 插入点 = toolName 行行尾换行符的下标；零宽插入后该换行符仍在 text 之后。
   const lineEnd = srcText.indexOf('\n', toolNameIdx + 1)
+  if (lineEnd === -1) {
+    // 与其余 marker 缺失同款哨兵：不静默错位（-1 会把注入行插到文首）。
+    throw new Error(`委派块 toolName 行缺换行符（roles.${role}.${errorKey}："${marker}" 块的 toolName 行是最后一行且无换行，无法定位插入点）`)
+  }
+  return lineEnd
+}
+
+/**
+ * 角色专用模型注入（roles.<toolName>.model / .provider 生效路径）：在 role（内置
+ * 角色名，下划线）的既有委派块内、`toolName:` 行行尾插入 agentOptions 子块，返回
+ * 零宽 span edit { start, end, text }（start = end = toolName 行行尾换行符下标；
+ * 原换行符保留在 text 之后，故 text 不带尾换行）。子块键序固定 provider 在前、
+ * model 在后（与 dsh-tool-subagent Config 字段序一致），provider 缺省时不出该行。
+ * 返回坐标为源文本原坐标，与 allow/persona/删除 edits 一起按 start 降序应用。
+ */
+export function injectRoleAgentOptions(srcText, role, model, provider) {
+  const lineEnd = roleToolNameLineEnd(srcText, role, 'model')
   const text =
     '\n' +
     [
@@ -322,30 +422,81 @@ export function injectRoleAgentOptions(srcText, role, model, provider) {
 }
 
 /**
- * 主 persona 整块改造（改名 + 删委派 bullet + 自定义角色自动委派行），返回一个
+ * 角色可续模式改写/兜底注入（roles.<toolName>.background_mode = 'continuable'
+ * 生效路径）。源模板的四个内置角色委派块各预置一行 `backgroundMode: one-shot`
+ * （产品口径：旋钮在源里可见，值 = dsh-tool-subagent 缺省），本函数语义因此是
+ * 「改写或兜底注入」，块内 span 查找既有行，杜绝任何情况下同块出现两行
+ * backgroundMode：
+ *  - 块内已有该行（源模板预置 / 手工加过）：整行原位改写为规范的
+ *    `backgroundMode: continuable`（位置不动 → 键序 toolName → agentOptions? →
+ *    backgroundMode 天然成立）；该行值已是 continuable 时返回 null（无改动，
+ *    与其它「无差异不产 edit」口径一致）。
+ *  - 块内无该行（防手工删掉的老配置/异常源）：兜底在 `toolName:` 行行尾零宽
+ *    注入一行（与 injectRoleAgentOptions 同锚点，两者并存靠收集序定键序 ——
+ *    edits 按 start 降序稳定排序，同 start 保持收集序，composeGenerated 先收集
+ *    本 edit 再收集 agentOptions edit，先收集者居后）。
+ * 返回 span edit { start, end, text }（坐标为源文本原坐标，与 allow/persona/
+ * 删除 edits 一起按 start 降序应用；改写路径 start/end = 既有行行首/行尾，
+ * 兜底路径 start = end = toolName 行行尾换行符下标），无任何改动时返回 null。
+ * 调用方（composeGenerated）仅对 'continuable' 调本函数；'one-shot'/缺省不调
+ * 用 —— 源预置行原样保留，全默认配置的生成产物与源逐字节一致。手工构造的
+ * assignments 绕过规范化时按同口径兜底（非 continuable 即不调用）。
+ */
+export function injectRoleBackgroundMode(srcText, role) {
+  const { idx, blockEnd } = roleDelegationBlockBounds(srcText, role, 'background_mode')
+  // 块内 span 查既有行：8 空格缩进（config 键层，与 roleToolNameLineEnd 的
+  // toolName 定位同口径），行首带 \n 保证不误匹配块首部分行或 persona 内容行。
+  const bgMarker = '\n        backgroundMode:'
+  const bgIdx = srcText.indexOf(bgMarker, idx)
+  if (bgIdx !== -1 && bgIdx < blockEnd) {
+    const lineStart = bgIdx + 1 // 跳过行首 \n，定位到行首
+    const nextNl = srcText.indexOf('\n', lineStart)
+    const lineEnd = nextNl === -1 ? srcText.length : nextNl
+    const line = srcText.slice(lineStart, lineEnd)
+    const value = line.slice(line.indexOf(':') + 1).trim()
+    if (value === 'continuable') return null // 已是目标值：不动（保持零 diff）
+    // 整行原位改写（缩进一并规范成 8 空格），不新增行 → 不可能重复键。
+    return { start: lineStart, end: lineEnd, text: '        backgroundMode: continuable' }
+  }
+  // 兜底：块内无该行（手工删掉的老配置 / 异常源）→ 沿用 toolName 行行尾注入。
+  const lineEnd = roleToolNameLineEnd(srcText, role, 'background_mode')
+  return { start: lineEnd, end: lineEnd, text: '\n        backgroundMode: continuable' }
+}
+
+/**
+ * 主 persona 整块改造（删委派 bullet + 自定义角色自动委派行），返回一个
  * span edit { start, end, text }（start/end 为源文本原坐标、随其它 edits 降序应用），
  * 无任何改动时返回 null（产物零 diff）。结构扫描与 appendToMainPersona 相同：
- * `- id: persona` 行 → `text: |-` → 首内容行定缩进 → 浅缩进行收尾。
- *  - 改名：main_agent_name 非空时，把身份行 label 换成它（正则不中则 warn 不崩）；
+ * `- id: persona` 行 → `prefix: |-`（旧名 `text: |-` 兼容）→ 首内容行定缩进 → 浅缩进行收尾。
  *  - 删 bullet：对每个 removedRoles 角色，删掉 content 中 trimmed 匹配
  *    `^- .*delegate to <role>\.?$` 的行（限定行首 `- `，不误删 SOP 段落）；
- *  - 自定义角色自动委派行：customBullets（第 4 参，元素 { toolName, duty }）逐个
+ *  - 自定义角色自动委派行：customBullets（第 3 参，元素 { toolName, duty }）逐个
  *    渲染成 `- <duty>: delegate to <toolName>.`（duty 去掉尾部 `。`/`.`/`！`/`!`
  *    与空白），插到 body 中最后一个匹配 `^- .*delegate to \S+\.?$` 的行之后；
  *    一条都没有时退到匹配 `^Decompose the task` 的行之后；仍没有则退到首行之后。
  *    其余文本与空行结构保持不变——没有这行指引，主 agent persona 就不含自定义
  *    角色，主 agent 永远不会委派给它。
+ * 身份行（You are the …）不可改名：编排主 agent 的 persona 身份语义不属于
+ * 可配置项（preset 显示名归 main_agent_display_name，见 state.mjs）。
  * 返回值经 renderPersona 以块标量整体回填；技能行/extra 追加在 edits 应用后由
  * appendToMainPersona 基于已改造文本追加，顺序天然正确。
  */
-export function composeMainPersonaEdit(srcText, mainAgentName, removedRoles, customBullets = []) {
-  if (!mainAgentName && removedRoles.length === 0 && customBullets.length === 0) return null
+export function composeMainPersonaEdit(srcText, removedRoles, customBullets = []) {
+  if (removedRoles.length === 0 && customBullets.length === 0) return null
   const marker = `- id: persona\n  name: '@deepseek-ai/dsh-persona'`
   const idx = srcText.indexOf(marker)
   if (idx === -1) throw new Error('main agent persona block (`- id: persona` / @deepseek-ai/dsh-persona) not found')
-  const personaStart = srcText.indexOf('text: |-', idx)
-  if (personaStart === -1) throw new Error('main agent persona block: `text: |-` scalar not found')
-  const dashStart = personaStart + 'text: '.length // points at the `|` of `|-`
+  // Persona config scalar: `prefix: |-` per the current dsh-persona schema
+  // (required `prefix`); `text: |-` is the legacy pre-rename name, still
+  // located so old files compose unchanged.
+  const prefixStart = srcText.indexOf('prefix: |-', idx)
+  const textStart = prefixStart === -1 ? srcText.indexOf('text: |-', idx) : -1
+  if (prefixStart === -1 && textStart === -1) {
+    throw new Error('main agent persona block: `prefix: |-` (or legacy `text: |-`) scalar not found')
+  }
+  const keyStart = prefixStart !== -1 ? prefixStart : textStart
+  const keyLen = prefixStart !== -1 ? 'prefix: '.length : 'text: '.length
+  const dashStart = keyStart + keyLen // points at the `|` of `|-`
   const contentStart = dashStart + '|-'.length + 1
   const firstLineEnd = srcText.indexOf('\n', contentStart)
   const firstLine = srcText.slice(contentStart, firstLineEnd === -1 ? srcText.length : firstLineEnd)
@@ -361,17 +512,6 @@ export function composeMainPersonaEdit(srcText, mainAgentName, removedRoles, cus
   }
   if (end === contentStart) throw new Error('main agent persona block: no content lines found')
   let body = personaDefaultText(srcText.slice(dashStart, end))
-  if (mainAgentName) {
-    // 身份行 label 替换：仅匹配行首的 "You are the … agent powered by the {{model}} model."
-    const identityRe = /^You are the [^\n]*?agent powered by the \{\{model\}\} model\./
-    const match = body.match(identityRe)
-    if (!match) {
-      warn('main_agent_name: 主 persona 身份行未匹配，agent.cordis.yml 保留默认身份行')
-    } else {
-      const renamed = `You are the ${mainAgentName} agent powered by the {{model}} model.`
-      body = body.slice(0, match.index) + renamed + body.slice(match.index + match[0].length)
-    }
-  }
   if (removedRoles.length > 0) {
     // 删委派 bullet：行首 `- ` 且含 `delegate to <role>`；SOP 段落等不命中。
     const dropRe = removedRoles.map((role) => new RegExp(`^- .*delegate to ${role}\\.?$`))
@@ -407,9 +547,10 @@ export function composeMainPersonaEdit(srcText, mainAgentName, removedRoles, cus
   return { start: dashStart, end, text: renderPersona(body, indent) }
 }
 
-/** Keep only host-dependent names that were actually detected. */
-export function filterHostTools(tools, inventory) {
-  return tools.filter((name) => !isHostDependent(name) || inventory.has(name))
+/** Keep only names that fall inside the preset universe or the detection
+ * inventory (see usableWith); everything else is dropped from the allow list. */
+export function filterUsableTools(tools, presetUniverse, inventory) {
+  return tools.filter((name) => usableWith(name, presetUniverse, inventory))
 }
 
 /**
@@ -422,16 +563,25 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
   const skillsMap = assignments.skills ?? {}
   const customToolNames = Object.keys(assignments.roles).filter((n) => !ROLES.includes(n))
   // roles_remove：被删除的内置角色不产 allow/persona edits（委派行整条删除时避免重叠），
-  // 主 persona bullet 与 restrict allow 也据此裁剪。main_agent_name 两处共用归一化值。
+  // 主 persona bullet 与 restrict allow 也据此裁剪。persona 身份行不可改名
+  // （preset 显示名归 main_agent_display_name，见 state.mjs）。
   const removedRoles = ROLES.filter((role) => (assignments.roles_remove ?? []).includes(role))
-  const mainAgentName = normalizeMainAgentName(assignments.main_agent_name)
+
+  // presetUniverse = restrict.mjs 主 agent 白名单 ∪ 源 preset 各角色 allow 自带面。
+  // 生成期「名字可用」白名单的前半边（后半边是检测清单 inventory）：手写进配置、
+  // 既不在 preset 自带面也不在检测库存的名字（停用插件残留的 mnemon_*、错名等）
+  // 不再直通，一律从 allow 丢弃——与文档「配置意图 ∩ 实际启用工具」口径对齐。
+  const presetUniverse = new Set(restrictBase)
+  for (const block of blocks.values()) {
+    for (const name of block.names) presetUniverse.add(name)
+  }
 
   // Role allow results (default roles only; custom roles are rendered fresh).
   const roleResults = []
   for (const role of ROLES) {
     if (removedRoles.includes(role)) continue // 已删除角色：不产 roleResults / allow edits
     const intent = assignments.roles[role]?.tools ?? blocks.get(role).names
-    const filtered = filterHostTools(intent, inventory)
+    const filtered = filterUsableTools(intent, presetUniverse, inventory)
     if (filtered.length === 0) {
       throw new Error(`role "${role}" would end up with an empty toolFilter.allow — refusing to install a zero-tool role.`)
     }
@@ -456,7 +606,10 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
   // persona delegate bullet / skills 分配键一律不受影响（不产对应 edit）。
   for (const role of ROLES) {
     if (removedRoles.includes(role)) continue // 已删除角色：persona 随委派行整条删除
-    const configured = assignments.roles[role]?.persona ?? null
+    // 空串与 null 同语义（= 走默认 persona）：?? 口径会把 '' 当「已自定义」
+    // 而生成空 persona 块，统一成 || 判定（与 renderCustomRoleBlocks 的
+    // `persona ? ... : 默认` 口径一致）。
+    const configured = assignments.roles[role]?.persona || null
     const displayNameRaw = assignments.roles[role]?.name ?? null
     // 空串/null 视为无；字符串取 trim 值（与 config 端 normalizeRoleName 同语义，
     // 防 UI / 手工构造的 assignments 绕过规范化）。
@@ -505,7 +658,7 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
     const span = delegationRowSpan(srcText, role)
     edits.push({ start: span.start, end: span.end, text: '' })
   }
-  // 主 persona 改造（改名 + 删委派 bullet + 自定义角色自动委派行）：无任何改动时
+  // 主 persona 改造（删委派 bullet + 自定义角色自动委派行）：无任何改动时
   // 不产 edit（产物零 diff）。自定义角色取 persona 首行职责句生成 delegate 行
   // （firstLine 对空 persona 返回占位「自定义角色」，中文占位可直接用）——没有这
   // 行指引，主 agent persona 就不含该角色，永远不会委派给它。
@@ -513,30 +666,42 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
     toolName: n,
     duty: firstLine(assignments.roles[n]?.persona || ''),
   }))
-  const personaEdit = composeMainPersonaEdit(srcText, mainAgentName, removedRoles, customBullets)
+  const personaEdit = composeMainPersonaEdit(srcText, removedRoles, customBullets)
   if (personaEdit !== null) edits.push(personaEdit)
 
-  // 角色专用模型注入（roles.<toolName>.model / .provider → 委派块 agentOptions）：
-  // 与 roles_remove 委派行删除 edits 同段收集。被删角色不注入（委派行已整条删除，
-  // 模型配置 warn 忽略）；仅 model 非 null 才注入，provider-alone 仅 warn 忽略
-  // （先 normalize 再判断，防手工构造的 assignments 绕过规范化）。
+  // 角色专用模型 / 可续模式注入（roles.<toolName>.model / .provider → 委派块
+  // agentOptions；roles.<toolName>.background_mode = 'continuable' → 委派块
+  // backgroundMode 行改写/兜底注入）：与 roles_remove 委派行删除 edits 同段收集。
+  // 被删角色不注入（委派行已整条删除，模型 / background_mode 配置 warn 忽略）；
+  // 仅 model 非 null 才注入 agentOptions，provider-alone 仅 warn 忽略（先 normalize
+  // 再判断，防手工构造的 assignments 绕过规范化）；background_mode 仅 'continuable'
+  // 才调 injectRoleBackgroundMode（'one-shot'/缺省不调 —— 源模板四块各预置的
+  // `backgroundMode: one-shot` 原样保留，全默认配置生成产物与源逐字节一致）。
+  // 键序与收集序：源块已有该行时走改写路径（edit start = 既有行行首，位于
+  // toolName 行行尾之后 → 降序应用先改写该行，agentOptions 随后插在更前的
+  // toolName 行行尾，键序 toolName → agentOptions? → backgroundMode 自然成立）；
+  // 源块无该行时走兜底注入路径，与 agentOptions 同锚点（start 相等）→ backgroundMode
+  // edit 必须先于 agentOptions edit 收集（先收集者居后），与自定义块键序一致。
   for (const role of ROLES) {
     const rawModel = assignments.roles[role]?.model ?? null
     const rawProvider = assignments.roles[role]?.provider ?? null
+    const rawBackgroundMode = assignments.roles[role]?.background_mode ?? null
     if (removedRoles.includes(role)) {
       const model = normalizeModelRef(rawModel, `roles.${role}.model`)
       const provider = normalizeModelRef(rawProvider, `roles.${role}.provider`)
       if (model !== null || provider !== null) {
         warn(`roles.${role}.model: 该角色已在 roles_remove 中删除，模型配置被忽略`)
       }
+      if (rawBackgroundMode === 'continuable') {
+        warn(`roles.${role}.background_mode: 该角色已在 roles_remove 中删除，background_mode 配置被忽略`)
+      }
       continue
     }
-    const model = normalizeModelRef(rawModel, `roles.${role}.model`)
-    let provider = normalizeModelRef(rawProvider, `roles.${role}.provider`)
-    if (model === null && provider !== null) {
-      warn(`roles.${role}.provider: '${provider}' 仅在同时配置 model 时生效，已忽略`)
-      provider = null
+    if (rawBackgroundMode === 'continuable') {
+      const backgroundModeEdit = injectRoleBackgroundMode(srcText, role)
+      if (backgroundModeEdit !== null) edits.push(backgroundModeEdit)
     }
+    const { model, provider } = normalizeRoleModel(role, rawModel, rawProvider)
     if (model !== null) edits.push(injectRoleAgentOptions(srcText, role, model, provider))
   }
   // 注入 edit（零宽，位于 toolName 行行尾）与该块的 allow edit / persona edit
@@ -548,7 +713,7 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
   edits.sort((a, b) => b.start - a.start)
   for (const edit of edits) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end)
 
-  const customBlock = renderCustomRoleBlocks(assignments.roles, skillsMap)
+  const customBlock = renderCustomRoleBlocks(assignments.roles, skillsMap, restrictBase)
   if (customBlock !== '') out = insertCustomRoles(out, customBlock)
 
   const mainAgentRemove = assignments.main_agent_remove ?? []
@@ -556,8 +721,8 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
   // (undetected host tools, typos, names never present) and skip them.
   if (mainAgentRemove.length > 0) {
     const removable = new Set(
-      [...restrictBase, ...(assignments.main_agent_extra ?? []), ...customToolNames].filter(
-        (n) => !isHostDependent(n) || inventory.has(n),
+      [...restrictBase, ...(assignments.main_agent_extra ?? []), ...customToolNames].filter((n) =>
+        usableWith(n, presetUniverse, inventory),
       ),
     )
     for (const name of mainAgentRemove) {
@@ -566,6 +731,7 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
   }
   const restrictAllow = computeRestrictAllow(
     restrictBase,
+    presetUniverse,
     inventory,
     assignments.main_agent_extra ?? [],
     mainAgentRemove,

@@ -3,7 +3,7 @@
 
 # Orchestration
 
-Orchestration is the core of dsh-paoding: the main agent (the orchestrator) decomposes the task, delegates along its texture, and integrates the results; role subagents carry only the tools their role needs and are discarded once their run settles. This document is for users who want to understand or tune these behaviors: how failures surface and recover, the one-shot vs multi-turn (continuable) trade-off, and how to enable the optional `implement_cont` enhancement. Where this document conflicts with the source code, the source wins; every configuration reference here is taken from `presets/orchestrator/agent.cordis.yml` and `presets/orchestrator/restrict.mjs`.
+Orchestration is the core of dsh-paoding: the main agent (the orchestrator) decomposes the task, delegates along its texture, and integrates the results; role subagents carry only the tools their role needs and are discarded once their run settles. This document is for users who want to understand or tune these behaviors: how failures surface and recover, the one-shot vs multi-turn (continuable) trade-off, and how each role's session mode is switched — a panel toggle or a config key, with the hand-edited `implement_cont` route kept as the panel-free advanced path. Where this document conflicts with the source code, the source wins; every configuration reference here is taken from `presets/orchestrator/agent.cordis.yml` and `presets/orchestrator/restrict.mjs`.
 
 ## Orchestration overview
 
@@ -24,7 +24,7 @@ The main agent's model-facing surface is narrowed by `restrict.mjs` on the `syst
 | Coordination | `todo_write` / `ask_user_question` / `get_goal` / `create_goal` / `update_goal` / `exit_plan_mode` / `job_output` / `job_list` / `job_kill` |
 | Deliberately hidden from the main agent | `web_search`, `mcp__tavily__*`, `write` / `edit`, `skill`, `workflow`, `ralph`, bare `subagent` / `subagent_fork` |
 
-Per-request tool tax (estimates; they float with the registered surface): full monolithic main agent ~16.2k tokens → ~5.5k after the allow list; `search_external` ~3.0k / `design` ~3.2k / `implement` ~3.7k, incurred only when actually delegated (figures from the header comment of `agent.cordis.yml`).
+Per-request tool tax (estimates; they float with the registered surface): full monolithic main agent ~16.2k tokens → ~5.5k after the allow list; `search_external` ~3.0k / `design` ~3.3k / `implement` ~3.8k, incurred only when actually delegated (figures from the header comment of `agent.cordis.yml`).
 
 ### Main-agent persona (excerpt, verbatim)
 
@@ -61,9 +61,9 @@ A delegated run reports failure in two runtime shapes (verbatim from the persona
 
 At child creation, DSH validates `toolFilter.allow` through `tools.restrict()`: every allow name must exist in the child's visible registry (= this composition's full registration plus host-layer MCP/plugin tools), otherwise creation is rejected (`tools.restrict() ... unknown tools`).
 
-The preset eliminates this class of failure at install time: `./install.sh` (tools/install.mjs) reads the host patch layers (home / profile / `--patch`), detects which MCP servers and local tool plugins are actually enabled, resolves exact tool names (a static known-tools table first, then a live JSON-RPC handshake for unknown servers), and rewrites each role's allow list as "static intent ∩ actually detected tools" — composition-guaranteed base tools stay untouched, host tools that are disabled or unresolvable are removed. MCPs that fail the handshake or use an unsupported transport are skipped: the role simply lacks those tools and installation does not error. After enabling/disabling MCPs or plugins on the host, re-run `./install.sh --auto` to sync the allow lists (`--dry-run` previews first). Details in [Installation](installation_en.md).
+The preset eliminates this class of failure at generation time: the generator (the same pipeline behind the panel's Save & Apply and the fallback CLI) reads the host patch layers (home / profile / `--patch`), detects which MCP servers and local tool plugins are actually enabled, resolves exact tool names (a static known-tools table first, then a live JSON-RPC handshake for unknown servers), and rewrites each role's allow list as "static intent ∩ actually detected tools" — composition-guaranteed base tools stay untouched, host tools that are disabled or unresolvable are removed. MCPs that fail the handshake or use an unsupported transport are skipped: the role simply lacks those tools and applying does not error. After enabling/disabling MCPs or plugins on the host, hit Save & Apply once in 庖丁配置 to sync the allow lists (Preview shows the list first). Details in [Installation](installation_en.md).
 
-Note that the installer's allow rewriting covers only the three built-in roles (`search_external` / `design` / `implement` — the `ROLES` constant in tools/install.mjs). Hand-written extra `delegation-*` blocks (e.g. `implement_cont` in section 4) ship **as-is and are never auto-cleaned**: host-dependent names inside them must be kept in sync with the plugins actually enabled on the host, or child creation is rejected. That is exactly why role allow lists dropped `memory_search` / `mcp__codegraph__codegraph_explore` as of 2026-09-02 (those names are not in the registry while the plugins are off; add them back when you re-enable the plugin — see the comment on `delegation-search-internal-deep` in `agent.cordis.yml`).
+Note that the generator's allow rewriting covers only the three built-in roles (`search_external` / `design` / `implement` — the `ROLES` constant in tools/install.mjs). Hand-written extra `delegation-*` blocks (e.g. the hand-written `implement_cont` in section 4) ship **as-is and are never auto-cleaned**: host-dependent names inside them must be kept in sync with the plugins actually enabled on the host, or child creation is rejected. That is exactly why role allow lists dropped `memory_search` / `mcp__codegraph__codegraph_explore` as of 2026-09-02 (those names are not in the registry while the plugins are off; add them back when you re-enable the plugin — see the comment on `delegation-search-internal-deep` in `agent.cordis.yml`).
 
 ### Layer 2: detection
 
@@ -109,49 +109,51 @@ Behavior by stop reason (complete coverage, one-to-one with the persona):
 | `max-tokens` | Split the task into smaller steps and re-delegate, or ask the child to output incrementally |
 | `refusal` | Do **not** retry the same task: adjust the task's scope or framing, switch roles, or handle it yourself — a refusal is a policy decision, not a transient error |
 | `aborted` | Re-delegate only when the cancellation was accidental |
-| completed but poor output | Re-delegate with concrete missing points; if the child is continuable, `send_message` it to finish the gaps |
+| completed but poor output | Re-delegate with concrete missing points; when the role is continuable, take the continuable branch below |
 | Same task fails **twice** | Stop retrying; report to the user what failed, why, and what you already tried; never loop a failing delegation |
 | Any re-delegation | **Always carry the previous integration summary** — what was done, what failed, what to pick up from — so the child never re-derives it from a cold context |
 
-Design note: the SOP is persona text, not code, so it is tunable: edit the persona block in `presets/orchestrator/agent.cordis.yml` (YAML block scalar; content lines are indented 10 spaces — keep the indentation), then re-run `./install.sh --auto`. For example, you can make failures bounce back to the main agent more often, or give a specific role a different retry ceiling.
+The continuable branch (new in the SOP): when a run fails or the output disappoints **and the role is configured continuable**, first resume the same child conversation with `send_message` — the child remembers where it left off and finishes in place; only if that does not help fall back to the table above and re-delegate (re-delegation drops from first choice to fallback).
+
+Design note: the SOP is persona text, not code, so it is tunable: edit the persona block in `presets/orchestrator/agent.cordis.yml` (YAML block scalar; content lines are indented 10 spaces — keep the indentation), then hit Save & Apply in 庖丁配置 to regenerate. For example, you can make failures bounce back to the main agent more often, or give a specific role a different retry ceiling.
 
 ## One-shot vs continuable
 
 ### Default: one-shot (run-and-discard)
 
-The four role delegation instances (`delegation-search-external` / `delegation-design` / `delegation-implement` / `delegation-search-internal-deep`) configure only `provider: spawn` and do **not** set `backgroundMode`, so they take `dsh-tool-subagent`'s config default, `one-shot`. Any role can additionally be pinned to a dedicated model via `roles.<toolName>.model` / `.provider` — once configured, the role runs on its own model and no longer follows the main agent's session model switches (see [Configuration](configuration_en.md) 2.5). Meaning:
+The four role delegation instances (`delegation-search-external` / `delegation-design` / `delegation-implement` / `delegation-search-internal-deep`) all run in `one-shot` mode — the base template writes it out explicitly for the four built-ins (a `backgroundMode: one-shot` row in each delegation block, purely for visibility so you never have to guess the default), which matches `dsh-tool-subagent`'s config default. The session mode is per-role configurable: any role (custom roles included) can be switched to `continuable` via `roles.<toolName>.background_mode` (see [Configuration](configuration_en.md) 2.6). Any role can additionally be pinned to a dedicated model via `roles.<toolName>.model` / `.provider` — once configured, the role runs on its own model and no longer follows the main agent's session model switches (see [Configuration](configuration_en.md) 2.5). Meaning:
 
 - One delegation = one run-and-discard child session. The call waits for the child to finish and hands the result back to the main agent by default (or becomes a background job via the tool's `run_in_background` parameter, collected with `job_output` and stopped with `job_kill`).
 - The child session is discarded when the task settles; its tool surface and context are paid for only for that one run (**pay-per-use + context isolation** — the preset's core design).
-- This differs from the two generic delegation rows in the composition — `tool-subagent` (`subagent`, continuable) and `tool-subagent-fork` (`subagent_fork`, continuable) are generic, continuable delegation tools, but the main-agent allow list deliberately hides them; the model-visible delegation surface is only the one-shot role tools above.
+- This differs from the two generic delegation rows in the composition — `tool-subagent` (`subagent`, continuable) and `tool-subagent-fork` (`subagent_fork`, continuable) are generic, continuable delegation tools, but the main-agent allow list deliberately hides them; the model-visible delegation surface is only the role tools above (each role's session mode is configurable, see below).
 
 ### Two paths when you need multiple iterations
 
 - **Path A (recommended, zero cost): integration summary → re-delegate.** The main agent already holds the previous integration summary, so it simply re-delegates a fresh one-shot task seeded with that summary. The child is still run-and-discard; the main agent's summary is the cross-turn "memory"; re-delegation cost stays bounded and no persistence/lifecycle model changes. This is how the default SOP handles `error` / `completed-but-poor` and similar cases (see the previous section).
-- **Path B (optional enhancement): `backgroundMode: continuable`.** Add a continuable `implement` instance (`implement_cont`; how to enable it is section 4). Continuable tool semantics (from the `dsh-tool-subagent` tool description): it runs **in the background by default**, immediately returns a durable subagent id, and **keeps the child conversation available for later turns**; when that run settles, the runtime sends the parent a notice with the outcome and final assistant message; afterwards the main agent starts later turns in the **same child conversation** with `send_message`. Payoff: on failure or unsatisfactory output there is no cold restart — the child remembers what it searched and what it changed, and `send_message` finishes the gaps in place.
+- **Path B (a config toggle away): make any role continuable.** Set「会话模式」("session mode") to「可续（continuable）」on the role card in the panel, or write `roles.<toolName>.background_mode: continuable` in the config — built-in and custom roles alike (see [Configuration](configuration_en.md) 2.6; the panel-free hand-edited `implement_cont` route is kept in section 4). Continuable tool semantics (from the `dsh-tool-subagent` tool description): it runs **in the background by default**, immediately returns a durable subagent id, and **keeps the child conversation available for later turns**; when that run settles, the runtime sends the parent a notice with the outcome and final assistant message; afterwards the main agent starts later turns in the **same child conversation** with `send_message`. Payoff: on failure or unsatisfactory output there is no cold restart — the child remembers what it searched and what it changed, and `send_message` finishes the gaps in place; the main agent's delegation SOP now carries a matching branch — for a continuable role, resume in the same session first and treat re-delegation as the fallback (see the previous section).
 
 ### Costs and prerequisites
 
 Continuable is not free; confirm all four before enabling:
 
-1. **Prerequisite: continuable requires a `sessionPersistence` backend.** The standard design keeps persistence at the **host layer** (the preset does not own it), so you mount `@deepseek-ai/dsh-session-persistence-jsonl` in `~/.dsh/cordis.patch.yml` (`config.root` is **required**, per the plugin schema). Without it, continuable creation/resumption fails loudly: `continuable subagents require session persistence (load a dsh-session-persistence backend)` (error code `PERSISTENCE_UNAVAILABLE`). This is a **machine-level, global change** — persistence affects every session on that host, it is not a preset-local change, and uninstalling the preset does not undo it.
+1. **Prerequisite: continuable requires a `sessionPersistence` backend.** The standard design keeps persistence at the **host layer** (the preset does not own it), so you mount `@deepseek-ai/dsh-session-persistence-jsonl` in `~/.dsh/cordis.patch.yml` (`config.root` is **required**, per the plugin schema). Without it, continuable creation/resumption fails loudly: `continuable subagents require session persistence (load a dsh-session-persistence backend)` (error code `PERSISTENCE_UNAVAILABLE`). The 庖丁配置 panel warns — without blocking — when it does not detect `sessionPersistence`: the normal order is to mount the backend first, then flip roles to continuable. This is a **machine-level, global change** — persistence affects every session on that host, it is not a preset-local change, and uninstalling the preset does not undo it.
 2. **Persisted sessions have no TTL** and keep accumulating on disk (JSONL artifacts under `config.root`, organized by project/session). You must `interrupt_agent` sessions you no longer need and clean up the on-disk files yourself.
-3. **Token cost grows per turn.** A continuable child carries its accumulated context on every turn, so a long-lived child only gets more expensive — which runs against the run-and-discard / pay-per-use philosophy. Use it only for implement-class **multi-round polishing** tasks (that is where the name `implement_cont` comes from).
+3. **Token cost grows per turn.** A continuable child carries its accumulated context on every turn, so a long-lived child only gets more expensive — which runs against the run-and-discard / pay-per-use philosophy. Use it only for **multi-round polishing** delegations (the name of the hand-edited example, `implement_cont`, says exactly that).
 4. **Permission rules are unchanged.** Continuable does not alter DSH's permission semantics: a denied operation is still never retried — only a different path is taken; the role failure-reporting protocol and the main agent's delegation SOP apply to continuable children too (the SOP's `send_message` branch exists precisely for them).
 
 Quick comparison:
 
-| Dimension | one-shot (default roles) | continuable (`implement_cont`) |
+| Dimension | one-shot (default roles) | continuable (any continuable role) |
 |---|---|---|
 | Session lifetime | discarded when the task settles | kept across turns (durable subagent id) |
 | Follow-up fixing | main-agent summary → re-delegate a fresh task | `send_message` in the same session, fix in place |
 | Persistence required | none | host-layer `sessionPersistence` backend (machine-level) |
 | Long-term cost | each turn pays only the new task | each turn carries the accumulated context, cost grows |
-| Fit | every delegation (default) | only implement-class multi-round tasks |
+| Fit | every delegation (default) | multi-round polishing delegations, per role (see [Configuration](configuration_en.md) 2.6) |
 
-## Enabling implement_cont
+## Advanced: hand-editing implement_cont (no panel)
 
-This section turns Path B of section 3 into concrete configuration — 5 steps. The default preset does **not** ship `implement_cont`; enable it when you need it and remove it entirely when you no longer do. All YAML below is verbatim configuration (adapted from the example in [README.md](../README_en.md) and checked against the source).
+The main path for Path B is the panel or the config key — one toggle on the role card's「会话模式」("session mode") control (see [Configuration](configuration_en.md) 2.6). This section is the equivalent panel-free route, in 5 steps — read it when you want to see exactly what the generation layer writes, or when working without the panel. The default preset does **not** ship `implement_cont`; enable it when you need it and remove it entirely when you no longer do. All YAML below is verbatim configuration (adapted from the example in [README.md](../README_en.md) and checked against the source).
 
 ### Step 1 — mount the persistence backend at the host layer (machine-level, global)
 
@@ -189,6 +191,7 @@ At the **end** of the delegation group's `config` list in `presets/orchestrator/
         toolFilter:
           allow:
             - read
+            - read_image
             - write
             - edit
             - glob
@@ -223,27 +226,24 @@ main_agent_extra:
   - implement_cont
 ```
 
-At install time `implement_cont` — not a host-dependent name — is merged into the generated `config.allow`. You can equally tick it in the config UI (Settings → 庖丁配置 → the main-agent card); see [Configuration](configuration_en.md).
+At apply time `implement_cont` — not a host-dependent name — is merged into the generated `config.allow`. You can equally tick it in the panel (Settings → 庖丁配置 → the main-agent card); see [Configuration](configuration_en.md).
 
-**Alternative: edit the `restrict.mjs` constant.** Add a line `'implement_cont'` to `MAIN_AGENT_ALLOW` (the 21-entry allow constant, `new Set([...])`) in `presets/orchestrator/restrict.mjs`. Mind the **override semantics**: at runtime `allow = config.allow ?? MAIN_AGENT_ALLOW` (an empty allow refuses to load). The installer re-extracts this constant from `restrict.mjs` source as its base and generates `config.allow = base + main_agent_extra (only detected host names kept) − main_agent_remove`, injecting the `config.allow` row **only when the result differs from the base**. So after editing the constant you must re-run the installer (the base is re-extracted and the installed copy refreshed); and when the running `agent.cordis.yml` already has an injected `config.allow`, that generated list wins at runtime and the constant only serves as fallback.
+**Alternative: edit the `restrict.mjs` constant.** Add a line `'implement_cont'` to `MAIN_AGENT_ALLOW` (the 21-entry allow constant, `new Set([...])`) in `presets/orchestrator/restrict.mjs`. Mind the **override semantics**: at runtime `allow = config.allow ?? MAIN_AGENT_ALLOW` (an empty allow refuses to load). The generator re-extracts this constant from `restrict.mjs` source as its base and generates `config.allow = base + main_agent_extra (only detected host names kept) − main_agent_remove`, injecting the `config.allow` row **only when the result differs from the base**. So after editing the constant you must re-apply (the base is re-extracted and the installed copy refreshed); and when the running `agent.cordis.yml` already has an injected `config.allow`, that generated list wins at runtime and the constant only serves as fallback.
 
-Either way, re-run the installer to apply (next step).
+Either way, re-apply to take effect (next step).
 
 ### Step 4 — apply
 
-```bash
-cd dsh-paoding
-./install.sh --auto     # regenerate the preset (new delegation block + allow-list changes)
-```
+Open Settings → **庖丁配置** and hit「**保存并应用**」(Save & Apply) — the preset regenerates (new delegation block + allow-list changes), and your hand edits go live with it.
 
-Then **restart the host or open a new session** for it to take effect. If step 3 used the config-file path, the choice is persisted in `~/.dsh/dsh-paoding.config.yml`; change it later and re-run `./install.sh --auto` for an idempotent re-apply.
+Then **restart the host or open a new session** for it to take effect. If step 3 used the config-file path, the choice is persisted in `~/.dsh/dsh-paoding.config.yml`; change it later and hit Save & Apply in the panel again for an idempotent re-apply (developers who cloned the repo can also use the fallback CLI, `node tools/install.mjs --auto`).
 
 ### Step 5 — clean up after use
 
 Continuable sessions have **no TTL** and keep accumulating on disk:
 
 - `interrupt_agent` any `implement_cont` session you no longer need;
-- when you stop using it for good, remove the delegation block from step 2 and the allow entry from step 3, then re-run `./install.sh --auto`; the persistence plugin itself may stay at the host layer (machine-level, see section 3), or be removed together with the artifacts under `~/.dsh/sessions/`.
+- when you stop using it for good, remove the delegation block from step 2 and the allow entry from step 3, then hit Save & Apply in the panel to regenerate; the persistence plugin itself may stay at the host layer (machine-level, see section 3), or be removed together with the artifacts under `~/.dsh/sessions/`.
 
 ## Context isolation
 
