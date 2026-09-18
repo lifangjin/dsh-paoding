@@ -24,16 +24,6 @@ dsh-paoding（中文品牌「庖丁」，典出《庄子》——庖丁顺纹理
 
 ![截图 1](docs/images/1.png)
 
-![截图 2](docs/images/2.png)
-
-![截图 3](docs/images/3.png)
-
-![截图 4](docs/images/4.png)
-
-![截图 5](docs/images/5.png)
-
-![截图 6](docs/images/6.png)
-
 ## 快速开始
 
 前置：**Node.js ≥ 18**、**pnpm** 与一台已装好的 DSH host（**@deepseek-ai/dsh ≥ 0.1.5**，最低支持版本）。

@@ -24,16 +24,6 @@ dsh-paoding (Chinese brand 「庖丁」/ Pao Ding, from the Zhuangzi parable of 
 
 ![Screenshot 1](docs/images/1.png)
 
-![Screenshot 2](docs/images/2.png)
-
-![Screenshot 3](docs/images/3.png)
-
-![Screenshot 4](docs/images/4.png)
-
-![Screenshot 5](docs/images/5.png)
-
-![Screenshot 6](docs/images/6.png)
-
 ## Quick Start
 
 Prerequisites: **Node.js ≥ 18**, **pnpm**, and a working DSH host (**@deepseek-ai/dsh >= 0.1.5**, the minimum supported version).
