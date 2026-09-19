@@ -4,7 +4,7 @@
  * 加载机制（借鉴 dsh-better-sidebar，DSH 0.1.1-rc.1 实测通过）：
  *  - dsh-client-modules 节点半扫描本包 package.json 的 dsh.client 声明 +
  *    exports["./client"]，把本文件编入 window.__DSH_BOOT__ 并以
- *    /plugins/paoding-config-ui/client.js 服务（图行 id = 包名）。
+ *    /plugins/dsh-paoding/client.js 服务（图行 id = 包名 dsh-paoding）。
  *  - 浏览器内核为 manifest 中每个插件创建 loader 条目并激活，故本文件
  *    必然被拉取执行；__ModuleLoader__.load 的 id 必须等于包名（图行 id）。
  *  - factory 内 require() 只解析平台 seed 模块（react / cordis /
@@ -25,7 +25,7 @@
  *    数据走同源 /api/paoding/*（Node 半注册，带浏览器信任围栏）。
  */
 window.__ModuleLoader__.load({
-  id: "paoding-config-ui",
+  id: "dsh-paoding",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
