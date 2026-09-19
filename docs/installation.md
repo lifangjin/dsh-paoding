@@ -12,7 +12,7 @@
 
 - **Node.js ≥ 18**。DSH host 与插件链路都跑在 Node 上；版本过低时 `dsh` 本身就起不来。可用 `node --version` 自查。
 - **pnpm 可用**。`dsh plugin` 是 pnpm 的透明转发器：插件包装进 profile 时由 pnpm 完成。缺失时安装命令会报 pnpm 相关错误，装好 pnpm（`npm i -g pnpm` 或 `corepack enable`）后重试。
-- **已安装 DSH host**（`dsh` 可用，含其 Web/agent 运行时）。本插件不改 DSH 源码，只往 DSH 的 preset roster 写入编排预设、并把「庖丁配置」面板挂进 Web 左侧栏，因此先要有可用的 DSH 家目录。
+- **已安装 DSH host**（`dsh` 可用，含其 Web/agent 运行时；**@deepseek-ai/dsh ≥ 0.1.5**，最低支持版本）。本插件不改 DSH 源码，只往 DSH 的 preset roster 写入编排预设、并把「庖丁配置」面板挂进 Web 左侧栏，因此先要有可用的 DSH 家目录。
 - **路径事实**（生成管线内建常量，写死前先了解它们）：
 
 | 项 | 默认值 | 说明 |
@@ -24,7 +24,7 @@
 
 - **环境变量**：`DSH_HOME` 覆盖 DSH 家目录（默认 `~/.dsh`）；`DSH_PAODING_CONFIG` 覆盖配置文件路径（面板认它；仓库内兜底 CLI 则用 `--config <file>` 指定）。
 
-仓库内 `presets/orchestrator/` 是静态预设源（生成管线读取并重写 `agent.cordis.yml`，原样复制 `preset.yml`、`restrict.mjs`），`tools/` 是生成器本体（面板与兜底 CLI 共用），`plugins/paoding-config-ui/` 是「庖丁配置」面板插件本体。只想正常使用的话，这些都不用碰——见下一节。
+仓库内 `presets/orchestrator/` 是静态预设源（生成管线读取并重写 `agent.cordis.yml`；`preset.yml`、`restrict.mjs` 原样复制——唯一例外是配置了 `main_agent_display_name`（或工作区派生显示名）时会改写 `preset.yml` 的 `name:` 行），`tools/` 是生成器本体（面板与兜底 CLI 共用），`plugins/paoding-config-ui/` 是「庖丁配置」面板插件本体。只想正常使用的话，这些都不用碰——见下一节。
 
 ## 2. 安装：唯一官方通道
 
@@ -41,7 +41,7 @@ dsh plugin --profile web add dsh-paoding
 这条命令背后是两步：
 
 1. `dsh plugin` 作为 pnpm 透明转发器，把 npm 包 `dsh-paoding` 用 pnpm 装进指定 profile 的 `node_modules`；
-2. 包根声明的 `dsh.bundle.patch`（一份 `cordis.patch.yml`，一行 insert：`id: paoding-config-ui` / `name: dsh-paoding`）由 `reconcilePlugins` 并入该 profile 的启动层，boot 时把「庖丁配置」面板挂进 Web 左侧栏（「新会话」下方）。
+2. 包根声明的 `dsh.bundle.patch`（一份 `cordis.patch.yml`，一行 insert：`id: paoding-config-ui` / `name: dsh-paoding`）由 `reconcilePlugins` 并入该 profile 的启动层，boot 时把「庖丁配置」面板挂进 Web 左侧栏底部动作条（设置行上方）。
 
 编排预设不用单独装——插件启动时会自动补上，见下面的首装自动化。
 
@@ -51,13 +51,13 @@ dsh plugin --profile web add dsh-paoding
 
 ### 首装自动化：重启即完整安装
 
-插件启动时自动检测编排预设是否就位：`$DSH_HOME/.agent-presets/orchestrator` 目录缺失，或其中的 `.generator-version` 标记与插件包版本不符时，自动执行一次等价 `--auto` 的安装——`~/.dsh/dsh-paoding.config.yml` 已存在就按配置应用；没有就写基础模板（只含 DSH 自带的基础工具，见下）。它走的是与面板「保存并应用」完全相同的检测/生成管线（`collectState` / `generateAndInstall`），产物一致。
+插件启动时自动检测编排预设是否就位：`$DSH_HOME/.agent-presets/orchestrator` 目录缺失，或其中的 `.generator-version` 标记与插件包版本不符时，自动执行一次等价 `--auto` 的安装——`~/.dsh/dsh-paoding.config.yml` 已存在就按配置应用；没有就写基础模板（只含 DSH 自带的基础工具，见下）。它走的是与面板「保存并应用」同一条检测/生成管线（`collectState` / `generateAndInstall`）——同一管线，但启动自愈的检测是纯文件扫描、不带运行时检测事实，面板则带；host 上装有 bundle 形态插件时，两者的检测库存可能不同，产物随之略有差异。
 
 所以 **`dsh plugin add` + 重启 = 完整安装**：预设生成、配置模板落盘、面板可点，一步到位。自动生成失败不会拖垮插件启动——只在 DSH 日志里记一条告警，可到面板手动「保存并应用」补上。
 
 ### 版本标记与自动重生成
 
-每次生成 preset 都会在目录里写一枚 `.generator-version` 标记（内容 = 生成器版本）。插件升级后标记与包版本不符，下次 DSH 启动自动按新版重生成——「升级后 preset 还是旧版产物」的漂移就此消除。标记只在版本变化时触发重生成，面板不监视配置文件改动；想立刻按当前配置重新生成，点面板「保存并应用」。
+`.generator-version` 标记（内容 = 生成器版本）由插件启动自愈在生成 preset 后写入。面板「保存并应用」与 CLI 生成走整目录重建、不写回标记——重建即移除旧标记，下次 DSH 启动自愈发现标记缺失会多补跑一次生成并重写标记（产物相同，只是多跑一轮）。版本不符触发重生成的语义不变：插件升级后标记与包版本不符，下次 DSH 启动自动按新版重生成，「升级后 preset 还是旧版产物」的漂移就此消除。标记只在缺失或版本不符时触发重生成，面板不监视配置文件改动；想立刻按当前配置重新生成，点面板「保存并应用」。
 
 ### 基础模板与工具勾选
 
@@ -71,7 +71,7 @@ dsh plugin --profile web add dsh-paoding
 2. 在**新会话的预设选择器**里选「**编排模式 (Orchestrator)**」。
 3. 想让它成为每次新会话的默认预设：**Settings → Agent Presets** 里设置默认。
 
-**手编配置后怎么应用**：打开 设置 → 庖丁配置——面板会把手编后的配置文件加载为当前值——然后点「**保存并应用**」。这是纯插件用户唯一的应用触发；版本标记只在新版时自动重生成，面板不会盯着配置文件的变化。
+**手编配置后怎么应用**：打开左侧栏底部动作条（设置行上方）的「庖丁配置」入口——面板会把手编后的配置文件加载为当前值——然后点「**保存并应用**」。这是纯插件用户唯一的应用触发；版本标记只在新版时自动重生成，面板不会盯着配置文件的变化。
 
 ## 3. 升级
 
@@ -85,7 +85,7 @@ dsh plugin --profile <name> update dsh-paoding
 
 手动升级等价：直接在终端跑上面这条 `dsh plugin update` 命令，同样重启生效。
 
-**开发 link 形态**（见第 4 节）没有版本号可比、无法就地升级：面板会提示手动跑 `dsh plugin --profile web add dsh-paoding@latest` 切回 registry 版。
+**开发 link 形态**（见第 4 节）没有版本号可比、无法就地升级：面板会提示手动跑 `dsh plugin add dsh-paoding@latest` 切回 registry 版。
 
 检测失败（断网、限流）时静默跳过，不影响任何使用。
 
@@ -101,7 +101,7 @@ dsh plugin --profile web add link:"$PWD"
 
 包直接落在仓库目录上，改动经 HMR 或重启生效，无需反复重装。此形态无法就地升级（见第 3 节）；想切回 registry 版，`dsh plugin --profile web add dsh-paoding@latest` 即可。
 
-**仓库内兜底 CLI**（不宣传，仅限克隆了仓库的开发者）：`node tools/install.mjs --auto`（有配置应用配置，没有写基础模板）、`--dry-run`（只打印检测报告与将生成的 allow，不写盘）、`--config <file>`（指定配置文件）。不带 `--auto`（且非只读的 `--dry-run`）会被拒绝并提示——交互式安装已移除，可视化配置一律走插件通道自带的 Web 面板。
+**仓库内兜底 CLI**（不宣传，仅限克隆了仓库的开发者）：`node tools/install.mjs --auto`（有配置应用配置，没有写基础模板）、`--dry-run`（只打印检测报告与将生成的 allow，不写盘）、`--config <file>`（指定配置文件）、`--suggest`（fresh 安装无配置时按智能默认分配 host 工具；默认基础模板不写 host 工具）、`--profile <name>`（指定扫描哪个 profile 的 patch 层，默认 `web`）。不带 `--auto`（且非只读的 `--dry-run`）会被拒绝并提示——交互式安装已移除，可视化配置一律走插件通道自带的 Web 面板。
 
 ## 5. host patch 检测机制
 
@@ -120,10 +120,10 @@ dsh plugin --profile web add link:"$PWD"
 ### MCP 与本地插件的检测
 
 - **启用判定**：patch 条目未被禁用（`enabled !== false` 且无 `disabled`）即视为启用；插件另查 `config.enabled`。
-- **MCP 服务器识别**：条目名以 `dsh-mcp-client` 结尾，或配置含 `serverName` 且 transport 为 `stdio` / `streamable-http` / `sse`（或有 `command`）。
-- **精确工具名解析**（`toolFilter.allow` 是精确名匹配、不支持 glob，名字必须拼全）：已知服务器查静态表直接得出——`tavily` → 5 个工具（`tavily_search` / `tavily_crawl` / `tavily_extract` / `tavily_map` / `tavily_research`），`codegraph` → `codegraph_explore`；未知服务器做实时 JSON-RPC 握手（stdio 拉起进程发 `initialize` + `tools/list`；streamable-http 走 POST；**15 秒超时**），把返回的工具名解析成 `mcp__<server>__<tool>`。
+- **MCP 服务器识别**：条目名的包名段**精确等于** `dsh-mcp-client`（scoped/子路径形式按 `/` 取末段比对，`not-dsh-mcp-client-foo` 这类不会误判），或配置含 `serverName` 且 transport 为 `stdio` / `streamable-http` / `sse`（或有 `command`）。
+- **精确工具名解析**（`toolFilter.allow` 是精确名匹配、不支持 glob，名字必须拼全）：检测顺序是**所有 `stdio` / `streamable-http` 服务器一律先实时 JSON-RPC 握手**（stdio 拉起进程发 `initialize` + `tools/list`；streamable-http 走 POST；**15 秒超时**），把返回的工具名解析成 `mcp__<server>__<tool>`；静态已知表（`tavily` → 5 个工具 `tavily_search` / `tavily_crawl` / `tavily_extract` / `tavily_map` / `tavily_research`，`codegraph` → `codegraph_explore`）只是已知服务器**握手失败时的降级兜底**——工具按表保留，报告标注 static table，不丢工具；未知服务器握手失败才整服务器跳过。
 - **本地工具插件**：按白名单匹配 patch 条目名并登记其工具，如 `magic-memory` → `memory_search`（新增插件需扩展白名单，见 `tools/lib/host.mjs` 的 `KNOWN_HOST_PLUGINS`）。
-- **跳过不报错**：握手失败、超时、`sse` 等不支持 transport 的服务器被跳过——对应角色只是缺这些工具，生成不报错（报告里会标注 `handshake failed` 及原因，URL/密钥会被打码）。
+- **跳过不报错**：「握手失败、超时、`sse` 等不支持实时发现的服务器被跳过」只适用于**未知服务器**——整服务器跳过，对应角色只是缺这些工具，生成不报错（报告里会标注 `handshake failed` 及原因，URL/密钥会被打码）；已知服务器握手失败回落静态表、工具保留，不在此列。
 
 ### allow 重写规则
 
@@ -145,22 +145,22 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 
 ## 6. 庖丁配置面板
 
-不想手编 `dsh-paoding.config.yml` 的话，点开左侧栏「新会话」下方的**「庖丁配置」**入口进入整页配置。它与首装自动化、兜底 CLI 共用同一条检测/生成管线（`collectState` / `generateAndInstall`），所见即所得；面板随插件通道自带，装好插件就有，无需另外挂载。
+不想手编 `dsh-paoding.config.yml` 的话，点开左侧栏底部动作条（设置行上方）的**「庖丁配置」**入口进入整页配置。它与首装自动化、兜底 CLI 共用同一条检测/生成管线（`collectState` / `generateAndInstall`），所见即所得；面板随插件通道自带，装好插件就有，无需另外挂载。
 
 ### 加载机制
 
 - cordis 经 profile 目录的 `node_modules` 解析 patch 行里的包名 `dsh-paoding`；
 - DSH 的 client-modules 节点半扫描该包 `package.json` 的 `dsh.client` 声明与 `exports["./client"]`，把 `lib/client.js` 编入浏览器的 `__DSH_BOOT__`（以 `/plugins/paoding-config-ui/client.js` 下发）；
 - 浏览器内核为清单里的每个插件创建 loader 条目并激活（bundle 以 `window.__ModuleLoader__.load({ id: "paoding-config-ui", factory })` 注册，id 等于 patch 行的 id）；
-- 客户端 `apply()` 不占用宿主槽位，照 dsh-mnemon 的 sidebar 模式挂载：DOM 注入 + MutationObserver 自愈，把「庖丁配置」入口（`data-dsh-paoding-entry`）插到左侧栏「新会话」下方；点击后容器（`data-dsh-paoding-view`）挂进会话中栏、`createRoot` 渲染整页配置页，打开态由 `html[data-dsh-paoding-active]` 驱动，与记忆系统 / taskboard / ssh 等全页面板互斥。
+- 客户端 `apply()` 把「庖丁配置」入口经宿主 `sidebar.footer.action` 键控槽注册（`slots.register`，与插件广场 cordis 徽章同槽位，渲染在设置行上方的动作条里），不自行 DOM 注入侧栏；MutationObserver 仅用于工作区「…」菜单桥接（认出菜单 DOM、注入「庖丁配置」深链入口）。点击后容器（`data-dsh-paoding-view`）挂进会话中栏、`createRoot` 渲染整页配置页，打开态由 `html[data-dsh-paoding-active]` 驱动，与记忆系统 / taskboard / ssh 等全页面板互斥。
 
 ### 数据接口与安全
 
-面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地 `dsh plugin update`）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
+面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地 `dsh plugin update`）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
 
 ### 面板能力
 
-- **状态与操作**：检测摘要与 chips（当前 profile、每个 MCP 服务器及工具数、插件 chips、技能数等）；操作按钮「**保存并应用**」「预览生成」「重新检测」固定在面板底部悬浮操作坞（sticky bottom），滚动任意位置都可直接点击。
+- **状态与操作**：页头是标题 + 版本/更新卡（新版就地提示与一键升级）+ 副标题，正文直接就是工作区与角色卡，没有单独的检测摘要与 chips 区；操作按钮「**保存并应用**」「预览生成」「重新检测」固定在面板底部悬浮操作坞（sticky bottom），滚动任意位置都可直接点击。
 - **Agent 工具分配卡片**：主 agent 一张固定卡（基础工具取消勾选 = 加入 `main_agent_remove` 从主 agent 剔除；MCP / 插件工具勾选 = 加入 `main_agent_extra`；技能「read 按需」与「内联全文」两组勾选；另有「人设追加」编辑区，可改、清空、恢复默认）＋ `search_external` / `design` / `implement` 三张内置角色卡 ＋ 任意自定义角色卡（带删除按钮）；每张角色卡把工具按「基础工具 / MCP 工具 / 插件工具」三组呈现、可逐项勾选，并可编辑 persona。底部「新建自定义 agent 角色」。
 - **技能分配**：每个 skill 一行，勾选分配给哪些 agent（写入对应 persona 的 `Available skills` 软引导；角色技能软引导，主 agent 技能另有 read 按需/内联两组）。
 - **预览生成**：不写盘生成 `agent.cordis.yml`，显示每个角色 allow 的 intent → kept 计数与生成全文。
@@ -168,14 +168,15 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 
 ## 7. 卸载
 
-两条命令，删得干干净净：
+三条命令，删得干干净净：
 
 ```bash
 dsh plugin --profile web remove dsh-paoding
 rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"
+rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets"/orchestrator-*
 ```
 
-第一条摘掉插件与侧栏面板（只影响指定 profile），第二条删掉编排预设目录。配置文件 `~/.dsh/dsh-paoding.config.yml` 不随之上删——留着或删掉都不影响 DSH 其它配置，重装时首装自动化会再次按它应用。
+第一条摘掉插件与侧栏面板（只影响指定 profile），第二条删掉编排预设目录，第三条清掉按工作区配置时生成的各工作区预设目录（`orchestrator-<目录名>`；没用过按工作区配置就没有这类目录，通配不命中、无害）——基础 `orchestrator` 目录已由上一条命令删掉，不含在这个通配里。配置文件 `~/.dsh/dsh-paoding.config.yml` 不随之上删——留着或删掉都不影响 DSH 其它配置，重装时首装自动化会再次按它应用。
 
 卸载不影响 host 的其它内容（MCP、插件、会话等），与 DSH 源码零耦合；之后新建会话时「编排模式 (Orchestrator)」不再出现在预设选择器里。
 
@@ -199,19 +200,19 @@ allow 名单里出现了子 agent 注册面上不存在的名字——最常见�
 
 **角色里少了某个 MCP 工具**
 
-握手失败或 transport 不受支持的 MCP 服务器会被跳过（报告标注 `handshake failed`）：对应角色只是缺这些工具，生成不报错。检查该服务器能否独立启动/连通后重新应用；已知服务器（tavily、codegraph）走静态表不握手，不会出现此情况。
+检测时所有 stdio / streamable-http 服务器都先实时握手：未知服务器握手失败会被整服务器跳过（报告标注 `handshake failed`），对应角色只是缺这些工具，生成不报错；已知服务器（tavily、codegraph）握手失败会回落静态表、工具保留，报告标注 static table——看到该标注说明检测时连不上该服务器、表里的工具面可能过时。检查该服务器能否独立启动/连通后重新应用。
 
 **技能没写进 persona**
 
-角色技能只允许分给 allow 含 `skill` 的角色；主 agent 技能走 `main_agent_skills`（软行）或 `main_agent_skills_inline`（内联）。找不到 SKILL.md（按配置对象对应口径查找：全局只查用户级两根，工作区另查该工作区目录的项目级根，见配置指南第 9 节）会被警告并跳过——确认 skill 已装在对应根目录之一。
+技能可以分给任意角色——生成层会为每个被分配的角色在 persona 里追加 `Available skills:` 软引导行；但角色要真正加载技能，得自备 `skill` / `read` 工具（没带 `skill` 工具的角色分了技能，也只是一行引导，不会实际装载）。主 agent 技能走 `main_agent_skills`（软行）或 `main_agent_skills_inline`（内联）。找不到 SKILL.md（按配置对象对应口径查找：全局只查用户级两根，工作区另查该工作区目录的项目级根，见配置指南第 9 节）会被警告并跳过——确认 skill 已装在对应根目录之一。
 
 **手编了配置文件，怎么让它生效**
 
-打开 设置 → 庖丁配置（面板会把手编后的配置文件作为当前值加载），点「保存并应用」。面板不监视配置文件改动，手编不会自动生效；版本标记也只在新版时才触发自动重生成。
+打开左侧栏底部动作条（设置行上方）的「庖丁配置」入口（面板会把手编后的配置文件作为当前值加载），点「保存并应用」。面板不监视配置文件改动，手编不会自动生效；版本标记也只在新版时才触发自动重生成。
 
 **配置文件在哪里**
 
-面板「保存并应用」写到 `$DSH_HOME/dsh-paoding.config.yml`（默认 `~/.dsh/dsh-paoding.config.yml`，可用环境变量 `DSH_PAODING_CONFIG` 改到别处；兜底 CLI 用 `--config <file>`）；面板状态栏也会显示当前配置文件路径。想重置全部选择：删除该文件后重启 DSH，首装自动化按无配置处理、写回基础模板。
+面板「保存并应用」写到 `$DSH_HOME/dsh-paoding.config.yml`（默认 `~/.dsh/dsh-paoding.config.yml`，可用环境变量 `DSH_PAODING_CONFIG` 改到别处；兜底 CLI 用 `--config <file>`）。想重置全部选择：删除该文件后重启 DSH，首装自动化按无配置处理、写回基础模板。
 
 **旧版 npx/npm 安装的残留怎么清理**
 

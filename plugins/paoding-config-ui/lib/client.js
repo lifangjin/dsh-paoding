@@ -2526,7 +2526,7 @@ window.__ModuleLoader__.load({
     }
 
     // ── 侧栏底部入口（sidebar.footer.action 键控槽）────────────────────────
-    // 入口从「新会话下方侧栏卡片」迁到左下角底部：注册 sidebar.footer.action
+    // 入口挂在左下角底部动作条：注册 sidebar.footer.action
     // 列表槽（与插件广场 cordis 徽章同一槽位，渲染在设置行上方的动作条里）。
     // 观感复刻 cordis 徽章 / 设置触发钮：宽栏 = 42px 圆角行（图标 + 文案），
     // 窄栏（56px rail）= 36px 圆形图标钮。点击开 / 关全页 overlay（mountPanel

@@ -457,7 +457,7 @@ function writeWorkspaces(lines, workspaces) {
 
 /** Serialize the config back to YAML (fixed structure, hand-rolled writer). */
 export function serializeConfig(config) {
-  const lines = ['# dsh-paoding（庖丁）安装配置 —— 可手编；改后在 设置 → 庖丁配置 应用，或重跑 node tools/install.mjs --auto']
+  const lines = ['# dsh-paoding（庖丁）安装配置 —— 可手编；改后在侧栏底部「庖丁配置」入口应用，或重跑 node tools/install.mjs --auto']
   lines.push(`profile: ${config.profile ?? 'web'}`)
   writeTargetFields(lines, '', config)
   // workspaces 段可选：键缺失 / 空对象整段省略（不含 workspaces 的配置输出与

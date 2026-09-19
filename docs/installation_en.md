@@ -12,7 +12,7 @@ Check the following before installing:
 
 - **Node.js ≥ 18**. The DSH host and the plugin chain both run on Node; with an older version `dsh` won't start in the first place. Check with `node --version`.
 - **pnpm available**. `dsh plugin` is a transparent pass-through to pnpm: installing a plugin package into a profile is done by pnpm. If pnpm is missing the install command fails with a pnpm error — install pnpm (`npm i -g pnpm` or `corepack enable`) and retry.
-- **A working DSH host** (the `dsh` command, including its Web/agent runtime). This plugin does not modify DSH source code; it only writes the orchestrator preset into DSH's preset roster and mounts the Paoding Config page into the Web sidebar, so a usable DSH home directory must exist first.
+- **A working DSH host** (the `dsh` command, including its Web/agent runtime; **@deepseek-ai/dsh ≥ 0.1.5**, the minimum supported version). This plugin does not modify DSH source code; it only writes the orchestrator preset into DSH's preset roster and mounts the Paoding Config page into the Web sidebar, so a usable DSH home directory must exist first.
 - **Path facts** (constants built into the generation pipeline; know them before customizing):
 
 | Item | Default | Description |
@@ -24,7 +24,7 @@ Check the following before installing:
 
 - **Environment variables**: `DSH_HOME` overrides the DSH home directory (default `~/.dsh`); `DSH_PAODING_CONFIG` overrides the config-file path (honored by the panel; the in-repo fallback CLI uses `--config <file>` instead).
 
-Inside the repository, `presets/orchestrator/` is the static preset source (the pipeline reads and rewrites `agent.cordis.yml`, and copies `preset.yml` and `restrict.mjs` as-is), `tools/` is the generator itself (shared by the panel and the fallback CLI), and `plugins/paoding-config-ui/` is the Paoding Config panel plugin. For plain usage you never need to touch any of these — see the next section.
+Inside the repository, `presets/orchestrator/` is the static preset source (the pipeline reads and rewrites `agent.cordis.yml`; `preset.yml` and `restrict.mjs` are copied as-is — the one exception: when `main_agent_display_name` (or a workspace-derived display name) is configured, the `name:` line of `preset.yml` is rewritten), `tools/` is the generator itself (shared by the panel and the fallback CLI), and `plugins/paoding-config-ui/` is the Paoding Config panel plugin. For plain usage you never need to touch any of these — see the next section.
 
 ## 2. Install: the single official channel
 
@@ -41,7 +41,7 @@ After installing, **restart DSH (`dsh web`)** and you're done — no further ins
 Behind the scenes the command does two things:
 
 1. `dsh plugin`, a transparent pass-through to pnpm, installs the npm package `dsh-paoding` into the given profile's `node_modules`;
-2. the `dsh.bundle.patch` declared at the package root (a `cordis.patch.yml` with a single insert: `id: paoding-config-ui` / `name: dsh-paoding`) is merged by `reconcilePlugins` into that profile's startup layer, and at boot the Paoding Config page is mounted into the Web left sidebar (under New Session).
+2. the `dsh.bundle.patch` declared at the package root (a `cordis.patch.yml` with a single insert: `id: paoding-config-ui` / `name: dsh-paoding`) is merged by `reconcilePlugins` into that profile's startup layer, and at boot the Paoding Config page is mounted into the Web sidebar's bottom action bar (above the Settings row).
 
 The orchestrator preset needs no separate install — the plugin fills it in automatically at startup; see first-install automation below.
 
@@ -51,13 +51,13 @@ The orchestrator preset needs no separate install — the plugin fills it in aut
 
 ### First-install automation: restart = full install
 
-At startup the plugin checks whether the orchestrator preset is in place: if the `$DSH_HOME/.agent-presets/orchestrator` directory is missing, or its `.generator-version` marker does not match the plugin package version, it automatically performs one install equivalent to `--auto` — applying `~/.dsh/dsh-paoding.config.yml` when it exists, writing the base template otherwise (DSH base tools only; see below). It runs the exact same detection/generation pipeline as the panel's Save & Apply (`collectState` / `generateAndInstall`), producing identical output.
+At startup the plugin checks whether the orchestrator preset is in place: if the `$DSH_HOME/.agent-presets/orchestrator` directory is missing, or its `.generator-version` marker does not match the plugin package version, it automatically performs one install equivalent to `--auto` — applying `~/.dsh/dsh-paoding.config.yml` when it exists, writing the base template otherwise (DSH base tools only; see below). It runs the same detection/generation pipeline as the panel's Save & Apply (`collectState` / `generateAndInstall`) — the same pipeline, but the startup self-heal detects with a pure file scan and no runtime detection facts while the panel detects with them; when a bundle-form plugin is installed on the host, the two detection inventories may differ, and the outputs differ slightly with them.
 
 So **`dsh plugin add` + restart = a complete install**: preset generated, config template on disk, panel ready — all in one step. If the automatic generation fails it never takes the plugin down — a warning is logged, and you can apply manually from the panel.
 
 ### The version marker and auto-regeneration
 
-Every generation writes a `.generator-version` marker into the preset directory (its content = the generator version). After a plugin upgrade the marker no longer matches the package version, so the next DSH start regenerates the preset against the new version — the "upgraded the plugin but the preset is stale" drift is eliminated. The marker only triggers regeneration on version changes, and the panel does not watch the config file; to regenerate from the current config right away, hit Save & Apply.
+The `.generator-version` marker (its content = the generator version) is written by the plugin's startup self-heal after it generates the preset. The panel's Save & Apply and CLI generation do a full-directory rebuild and write no marker — the rebuild removes the old marker, so the next DSH start's self-heal finds it missing, runs one extra generation, and rewrites the marker (same output, just one extra round). The version-mismatch trigger is unchanged: after a plugin upgrade the marker no longer matches the package version, so the next DSH start regenerates the preset against the new version — the "upgraded the plugin but the preset is stale" drift is eliminated. The marker triggers regeneration only when missing or version-mismatched, and the panel does not watch the config file; to regenerate from the current config right away, hit Save & Apply.
 
 ### Base template and tool opt-in
 
@@ -71,7 +71,7 @@ Once installed:
 2. Pick「**编排模式 (Orchestrator)**」in the **new-session preset selector**.
 3. To make it the default for every new session: set it in **Settings → Agent Presets**.
 
-**Applied a hand-edited config — now what?** Open Settings → 庖丁配置 (Paoding Config) — the panel loads the hand-edited config file as its current values — then hit「**保存并应用**」(Save & Apply). That is the only apply trigger for a pure plugin user; the panel does not watch the config file, and the version marker only triggers auto-regeneration on new versions.
+**Applied a hand-edited config — now what?** Open the 庖丁配置 (Paoding Config) entry in the sidebar bottom action bar (above the Settings row) — the panel loads the hand-edited config file as its current values — then hit「**保存并应用**」(Save & Apply). That is the only apply trigger for a pure plugin user; the panel does not watch the config file, and the version marker only triggers auto-regeneration on new versions.
 
 ## 3. Upgrading
 
@@ -85,7 +85,7 @@ dsh plugin --profile <name> update dsh-paoding
 
 Manual equivalent: run the `dsh plugin update` command above yourself, restart, done.
 
-A **dev link: checkout** (see §4) has no version to compare and cannot be upgraded in place: the panel tells you to run `dsh plugin --profile web add dsh-paoding@latest` to switch back to the registry version.
+A **dev link: checkout** (see §4) has no version to compare and cannot be upgraded in place: the panel tells you to run `dsh plugin add dsh-paoding@latest` to switch back to the registry version.
 
 If the check fails (offline, rate-limited), it stays silent and nothing is interrupted.
 
@@ -101,7 +101,7 @@ dsh plugin --profile web add link:"$PWD"
 
 The package sits directly on the repository directory; changes go live via HMR or a restart, with no reinstalls. This form cannot be upgraded in place (see §3); to switch back to the registry version, run `dsh plugin --profile web add dsh-paoding@latest`.
 
-An **in-repo fallback CLI** also exists (not advertised; for developers who cloned the repo): `node tools/install.mjs --auto` (apply the config if present, else write the base template), `--dry-run` (print the detection report and the would-be allow lists without writing anything), `--config <file>` (select a config file). Without `--auto` (and without the read-only `--dry-run`) it refuses to run — interactive install has been removed; visual configuration belongs to the Web panel that ships with the plugin channel.
+An **in-repo fallback CLI** also exists (not advertised; for developers who cloned the repo): `node tools/install.mjs --auto` (apply the config if present, else write the base template), `--dry-run` (print the detection report and the would-be allow lists without writing anything), `--config <file>` (select a config file), `--suggest` (on a fresh install without a config file, seed smart defaults that assign host tools; the default base template leaves host tools out), `--profile <name>` (which profile's patch layer to scan, default `web`). Without `--auto` (and without the read-only `--dry-run`) it refuses to run — interactive install has been removed; visual configuration belongs to the Web panel that ships with the plugin channel.
 
 ## 5. Host patch detection
 
@@ -120,10 +120,10 @@ All layers are **included** (detection unions the enabled entries across layers)
 ### MCP servers and local tool plugins
 
 - **Enabled test**: a patch entry counts as enabled unless disabled (`enabled !== false` and no `disabled`); plugins additionally check `config.enabled`.
-- **MCP server recognition**: the entry name ends with `dsh-mcp-client`, or the config carries a `serverName` with transport `stdio` / `streamable-http` / `sse` (or has a `command`).
-- **Exact tool-name resolution** (`toolFilter.allow` matches exact names, no globs — names must be spelled out): known servers resolve from a static table — `tavily` → 5 tools (`tavily_search` / `tavily_crawl` / `tavily_extract` / `tavily_map` / `tavily_research`), `codegraph` → `codegraph_explore`; unknown servers get a live JSON-RPC handshake (stdio spawns the process and sends `initialize` + `tools/list`; streamable-http POSTs; **15-second timeout**) and the returned tools become `mcp__<server>__<tool>` names.
+- **MCP server recognition**: the entry's package-name segment **exactly equals** `dsh-mcp-client` (scoped/sub-path forms compare the last `/` segment; a name like `not-dsh-mcp-client-foo` does not match), or the config carries a `serverName` with transport `stdio` / `streamable-http` / `sse` (or has a `command`).
+- **Exact tool-name resolution** (`toolFilter.allow` matches exact names, no globs — names must be spelled out): the detection order is that **every `stdio` / `streamable-http` server gets a live JSON-RPC handshake first** (stdio spawns the process and sends `initialize` + `tools/list`; streamable-http POSTs; **15-second timeout**), and the returned tools become `mcp__<server>__<tool>` names; the static known table (`tavily` → 5 tools `tavily_search` / `tavily_crawl` / `tavily_extract` / `tavily_map` / `tavily_research`, `codegraph` → `codegraph_explore`) is only the degraded fallback when a **known** server's handshake fails — tools are kept per the table, the report flags a static table, and no tools are lost; only an unknown server that fails the handshake is skipped entirely.
 - **Local tool plugins**: matched against a whitelist of patch entry names, registering their tools, e.g. `magic-memory` → `memory_search` (new plugins extend the whitelist — `KNOWN_HOST_PLUGINS` in `tools/lib/host.mjs`).
-- **Skipped, not fatal**: servers whose handshake fails, times out, or uses an unsupported transport (`sse`) are skipped — the role simply lacks those tools and generation raises no error (the report flags `handshake failed` with the reason; URLs and keys are masked).
+- **Skipped, not fatal**: "servers whose handshake fails, times out, or uses a transport without live discovery (`sse`) are skipped" applies to **unknown servers** only — such a server is skipped entirely, the role simply lacks those tools, and generation raises no error (the report flags `handshake failed` with the reason; URLs and keys are masked); known servers fall back to the static table on a failed handshake and keep their tools, so they never land here.
 
 ### Allow-rewrite rules
 
@@ -145,22 +145,22 @@ Example 3 — extra patch files: put extra MCP/plugin config in a separate file 
 
 ## 6. The Paoding Config panel
 
-If you'd rather not hand-edit `dsh-paoding.config.yml`, open the **庖丁配置 (Paoding Config)** entry under New Session in the left sidebar. It shares the exact same detection/generation pipeline (`collectState` / `generateAndInstall`) as the first-install automation and the fallback CLI — what you see is what gets written; the panel ships with the plugin channel, so installing the plugin is all it takes.
+If you'd rather not hand-edit `dsh-paoding.config.yml`, open the **庖丁配置 (Paoding Config)** entry in the sidebar bottom action bar (above the Settings row). It shares the exact same detection/generation pipeline (`collectState` / `generateAndInstall`) as the first-install automation and the fallback CLI — what you see is what gets written; the panel ships with the plugin channel, so installing the plugin is all it takes.
 
 ### Loading mechanism
 
 - cordis resolves the package name `dsh-paoding` from the patch row against the profile's `node_modules`;
 - DSH's client-modules node half-scan reads the package's `dsh.client` declaration and `exports["./client"]`, compiling `lib/client.js` into the browser's `__DSH_BOOT__` (served as `/plugins/paoding-config-ui/client.js`);
 - the browser core creates and activates a loader entry for every plugin in the manifest (the bundle registers as `window.__ModuleLoader__.load({ id: "paoding-config-ui", factory })`; the id equals the patch row's id);
-- the client `apply()` takes no host slot and mounts like dsh-mnemon's sidebar mode: DOM injection plus a MutationObserver self-heal inserts the 庖丁配置 entry (`data-dsh-paoding-entry`) under New Session; clicking mounts the container (`data-dsh-paoding-view`) into the session's middle column and renders the full-page configurator with `createRoot`, the open state driven by `html[data-dsh-paoding-active]`, mutually exclusive with the memory / taskboard / ssh full-page panels.
+- the client `apply()` registers the 庖丁配置 entry through the host's `sidebar.footer.action` keyed slot (`slots.register`, the same slot as the plugin-hub cordis badge, rendered in the action bar above the Settings row) rather than injecting sidebar DOM itself; the MutationObserver is only used to bridge the workspace "…" menu (recognizing the menu DOM and adding a 庖丁-config deep-link item). Clicking mounts the container (`data-dsh-paoding-view`) into the session's middle column and renders the full-page configurator with `createRoot`, the open state driven by `html[data-dsh-paoding-active]`, mutually exclusive with the memory / taskboard / ssh full-page panels.
 
 ### Data interface and security
 
-Panel data goes over the **same-origin `/api/paoding/*`**: the Node side registers prefix routes — `GET /api/paoding/state` (cached detection state), `POST /api/paoding/rescan` (forced re-detection, MCP handshakes included), `POST /api/paoding/preview` (generate without writing), `POST /api/paoding/apply` (install and save config), `POST /api/paoding/upgrade` (in-place `dsh plugin update`) — reusing the detection/generation pipeline in `tools/` (`plugins/paoding-config-ui/api-core.mjs`). The routes carry a **browser trust fence**: the Host must be loopback or listed in `webRuntime.trustedHosts`, and cross-site requests are rejected (mirroring DSH's `/api` gateway fence semantics, since the longer `/api/paoding` prefix would otherwise hit this plugin and bypass the gateway). The panel has **no separate server or port**: the DSH Web port listens on `127.0.0.1` only and is never exposed to the outside.
+Panel data goes over the **same-origin `/api/paoding/*`**: the Node side registers prefix routes — `GET /api/paoding/state` (cached detection state), `GET /api/paoding/models` (model list from the host LLM runtime), `GET` + `POST /api/paoding/workspaces` (list / add workspaces), `POST /api/paoding/rescan` (forced re-detection, MCP handshakes included), `POST /api/paoding/preview` (generate without writing), `POST /api/paoding/apply` (install and save config), `POST /api/paoding/upgrade` (in-place `dsh plugin update`), `GET /api/paoding/client.css` (statically served panel stylesheet) — reusing the detection/generation pipeline in `tools/` (`plugins/paoding-config-ui/api-core.mjs`). The routes carry a **browser trust fence**: the Host must be loopback or listed in `webRuntime.trustedHosts`, and cross-site requests are rejected (mirroring DSH's `/api` gateway fence semantics, since the longer `/api/paoding` prefix would otherwise hit this plugin and bypass the gateway). The panel has **no separate server or port**: the DSH Web port listens on `127.0.0.1` only and is never exposed to the outside.
 
 ### Panel capabilities
 
-- **State and actions**: a detection summary with chips (current profile, each MCP server and its tool count, plugin chips, skill counts, etc.); the action buttons「**保存并应用**」(Save & Apply), Preview, and Rescan sit in a sticky bottom dock, clickable from any scroll position.
+- **State and actions**: the page header is a title + version/update card (in-place new-version notice and one-click upgrade) + subtitle, and the body goes straight to the workspace and role cards with no separate detection-summary/chips section; the action buttons「**保存并应用**」(Save & Apply), Preview, and Rescan sit in a sticky bottom dock, clickable from any scroll position.
 - **Agent tool-assignment cards**: one fixed card for the main agent (unchecking a base tool adds it to `main_agent_remove`, dropping it from the main agent; checking an MCP / plugin tool adds it to `main_agent_extra`; skills in two groups, "read on demand" and "inline full text"; plus a "persona extra" editor — edit, clear, or restore the default) ＋ three built-in role cards (`search_external` / `design` / `implement`) ＋ any number of custom role cards (with a delete button); every role card presents its tools in three groups — base / MCP / plugin — with per-item checkboxes, and the persona is editable. "Create a custom agent role" at the bottom.
 - **Skill assignment**: one row per skill, check which agents it goes to (written into the matching personas as `Available skills` soft guidance; role skills are soft guidance, main-agent skills have the read-on-demand/inline groups).
 - **Preview**: generates `agent.cordis.yml` without writing, showing each role's intent → kept counts plus the full generated text.
@@ -168,14 +168,15 @@ Panel data goes over the **same-origin `/api/paoding/*`**: the Node side registe
 
 ## 7. Uninstalling
 
-Two commands, and it's gone cleanly:
+Three commands, and it's gone cleanly:
 
 ```bash
 dsh plugin --profile web remove dsh-paoding
 rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"
+rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets"/orchestrator-*
 ```
 
-The first removes the plugin and the sidebar panel (scoped to the given profile), the second deletes the orchestrator preset directory. The config file `~/.dsh/dsh-paoding.config.yml` is not removed with them — keep it or delete it, it does not affect any other DSH configuration, and a reinstall's first-install automation would apply it again.
+The first removes the plugin and the sidebar panel (scoped to the given profile), the second deletes the orchestrator preset directory, and the third removes the per-workspace preset directories (`orchestrator-<basename>`) created when you configured individual workspaces (if you never did, the glob matches nothing and it's harmless) — the base `orchestrator` directory is already gone with the previous command and is not covered by that glob. The config file `~/.dsh/dsh-paoding.config.yml` is not removed with them — keep it or delete it, it does not affect any other DSH configuration, and a reinstall's first-install automation would apply it again.
 
 Uninstalling touches nothing else on the host (MCP, plugins, sessions), and stays decoupled from DSH source code; "编排模式 (Orchestrator)" disappears from the preset selector for new sessions.
 
@@ -199,19 +200,19 @@ First confirm the plugin is installed into the profile your DSH actually runs wi
 
 **An MCP tool is missing from a role**
 
-Servers whose handshake fails or whose transport is unsupported are skipped (the report flags `handshake failed`): the role simply lacks those tools and generation raises no error. Check the server can start/connect on its own, then re-apply; known servers (tavily, codegraph) resolve from the static table without handshakes and never hit this.
+At detection every stdio / streamable-http server gets a live handshake first: an unknown server whose handshake fails is skipped entirely (the report flags `handshake failed`) and the role simply lacks those tools — generation raises no error. Known servers (tavily, codegraph) fall back to the static table when their handshake fails and keep their tools, with the report flagging a static table — seeing that flag means the server was unreachable at detection time and the table's tool face may be stale. Check the server can start/connect on its own, then re-apply.
 
 **Skills not written into a persona**
 
-Role skills can only go to roles whose allow includes `skill`; main-agent skills use `main_agent_skills` (soft rows) or `main_agent_skills_inline` (inline). A skill whose SKILL.md cannot be found (looked up per the configuration target: global scans the two user roots only, workspaces add the project-level roots — configuration guide §9) is warned about and skipped — make sure the skill is installed under one of the matching roots.
+Skills can be assigned to any role — the generation layer appends an `Available skills:` soft-guidance line to each assigned role's persona; but to actually load a skill a role needs `skill` / `read` tools of its own (a role without the `skill` tool only gets the guidance line — nothing loads). Main-agent skills use `main_agent_skills` (soft rows) or `main_agent_skills_inline` (inline). A skill whose SKILL.md cannot be found (looked up per the configuration target: global scans the two user roots only, workspaces add the project-level roots — configuration guide §9) is warned about and skipped — make sure the skill is installed under one of the matching roots.
 
 **I hand-edited the config file — how do I apply it?**
 
-Open Settings → 庖丁配置 (Paoding Config) — the panel loads the hand-edited file as its current values — and hit Save & Apply. The panel does not watch the config file, so hand edits do not take effect on their own; the version marker likewise only triggers auto-regeneration on new versions.
+Open the 庖丁配置 (Paoding Config) entry in the sidebar bottom action bar (above the Settings row) — the panel loads the hand-edited file as its current values — and hit Save & Apply. The panel does not watch the config file, so hand edits do not take effect on their own; the version marker likewise only triggers auto-regeneration on new versions.
 
 **Where is the config file?**
 
-The panel's Save & Apply writes to `$DSH_HOME/dsh-paoding.config.yml` (default `~/.dsh/dsh-paoding.config.yml`; move it with the `DSH_PAODING_CONFIG` environment variable; the fallback CLI uses `--config <file>`); the panel's status bar also shows the current path. To reset every choice: delete the file and restart DSH — first-install automation treats it as "no config" and writes the base template.
+The panel's Save & Apply writes to `$DSH_HOME/dsh-paoding.config.yml` (default `~/.dsh/dsh-paoding.config.yml`; move it with the `DSH_PAODING_CONFIG` environment variable; the fallback CLI uses `--config <file>`). To reset every choice: delete the file and restart DSH — first-install automation treats it as "no config" and writes the base template.
 
 **Cleaning up leftovers from the old npx/npm installs**
 

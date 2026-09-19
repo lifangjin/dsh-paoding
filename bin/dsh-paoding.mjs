@@ -10,7 +10,7 @@ import os from 'node:os';
 import { PROFILE_NAME_RE } from '../tools/lib/util.mjs';
 
 const REFUSE =
-  '本入口是 dsh plugin 的快捷方式，完整功能见 dsh plugin --help / 设置 → 庖丁配置';
+  '本入口是 dsh plugin 的快捷方式，完整功能见 dsh plugin --help / 侧栏底部「庖丁配置」入口';
 
 const usage = `dsh-paoding 安装快捷方式（等价于 dsh plugin --profile <name> add dsh-paoding@<version>）
 
@@ -68,7 +68,7 @@ child.on('error', (err) => {
 child.on('close', (code) => {
   if (code === 0) {
     console.log(`已通过插件通道安装到 profile ${profile ?? 'web'}。`);
-    console.log('重启 DSH 后生效——preset 会在启动时自动生成，面板入口在 Web 左侧栏「新会话」下方。');
+    console.log('重启 DSH 后生效——preset 会在启动时自动生成，面板入口在左侧栏底部（设置行上方）的「庖丁配置」入口。');
   }
   process.exitCode = code ?? 1; // 子进程退出码原样透传，别吞掉 dsh/pnpm 的失败信号
 });

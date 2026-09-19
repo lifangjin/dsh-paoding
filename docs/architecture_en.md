@@ -39,8 +39,9 @@ The essential differences from monolithic mode:
 | Cost | ~16.2k tokens tool tax paid on every request | Main agent ~5.5k; role surfaces ~3.0k–3.8k, paid only when delegated |
 | Context | Every search dump, design draft and diff accumulates in the main context | Worker contexts are small and specialized and discarded after use; the main agent receives only summaries |
 
-The static source of the composition is `presets/orchestrator/agent.cordis.yml`, layered on top of DSH's
-builtin `standard` preset in full (see the "Under the hood" section below); at runtime
+The static source of the composition is `presets/orchestrator/agent.cordis.yml`, which includes all of the
+builtin `standard` preset's composition rows verbatim — copied into the same composition, not inherited at
+runtime (see mechanism ① in the "Under the hood" section below); at runtime
 `restrict.mjs` trims the main agent's tool surface. The four role delegation instances are
 `delegation-search-external` / `delegation-design` / `delegation-implement` /
 `delegation-search-internal-deep`, all inside the composition's delegation group. That group also carries the
@@ -176,8 +177,9 @@ it in the 庖丁配置 panel), the generator produces a `delegation-<toolName>` 
 toolName into the main-agent allow list, and appends the role's persona first line (its duty sentence)
 to the main-agent persona as a delegation row (a role with no tools is rejected at apply time); see
 section 6 of [docs/configuration_en.md](configuration_en.md).
-Custom roles support the same `model` / `provider` dedicated-model sub-keys as the built-in roles (same
-sub-keys, same generation mechanism — see 2.5).
+Custom roles support the same `model` / `provider` dedicated-model sub-keys and the same `background_mode`
+session-mode sub-key as the built-in roles (same sub-keys, same generation mechanism — the generator always
+writes a `backgroundMode` row for custom role blocks, and `continuable` takes effect the same way — see 2.5 / 2.6).
 For example, a `ppt` agent carrying the `html-ppt` skill gives slide-making its own dedicated sub-agent.
 
 | Delegation tool | Instance ID | Persona in one sentence | Load cost |
@@ -194,7 +196,8 @@ name `roles.<toolName>.name`, which rewrites only the subject of its persona ide
 also be pinned to a dedicated model `roles.<toolName>.model` / `.provider`, injected by the generator as
 `agentOptions` in the delegation block, defaulting to following the main agent (2.5); and it can carry a session
 mode `roles.<toolName>.background_mode` — configured as `continuable`, the delegation block gets a
-`backgroundMode` row and the child conversation is kept across turns (2.6); the main agent's persona
+`backgroundMode` row and the child conversation is kept across turns; built-in and custom roles share the
+semantics, with the generator always writing the `backgroundMode` row for custom role blocks (2.6); the main agent's persona
 identity line cannot be renamed (the orchestrator's identity is not a configurable item); `main_agent_display_name`
 (see configuration_en.md section 5) changes only the preset display name and leaves the persona
 identity line untouched.
@@ -202,8 +205,12 @@ identity line untouched.
 ### Per-role toolFilter.allow detail
 
 The allow lists below are transcribed verbatim from `agent.cordis.yml` (at install time the generator
-rewrites each list against the whitelist "preset's own tool face ∪ runtime detection inventory"; names in
-neither are dropped with a stated reason, see
+rewrites only the three configurable roles' allow lists — `search_external` / `design` / `implement` —
+against the whitelist "preset's own tool face ∪ runtime detection inventory"; names in neither are dropped
+with a stated reason in the Preview removed list. `search_internal_deep` is a static delegation whose allow
+list is **not** reconciled against the inventory: hand-written names that belong to neither are kept, land
+on disk silently, and fail at runtime with unknown tools at child creation — same caveat as the codegraph
+note for that role below; see
 [docs/configuration_en.md](configuration_en.md)).
 
 **`search_external` (external research, 10 entries)**

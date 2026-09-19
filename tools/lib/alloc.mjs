@@ -74,8 +74,8 @@ export function keywords(names, pattern) {
 /**
  * 基础模板 assignments（fresh 非交互安装的默认起点）：每个内置角色保留静态
  * preset 的 dsh 基础工具，host/MCP 工具一概不纳入 —— 首装（插件通道启动自愈
- * 或 --auto）先装完可用基础版，host 工具留给用户在 设置 → 庖丁配置 里显式
- * 开启，避免智能默认把检测到的 host 工具静默塞进委派链。形状与 smartDefaults
+ * 或 --auto）先装完可用基础版，host 工具留给用户在侧栏底部「庖丁配置」入口
+ * 里显式开启，避免智能默认把检测到的 host 工具静默塞进委派链。形状与 smartDefaults
  * 返回值完全一致，生成层 / 序列化层无需区分来源；staticBase 复制而非别名，
  * 防调用方原地改写。每个内置角色条目显式带 background_mode: 'one-shot'，随
  * serializeConfig 恒写出 —— fresh 落盘的配置文件里旋钮可见。

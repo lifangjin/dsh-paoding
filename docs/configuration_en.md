@@ -28,7 +28,7 @@ Fallback-CLI precedence: an explicit `--profile` overrides the `profile` key in 
 
 ### 1.2 Top-level keys
 
-The key names below match `normalizeConfig` in `tools/install.mjs` — the single authoritative source of the config file schema.
+The key names below match `normalizeConfig` in `tools/lib/config.mjs` — the single authoritative source of the config file schema (`tools/install.mjs` only re-exports it).
 
 | Top-level key | Type | Semantics |
 |---|---|---|
@@ -55,14 +55,14 @@ The key names below match `normalizeConfig` in `tools/install.mjs` — the singl
 - Keys under `roles` outside the built-in trio are **custom roles** (section 6). Do not put the static role `search_internal_deep` under `roles` (see 2.2).
 - Built-in roles can be **deleted wholesale**: the `roles_remove` key accepts only the trio's names — deletion effect, consistency with the `roles` key, and the restore paths are in 2.3.
 
-When `main_agent_extra` is absent or empty it falls back to the smart defaults of the current run (detected codegraph / `memory_search` tools land on the main agent) — which is why, with no configuration at all, the main agent can still call the codegraph tools directly.
+When the `main_agent_extra` **key is missing** (older configs / never written) it falls back to the smart defaults of the current run (detected codegraph / `memory_search` tools land on the main agent); an **explicit `main_agent_extra: []` means "no host tools, deliberately" and no longer falls back** — the base template written by a fresh first install is exactly this explicit `main_agent_extra: []` form and carries no host tools at all (codegraph and friends become usable only after being opted in via config or the panel).
 
 ### 1.3 Complete minimal example
 
 A config file covering all commonly used keys (the key order matches `serializeConfig`, which is what the panel writes):
 
 ```yaml
-# dsh-paoding installation config — hand-editable; after editing, apply in Settings → 庖丁配置 (Paoding Config), or re-run node tools/install.mjs --auto.
+# dsh-paoding installation config — hand-editable; after editing, apply via the 庖丁配置 (Paoding Config) entry at the sidebar bottom, or re-run node tools/install.mjs --auto.
 
 profile: web            # scan profiles/<profile>/cordis.patch.yml during detection
 
@@ -84,7 +84,7 @@ roles:                  # toolName -> { persona?, tools[] }
   design:               # change the persona only; empty tools = keep the static allow
     persona: |-
       You are the design agent. Produce UI/UX designs and specs; never implement final code.
-  code-reviewer:        # custom role (toolName matches /^[a-z][a-z0-9_]*$/)
+  code-reviewer:        # custom role (toolName matches /^[a-z][a-z0-9_-]{1,31}$/)
     persona: |-
       You are the code-reviewer agent. Review diffs and files for bugs, security
       issues and style regressions; report a prioritized list with file:line.
@@ -309,9 +309,9 @@ main_agent_extra:
 
 Points:
 
-- The entries land in the generated `orchestrator-restrict config.allow`. Injection follows the same whitelist: a name must belong to the **preset's own tool face** (the `restrict.mjs` main-agent allow ∪ the static role allows in the source preset) or to the **detection inventory**, and host tools (`mcp__*`, plugin tools like `mnemon_*`) go by what was actually detected — undetected names (MCP/plugin disabled, typo) are silently not injected, and the removed list in Preview shows the reason.
+- The entries land in the generated `orchestrator-restrict config.allow`. Injection follows the same whitelist: a name must belong to the **preset's own tool face** (the `restrict.mjs` main-agent allow ∪ the static role allows in the source preset) or to the **detection inventory**, and host tools (`mcp__*`, plugin tools like `mnemon_*`) go by what was actually detected — undetected names (MCP/plugin disabled, typo) are silently not injected. Note that the removed list in Preview only covers the **role allow** reconciliation; names dropped from `main_agent_extra` are only counted in the CLI output summary, with no per-name detail (read the final main-agent allow in the preview for details).
 - The concrete MCP / plugin tools checkable on the panel's "main agent" card are those shown by the detection results (the tool pool).
-- When `main_agent_extra` is absent or empty the generator falls back to smart defaults (detected codegraph / `memory_search` tools are suggested for the main agent).
+- When the `main_agent_extra` **key is missing** the generator falls back to smart defaults (detected codegraph / `memory_search` tools are suggested for the main agent); an explicit `main_agent_extra: []` means no host tools, deliberately, with no fallback (the fresh-install base template is exactly this form).
 
 ### 3.3 Removing base tools: main_agent_remove
 
@@ -431,11 +431,11 @@ Where to set it:
 | Explicit `''` | **Append nothing** (not even the default rule) |
 | Any other text | **Overrides** the default with your text |
 
-Serialization: `''` is written out explicitly as `main_agent_persona_extra: ''` (distinct from an absent key); multi-line text is written as a `|-` block scalar. `normalizeConfig` in `tools/install.mjs` accepts only strings (a non-string or an absent key normalizes to `null`).
+Serialization: `''` is written out explicitly as `main_agent_persona_extra: ''` (distinct from an absent key); multi-line text is written as a `|-` block scalar. `normalizeConfig` in `tools/lib/config.mjs` accepts only strings (a non-string or an absent key normalizes to `null`).
 
 ### 5.3 The default constant, verbatim
 
-The single source of truth is `DEFAULT_MAIN_AGENT_PERSONA_EXTRA` in `tools/install.mjs`; `presets/orchestrator/agent.cordis.yml` no longer embeds the line. The default value, verbatim:
+The single source of truth is `DEFAULT_MAIN_AGENT_PERSONA_EXTRA` in `tools/lib/util.mjs` (`tools/install.mjs` only re-exports it); `presets/orchestrator/agent.cordis.yml` no longer embeds the line. The default value, verbatim:
 
 > Codegraph MCP default project may be a DIFFERENT repository than {{cwd}}. Never call codegraph_* tools without passing projectPath = {{cwd}} (the absolute path of your working directory). If {{cwd}} has no .codegraph index, fall back to glob/grep/read directly and do not loop or comment on project mismatches.
 
@@ -473,7 +473,7 @@ main agent's only routing hint for the role, so make the persona's first line a 
 
 The panel flow (庖丁配置 in the left sidebar → agent tool assignment → "Create a custom agent role" at the bottom):
 
-1. Create a role: enter a `toolName` matching `/^[a-z][a-z0-9_]*$/`;
+1. Create a role: enter a `toolName` matching `/^[a-z][a-z0-9_-]{1,31}$/` (2–32 chars: a lowercase letter first, then lowercase letters / digits / underscores / hyphens; the installer additionally rejects reserved names, the `mcp__` prefix and YAML literals);
 2. Multi-select tools from the tool pool (the trio's static allows ∪ detected MCP / plugin tools);
 3. Write a persona (a full persona is accepted; make the first line a short duty sentence);
 4. Hit Save & Apply — the generator automatically injects the new `toolName` into the main agent's `orchestrator-restrict config.allow` — **`restrict.mjs` itself is never touched** — and persists the assignment to the config file (a new entry under the `roles` key).
@@ -626,7 +626,7 @@ workspaces:
 ### 9.2 Preset naming
 
 - The **slug** comes from the workspace directory's basename: lowercased, invalid characters collapsed to `-`; if that yields an empty string or exactly `orchestrator` (colliding with the global preset), `ws` is used instead.
-- When multiple workspaces share a basename, a path-hash suffix (first 6 hex chars of sha1) is appended — two projects both named `Shop` become `orchestrator-shop-acd95b` and `orchestrator-shop-34b6aa`. Rename or move the directory and re-apply; stale preset directories are not cleaned automatically — remove the ones you no longer want on the DSH presets page.
+- When multiple workspaces share a basename, a path-hash suffix (first 6 hex chars of sha1) is appended — two projects both named `Shop` become `orchestrator-shop-acd95b` and `orchestrator-shop-34b6aa`. Rename or move the directory and re-apply. While the old-path entry remains in the config's `workspaces` section, the stale preset directory is kept; once the entry is removed, the next successful apply automatically recycles the orphan preset (rmSync + a visible warning) — no manual deletion needed.
 - Preset display name: the entry's `main_agent_display_name` if set; otherwise the default name gets the `·<basename>` suffix (e.g. `编排模式 (Orchestrator)·Shop`) so entries are distinguishable at a glance in the roster.
 
 ### 9.3 Using the panel

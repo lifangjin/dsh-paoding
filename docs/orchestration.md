@@ -22,19 +22,19 @@ dsh-paoding 把 DSH 从「单体 agent 全量加载工具」改造成「主 agen
 | 子 agent 管理 | `send_message` / `list_agents` / `interrupt_agent` |
 | 内部搜索（热路径） | `glob` / `grep` / `read` / `read_image` / `bash` |
 | 协调 | `todo_write` / `ask_user_question` / `get_goal` / `create_goal` / `update_goal` / `exit_plan_mode` / `job_output` / `job_list` / `job_kill` |
-| 主 agent 刻意看不到 | `web_search`、`mcp__tavily__*`、`write` / `edit`、`skill`、`workflow`、`ralph`、裸 `subagent` / `subagent_fork` |
+| 主 agent 刻意看不到（节选，全文见 `restrict.mjs` 头注释） | `web_search`、`mcp__tavily__*`、`write` / `edit` / `str_replace_editor`、`skill`、`workflow`、`ralph`、`ssh_*`、`mcp__tablepro__*`、`describe_image`、裸 `subagent` / `subagent_fork` |
 
 每请求工具开销（估算，随注册面浮动）：主 agent 全量 ~16.2k tokens → 白名单后 ~5.5k；`search_external` ~3.0k / `design` ~3.3k / `implement` ~3.8k，仅在真正委派时发生（数值来源：`agent.cordis.yml` 头部注释）。
 
 ### 主 agent persona（编排人设）原文摘录
 
-来自 `presets/orchestrator/agent.cordis.yml` 的 `- id: persona` 行（YAML `text: |-` 块标量，内容行缩进 6 空格）。编排与委派的总指引（persona 原文为英文，照录如下）：
+来自 `presets/orchestrator/agent.cordis.yml` 的 `- id: persona` 行（YAML `prefix: |-` 块标量，内容行缩进 6 空格；v0.3.0 起 persona 配置键为 `prefix`，`text` 是生成器兼容的旧名）。编排与委派的总指引（persona 原文为英文，照录如下）：
 
 ```text
 You are the orchestrator agent powered by the {{model}} model. Your working directory is {{cwd}}.
 
 Decompose the task, delegate to role agents, integrate results.
-- Internal file questions (finding code, references, reading files): solve yourself with glob/grep/read/codegraph — never delegate them.
+- Internal file questions (finding code, references, reading files): solve yourself with glob/grep/read (and codegraph if enabled) — never delegate them.
 - External research: delegate to search_external.
 - UI/design work: delegate to design.
 - Code implementation: delegate to implement.
@@ -44,7 +44,7 @@ Keep your own context lean; integrate only summaries. Use todo_write to plan, an
 中文释意：
 
 - 主 agent 是编排者：**拆解 → 委派 → 集成**三步循环，而不是自己把活全干完。
-- 「内部文件问题（找代码、查引用、读文件）自己用 glob/grep/read/codegraph 解决，**绝不委派**」——内部搜索是热路径，委派有往返与冷启动成本，主 agent 自带全套只读工具，直达即可。（注：`codegraph` 属 host MCP 工具，需运行时注入白名单才可用，见上。）
+- 「内部文件问题（找代码、查引用、读文件）自己用 glob/grep/read（启用 codegraph 时含 codegraph）解决，**绝不委派**」——内部搜索是热路径，委派有往返与冷启动成本，主 agent 自带全套只读工具，直达即可。（注：`codegraph` 属 host MCP 工具，需安装期检测到并经 `main_agent_extra` 显式注入才可用，见上。）
 - 任务纹理决定去向：联网 → `search_external`；UI/设计 → `design`；代码 → `implement`（全仓探索 → `search_internal_deep`）。
 - **保持自己上下文精简**：只集成摘要；用 `todo_write` 规划；`ask_user_question` 只用于用户拥有的选择，可自查的问题不打扰用户。
 - 失败处理 SOP 内联在 persona 里，随会话天然生效、无需额外配置——见下节。
@@ -61,9 +61,9 @@ DSH 没有原生自动重试——恢复是编排层的职责，具体地说就�
 
 子 agent 创建时，DSH 会对 `toolFilter.allow` 做 `tools.restrict()` 校验：allow 里的每个名字必须存在于子 agent 可见注册面（= 本组合注册全量 + host 层 MCP/插件工具）内，否则**创建被拒**（`tools.restrict() ... unknown tools`）。
 
-本 preset 在生成期消除这类失败：生成器（面板「保存并应用」与兜底 CLI 共用同一管线）读取 host patch 层（home / profile / `--patch`），检测实际启用的 MCP 服务器与本地工具插件，解析出精确工具名（静态已知表优先，未知服务器走实时 JSON-RPC 握手），然后把各角色 allow 重写为「静态意图 ∩ 实际检测到的工具」——组合保证的基础工具原样保留，未启用/无法解析的 host 工具被剔除。握手失败或 transport 不支持的 MCP 会被跳过：对应角色只是缺这些工具，应用不报错。宿主停用/启用了 MCP 或插件后，到「庖丁配置」点一次「保存并应用」即可同步 allow（「预览生成」先看清单）。细节见[安装](installation.md)。
+本 preset 在生成期消除这类失败：生成器（面板「保存并应用」与兜底 CLI 共用同一管线）读取 host patch 层（home / profile / `--patch`），检测实际启用的 MCP 服务器与本地工具插件，解析出精确工具名（一律先实时 JSON-RPC 握手，已知服务器握手失败才回落静态表兜底），然后把 search_external / design / implement 三个可配角色的 allow 重写为「静态意图 ∩ 实际检测到的工具」——组合保证的基础工具原样保留，未启用/无法解析的 host 工具被剔除。未知服务器握手失败或 transport 不支持才整服务器跳过（已知服务器握手失败回落静态表、工具保留）：对应角色只是缺这些工具，应用不报错。宿主停用/启用了 MCP 或插件后，到「庖丁配置」点一次「保存并应用」即可同步 allow（「预览生成」先看清单）。细节见[安装](installation.md)。
 
-注意：生成器的 allow 重写只覆盖三个内置角色（`search_external` / `design` / `implement`，`tools/install.mjs` 的 `ROLES` 常量）。手写新增的 `delegation-*` 块（例如第 4 节手编的 `implement_cont`）**原样生效、不会被自动清洗**——其中的 host 依赖工具名必须自己与宿主实际启用的插件保持同步，否则创建被拒。这正是 2026-09-02 起各角色 allow 剔除 `memory_search` / `mcp__codegraph__codegraph_explore` 的原因（插件停用时这些名字不在注册面；重开插件时按需加回，见 `agent.cordis.yml` 中 `delegation-search-internal-deep` 的注释）。
+注意：生成器的 allow 重写只覆盖三个内置角色（`search_external` / `design` / `implement`，`tools/lib/util.mjs` 的 `ROLES` 常量，`tools/install.mjs` 转出口）。手写新增的 `delegation-*` 块（例如第 4 节手编的 `implement_cont`）**原样生效、不会被自动清洗**——其中的 host 依赖工具名必须自己与宿主实际启用的插件保持同步，否则创建被拒。这正是 2026-09-02 起各角色 allow 剔除 `memory_search` / `mcp__codegraph__codegraph_explore` 的原因（插件停用时这些名字不在注册面；重开插件时按需加回，见 `agent.cordis.yml` 中 `delegation-search-internal-deep` 的注释）。
 
 ### 第 2 层：检测
 
@@ -94,6 +94,11 @@ Delegation failure handling (SOP):
   · aborted → only re-delegate when the cancellation was accidental.
   · completed but poor output → re-delegate with concrete missing points, or send_message
     to ask a continuable child to finish the gaps.
+- Continuable roles (background_mode: continuable): when a delegated run fails or
+  the output falls short, first send_message in the SAME child session to continue
+  and fix in place — resuming keeps the child's accumulated context, while
+  re-delegating starts a cold task and repeats finished work. Only re-delegate
+  when the child session is gone or the task needs a different role.
 - If the same task fails twice, stop retrying: report to the user what failed, why,
   and what you already tried. Never loop a failing delegation.
 - When re-delegating (fresh task or continuation), always include your integration
@@ -113,9 +118,9 @@ Delegation failure handling (SOP):
 | 同一任务失败 **2 次** | 停止重试，向用户报告失败原因与已尝试方案；绝不循环一个失败的委派 |
 | 任何重委派 | **必须携带上次的集成摘要**：做了什么 / 败在哪 / 从哪接续——子 agent 无需从冷上下文重新推导 |
 
-continuable 分支（SOP 新增）：失败或产出不满、**且该角色已配成 continuable** 时，先 `send_message` 在同一子会话续修——子 agent 记得自己做到哪，就地补完；续修无效再回到上表按停止原因重委派（重委派从首选退为退路）。
+continuable 分支：失败或产出不满、**且该角色已配成 continuable** 时，先 `send_message` 在同一子会话续修——子 agent 记得自己做到哪，就地补完；子会话已不在、或任务需要换角色时才重委派（即 persona SOP 中 Continuable roles 条目的口径）；续修无效再回到上表按停止原因重委派（重委派从首选退为退路）。
 
-设计要点：SOP 是 persona 文本而非代码逻辑，因此可以按需编辑——直接改 `presets/orchestrator/agent.cordis.yml` 中 persona 段落（YAML 块标量，内容行缩进 10 空格，注意保持缩进），再到「庖丁配置」点「保存并应用」重新生成。例如想让失败任务更频繁地退回主 agent 自己做、或对某个角色采用不同的重试上限，都可在此调整。
+设计要点：SOP 是 persona 文本而非代码逻辑，因此可以按需编辑——直接改 `presets/orchestrator/agent.cordis.yml` 中 persona 段落（YAML 块标量，内容行缩进 6 空格，注意保持缩进），再到「庖丁配置」点「保存并应用」重新生成。例如想让失败任务更频繁地退回主 agent 自己做、或对某个角色采用不同的重试上限，都可在此调整。
 
 ## one-shot 与多轮迭代
 
@@ -153,7 +158,7 @@ continuable 不是免费的，启用前请确认以下四点：
 
 ## 进阶：免面板手编 implement_cont
 
-路径 B 的主路径在面板与配置键——角色卡「会话模式」一键可达（见[配置](configuration.md) 2.6）。本节是等价的免面板手编路径，共 5 步，供想看清生成层到底写了什么、或在不起面板的环境里操作时使用。默认 preset **不含** `implement_cont`——需要时自行启用，用完可整体移除。所有 YAML 均为配置原文（来自 [README.md](../README.md) 的示例，已与源码核对）。
+路径 B 的主路径在面板与配置键——角色卡「会话模式」一键可达（见[配置](configuration.md) 2.6）。本节是等价的免面板手编路径，共 5 步，供想看清生成层到底写了什么、或在不起面板的环境里操作时使用。默认 preset **不含** `implement_cont`——需要时自行启用，用完可整体移除。所有 YAML 均为配置原文（与 preset 内 delegation 块结构一致，已与源码核对）。
 
 ### 第 1 步 —— host 层挂 persistence 后端（机器级，全局生效）
 
@@ -214,28 +219,19 @@ continuable 不是免费的，启用前请确认以下四点：
 - `memory_search` 依赖 host 层的 magic-memory 插件：**插件未启用时必须从 allow 删去该行**，否则子 agent 创建时 `tools.restrict()` 以 unknown tools 拒绝创建。这与 2026-09-02 起各角色 allow 剔除 `memory_search` / `mcp__codegraph__codegraph_explore` 的决策一致（见 `agent.cordis.yml` 内注释）；且安装器的 allow 重写只覆盖三个内置角色，**手写的 `implement_cont` 块不会被自动清洗**——它自己的 allow 必须手工与宿主实际启用的插件保持同步。
 - persona 用 YAML `|-` 块标量，内容行缩进 10 空格，改文本时保持缩进。
 
-### 第 3 步 —— 让主 agent 能调 `implement_cont`（二选一）
+### 第 3 步 —— 让主 agent 能调 `implement_cont`（编辑 restrict 常量）
 
-主 agent 只能调用白名单内的工具，二选一：
+主 agent 只能调用白名单内的工具。首选直接编辑 `presets/orchestrator/restrict.mjs` 的 `MAIN_AGENT_ALLOW`（21 项白名单常量，`new Set([...])`），在其中加一行 `'implement_cont'`（改的是 SRC，改完需重新应用，见第 4 步）。
 
-- **推荐：配置文件注入（不动源码）。** 在 `~/.dsh/dsh-paoding.config.yml` 顶层加：
+为什么不走配置文件：`main_agent_extra` 的注入走白名单对账——名字必须落在 **presetUniverse**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 各角色 allow）或**检测库存**里才会保留，两头都不占的名字一律剔除。`implement_cont` 这类自定义委派名恰好两头都不占：写进 `main_agent_extra` 会被生成器丢弃（CLI 输出只汇总数量、不列明细），面板「主 agent」卡也勾不到它。想让配置层路径生效，手写名必须先存在于 presetUniverse / 检测库存之中。
 
-  ```yaml
-  main_agent_extra:
-    - implement_cont
-  ```
-
-  应用时 `implement_cont`（非 host 依赖名）会被并入生成的 `config.allow`。也可在面板（设置 → **庖丁配置** → 主 agent 卡）勾选，见[配置](configuration.md)。
-
-- **或：改 `restrict.mjs` 常量。** 在 `presets/orchestrator/restrict.mjs` 的 `MAIN_AGENT_ALLOW`（21 项白名单常量，`new Set([...])`）中加一行 `'implement_cont'`。注意**覆盖语义**：运行时 `allow = config.allow ?? MAIN_AGENT_ALLOW`（空 allow 拒绝加载）。生成器从 `restrict.mjs` 源码现场解析该常量作为 base，生成 `config.allow = base + main_agent_extra（仅检测到的 host 名保留）− main_agent_remove`，且**只在结果与 base 不同时才注入** `config.allow` 行。因此：改完常量必须重新应用（base 重新解析、安装副本刷新）；若运行中的 `agent.cordis.yml` 已有注入的 `config.allow`，运行时以它为准、常量只作回退。
-
-无论哪条路，改完都需要重新应用（见第 4 步）。
+注意**覆盖语义**：运行时 `allow = config.allow ?? MAIN_AGENT_ALLOW`（空 allow 拒绝加载）。生成器从 `restrict.mjs` 源码现场解析该常量作为 base，生成 `config.allow = (base + main_agent_extra − main_agent_remove) ∩ (presetUniverse ∪ inventory)`，且**只在结果与 base 不同时才注入** `config.allow` 行。因此：改完常量必须重新应用（base 重新解析、安装副本刷新）；若运行中的 `agent.cordis.yml` 已有注入的 `config.allow`，运行时以它为准、常量只作回退。
 
 ### 第 4 步 —— 应用
 
-打开 设置 → **庖丁配置**，点「**保存并应用**」——重新生成 preset（含新 delegation 块与白名单变更），并把手编改动一并应用。
+打开左侧栏底部动作条（设置行上方）的「**庖丁配置**」入口，点「**保存并应用**」——重新生成 preset（含新 delegation 块与白名单变更），并把手编改动一并应用。
 
-然后**重启 host 或新建会话**生效。第 3 步若走了配置文件路径，配置会持久化到 `~/.dsh/dsh-paoding.config.yml`，之后改动配置同样在面板点「保存并应用」幂等应用（克隆了仓库的开发者也可用兜底 CLI `node tools/install.mjs --auto`）。
+然后**重启 host 或新建会话**生效。之后改动配置同样在「庖丁配置」点「保存并应用」幂等应用（克隆了仓库的开发者也可用兜底 CLI `node tools/install.mjs --auto`）。
 
 ### 第 5 步 —— 用后清理
 

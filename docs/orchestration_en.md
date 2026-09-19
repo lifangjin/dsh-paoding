@@ -22,19 +22,19 @@ The main agent's model-facing surface is narrowed by `restrict.mjs` on the `syst
 | Child management | `send_message` / `list_agents` / `interrupt_agent` |
 | Internal search (hot path) | `glob` / `grep` / `read` / `read_image` / `bash` |
 | Coordination | `todo_write` / `ask_user_question` / `get_goal` / `create_goal` / `update_goal` / `exit_plan_mode` / `job_output` / `job_list` / `job_kill` |
-| Deliberately hidden from the main agent | `web_search`, `mcp__tavily__*`, `write` / `edit`, `skill`, `workflow`, `ralph`, bare `subagent` / `subagent_fork` |
+| Deliberately hidden from the main agent (excerpt; full list in the `restrict.mjs` header comment) | `web_search`, `mcp__tavily__*`, `write` / `edit` / `str_replace_editor`, `skill`, `workflow`, `ralph`, `ssh_*`, `mcp__tablepro__*`, `describe_image`, bare `subagent` / `subagent_fork` |
 
 Per-request tool tax (estimates; they float with the registered surface): full monolithic main agent ~16.2k tokens → ~5.5k after the allow list; `search_external` ~3.0k / `design` ~3.3k / `implement` ~3.8k, incurred only when actually delegated (figures from the header comment of `agent.cordis.yml`).
 
 ### Main-agent persona (excerpt, verbatim)
 
-Taken from the `- id: persona` row of `presets/orchestrator/agent.cordis.yml` (a YAML `text: |-` block scalar whose content lines are indented 6 spaces). The overall orchestration-and-delegation guidance:
+Taken from the `- id: persona` row of `presets/orchestrator/agent.cordis.yml` (a YAML `prefix: |-` block scalar whose content lines are indented 6 spaces; as of v0.3.0 the persona config key is `prefix`, with `text` kept as a legacy alias the generator still accepts). The overall orchestration-and-delegation guidance:
 
 ```text
 You are the orchestrator agent powered by the {{model}} model. Your working directory is {{cwd}}.
 
 Decompose the task, delegate to role agents, integrate results.
-- Internal file questions (finding code, references, reading files): solve yourself with glob/grep/read/codegraph — never delegate them.
+- Internal file questions (finding code, references, reading files): solve yourself with glob/grep/read (and codegraph if enabled) — never delegate them.
 - External research: delegate to search_external.
 - UI/design work: delegate to design.
 - Code implementation: delegate to implement.
@@ -44,7 +44,7 @@ Keep your own context lean; integrate only summaries. Use todo_write to plan, an
 Reading notes:
 
 - The main agent is an orchestrator running the **decompose → delegate → integrate** loop rather than doing everything itself.
-- "Internal file questions (finding code, references, reading files): solve yourself with glob/grep/read/codegraph — **never delegate them**": internal search is the hot path — delegation costs round-trips and cold starts, and the main agent already carries a full read-only set, so it goes direct. (Note: `codegraph` is a host MCP tool and is only usable once injected into the allow list at runtime, see above.)
+- "Internal file questions (finding code, references, reading files): solve yourself with glob/grep/read (and codegraph if enabled) — **never delegate them**": internal search is the hot path — delegation costs round-trips and cold starts, and the main agent already carries a full read-only set, so it goes direct. (Note: `codegraph` is a host MCP tool and only becomes usable when install-time detection finds it and it is explicitly injected via `main_agent_extra`, see above.)
 - Task texture decides the destination: networked research → `search_external`; UI/design → `design`; code → `implement` (whole-repo exploration → `search_internal_deep`).
 - **Keep your own context lean**: integrate only summaries; plan with `todo_write`; use `ask_user_question` only for user-owned choices — questions that inspection can answer must not bother the user.
 - The failure-handling SOP lives inline in the persona, so it is active in every session with zero extra configuration — see the next section.
@@ -61,9 +61,9 @@ A delegated run reports failure in two runtime shapes (verbatim from the persona
 
 At child creation, DSH validates `toolFilter.allow` through `tools.restrict()`: every allow name must exist in the child's visible registry (= this composition's full registration plus host-layer MCP/plugin tools), otherwise creation is rejected (`tools.restrict() ... unknown tools`).
 
-The preset eliminates this class of failure at generation time: the generator (the same pipeline behind the panel's Save & Apply and the fallback CLI) reads the host patch layers (home / profile / `--patch`), detects which MCP servers and local tool plugins are actually enabled, resolves exact tool names (a static known-tools table first, then a live JSON-RPC handshake for unknown servers), and rewrites each role's allow list as "static intent ∩ actually detected tools" — composition-guaranteed base tools stay untouched, host tools that are disabled or unresolvable are removed. MCPs that fail the handshake or use an unsupported transport are skipped: the role simply lacks those tools and applying does not error. After enabling/disabling MCPs or plugins on the host, hit Save & Apply once in 庖丁配置 to sync the allow lists (Preview shows the list first). Details in [Installation](installation_en.md).
+The preset eliminates this class of failure at generation time: the generator (the same pipeline behind the panel's Save & Apply and the fallback CLI) reads the host patch layers (home / profile / `--patch`), detects which MCP servers and local tool plugins are actually enabled, resolves exact tool names (a live JSON-RPC handshake first for every server; known servers fall back to the static known-tools table only when the handshake fails), and rewrites the allow lists of the three configurable roles (search_external / design / implement) as "static intent ∩ actually detected tools" — composition-guaranteed base tools stay untouched, host tools that are disabled or unresolvable are removed. Only unknown servers that fail the handshake or use an unsupported transport are skipped entirely (known servers keep their table tools on handshake failure): the role simply lacks those tools and applying does not error. After enabling/disabling MCPs or plugins on the host, hit Save & Apply once in 庖丁配置 to sync the allow lists (Preview shows the list first). Details in [Installation](installation_en.md).
 
-Note that the generator's allow rewriting covers only the three built-in roles (`search_external` / `design` / `implement` — the `ROLES` constant in tools/install.mjs). Hand-written extra `delegation-*` blocks (e.g. the hand-written `implement_cont` in section 4) ship **as-is and are never auto-cleaned**: host-dependent names inside them must be kept in sync with the plugins actually enabled on the host, or child creation is rejected. That is exactly why role allow lists dropped `memory_search` / `mcp__codegraph__codegraph_explore` as of 2026-09-02 (those names are not in the registry while the plugins are off; add them back when you re-enable the plugin — see the comment on `delegation-search-internal-deep` in `agent.cordis.yml`).
+Note that the generator's allow rewriting covers only the three built-in roles (`search_external` / `design` / `implement` — the `ROLES` constant in `tools/lib/util.mjs`, re-exported by `tools/install.mjs`). Hand-written extra `delegation-*` blocks (e.g. the hand-written `implement_cont` in section 4) ship **as-is and are never auto-cleaned**: host-dependent names inside them must be kept in sync with the plugins actually enabled on the host, or child creation is rejected. That is exactly why role allow lists dropped `memory_search` / `mcp__codegraph__codegraph_explore` as of 2026-09-02 (those names are not in the registry while the plugins are off; add them back when you re-enable the plugin — see the comment on `delegation-search-internal-deep` in `agent.cordis.yml`).
 
 ### Layer 2: detection
 
@@ -94,6 +94,11 @@ Delegation failure handling (SOP):
   · aborted → only re-delegate when the cancellation was accidental.
   · completed but poor output → re-delegate with concrete missing points, or send_message
     to ask a continuable child to finish the gaps.
+- Continuable roles (background_mode: continuable): when a delegated run fails or
+  the output falls short, first send_message in the SAME child session to continue
+  and fix in place — resuming keeps the child's accumulated context, while
+  re-delegating starts a cold task and repeats finished work. Only re-delegate
+  when the child session is gone or the task needs a different role.
 - If the same task fails twice, stop retrying: report to the user what failed, why,
   and what you already tried. Never loop a failing delegation.
 - When re-delegating (fresh task or continuation), always include your integration
@@ -113,9 +118,9 @@ Behavior by stop reason (complete coverage, one-to-one with the persona):
 | Same task fails **twice** | Stop retrying; report to the user what failed, why, and what you already tried; never loop a failing delegation |
 | Any re-delegation | **Always carry the previous integration summary** — what was done, what failed, what to pick up from — so the child never re-derives it from a cold context |
 
-The continuable branch (new in the SOP): when a run fails or the output disappoints **and the role is configured continuable**, first resume the same child conversation with `send_message` — the child remembers where it left off and finishes in place; only if that does not help fall back to the table above and re-delegate (re-delegation drops from first choice to fallback).
+The continuable branch: when a run fails or the output disappoints **and the role is configured continuable**, first resume the same child conversation with `send_message` — the child remembers where it left off and finishes in place; re-delegate only when the child session is gone or the task needs a different role (the same wording as the Continuable roles entry in the persona SOP); otherwise fall back to the table above (re-delegation drops from first choice to fallback).
 
-Design note: the SOP is persona text, not code, so it is tunable: edit the persona block in `presets/orchestrator/agent.cordis.yml` (YAML block scalar; content lines are indented 10 spaces — keep the indentation), then hit Save & Apply in 庖丁配置 to regenerate. For example, you can make failures bounce back to the main agent more often, or give a specific role a different retry ceiling.
+Design note: the SOP is persona text, not code, so it is tunable: edit the persona block in `presets/orchestrator/agent.cordis.yml` (YAML block scalar; content lines are indented 6 spaces — keep the indentation), then hit Save & Apply in 庖丁配置 to regenerate. For example, you can make failures bounce back to the main agent more often, or give a specific role a different retry ceiling.
 
 ## One-shot vs continuable
 
@@ -153,7 +158,7 @@ Quick comparison:
 
 ## Advanced: hand-editing implement_cont (no panel)
 
-The main path for Path B is the panel or the config key — one toggle on the role card's「会话模式」("session mode") control (see [Configuration](configuration_en.md) 2.6). This section is the equivalent panel-free route, in 5 steps — read it when you want to see exactly what the generation layer writes, or when working without the panel. The default preset does **not** ship `implement_cont`; enable it when you need it and remove it entirely when you no longer do. All YAML below is verbatim configuration (adapted from the example in [README.md](../README_en.md) and checked against the source).
+The main path for Path B is the panel or the config key — one toggle on the role card's「会话模式」("session mode") control (see [Configuration](configuration_en.md) 2.6). This section is the equivalent panel-free route, in 5 steps — read it when you want to see exactly what the generation layer writes, or when working without the panel. The default preset does **not** ship `implement_cont`; enable it when you need it and remove it entirely when you no longer do. All YAML below is verbatim configuration (structured like the preset's delegation blocks and checked against the source).
 
 ### Step 1 — mount the persistence backend at the host layer (machine-level, global)
 
@@ -215,28 +220,19 @@ Two caveats:
 - `memory_search` depends on the host magic-memory plugin: **if the plugin is not enabled, remove that line from the allow list** or child creation is rejected by `tools.restrict()` with unknown tools. This is consistent with the 2026-09-02 decision to strip `memory_search` / `mcp__codegraph__codegraph_explore` from role allow lists (see the in-file comment in `agent.cordis.yml`); and since the installer's allow rewriting covers only the three built-in roles, the hand-written `implement_cont` block is **never auto-cleaned** — keep its allow list in sync with the plugins actually enabled on the host by hand.
 - The persona in the block above is a YAML `|-` block scalar whose content lines are indented 10 spaces; preserve the indentation when editing the text.
 
-### Step 3 — let the main agent call `implement_cont` (pick one of two)
+### Step 3 — let the main agent call `implement_cont` (edit the restrict constant)
 
-The main agent can only call tools on its allow list; you have two ways to add `implement_cont`.
+The main agent can only call tools on its allow list. The preferred way is to edit the `MAIN_AGENT_ALLOW` constant directly — add a line `'implement_cont'` to `MAIN_AGENT_ALLOW` (the 21-entry allow constant, `new Set([...])`) in `presets/orchestrator/restrict.mjs` (this edits the SRC, so you must re-apply afterwards, see step 4).
 
-**Recommended: config-file injection (no source edit).** Add `main_agent_extra` at the top level of `~/.dsh/dsh-paoding.config.yml`:
+Why the config file is not an option here: `main_agent_extra` injections go through the whitelist reconciliation — a name is kept only if it belongs to the **presetUniverse** (the `restrict.mjs` main-agent allow ∪ the source preset's role allows) or to the **detection inventory**; names in neither are always dropped. A custom delegation name like `implement_cont` falls in neither bucket: written under `main_agent_extra` it is silently dropped by the generator (the CLI output only totals the count, with no per-name detail), and the panel's main-agent card cannot tick it either. For the config-layer path to work, a hand-written name must first exist in the presetUniverse / inventory.
 
-```yaml
-main_agent_extra:
-  - implement_cont
-```
-
-At apply time `implement_cont` — not a host-dependent name — is merged into the generated `config.allow`. You can equally tick it in the panel (Settings → 庖丁配置 → the main-agent card); see [Configuration](configuration_en.md).
-
-**Alternative: edit the `restrict.mjs` constant.** Add a line `'implement_cont'` to `MAIN_AGENT_ALLOW` (the 21-entry allow constant, `new Set([...])`) in `presets/orchestrator/restrict.mjs`. Mind the **override semantics**: at runtime `allow = config.allow ?? MAIN_AGENT_ALLOW` (an empty allow refuses to load). The generator re-extracts this constant from `restrict.mjs` source as its base and generates `config.allow = base + main_agent_extra (only detected host names kept) − main_agent_remove`, injecting the `config.allow` row **only when the result differs from the base**. So after editing the constant you must re-apply (the base is re-extracted and the installed copy refreshed); and when the running `agent.cordis.yml` already has an injected `config.allow`, that generated list wins at runtime and the constant only serves as fallback.
-
-Either way, re-apply to take effect (next step).
+Mind the **override semantics**: at runtime `allow = config.allow ?? MAIN_AGENT_ALLOW` (an empty allow refuses to load). The generator re-extracts this constant from `restrict.mjs` source as its base and generates `config.allow = (base + main_agent_extra − main_agent_remove) ∩ (presetUniverse ∪ inventory)`, injecting the `config.allow` row **only when the result differs from the base**. So after editing the constant you must re-apply (the base is re-extracted and the installed copy refreshed); and when the running `agent.cordis.yml` already has an injected `config.allow`, that generated list wins at runtime and the constant only serves as fallback.
 
 ### Step 4 — apply
 
-Open Settings → **庖丁配置** and hit「**保存并应用**」(Save & Apply) — the preset regenerates (new delegation block + allow-list changes), and your hand edits go live with it.
+Open the「**庖丁配置**」entry in the action bar at the bottom of the left sidebar (just above the Settings row) and hit「**保存并应用**」(Save & Apply) — the preset regenerates (new delegation block + allow-list changes), and your hand edits go live with it.
 
-Then **restart the host or open a new session** for it to take effect. If step 3 used the config-file path, the choice is persisted in `~/.dsh/dsh-paoding.config.yml`; change it later and hit Save & Apply in the panel again for an idempotent re-apply (developers who cloned the repo can also use the fallback CLI, `node tools/install.mjs --auto`).
+Then **restart the host or open a new session** for it to take effect. Later config changes re-apply idempotently the same way — hit Save & Apply again (developers who cloned the repo can also use the fallback CLI, `node tools/install.mjs --auto`).
 
 ### Step 5 — clean up after use
 

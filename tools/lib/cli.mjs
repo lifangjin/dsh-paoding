@@ -5,7 +5,7 @@
  * 官方安装通道是 DSH 插件通道（dsh plugin --profile web add dsh-paoding），
  * npm 包不再携带 CLI 入口；本 CLI 仅作仓库内不宣传的开发兜底（--auto /
  * --dry-run / --config / --help）。交互模式已整块移除：可视化配置走插件通道
- * 自带的 Web 配置器（设置 → 庖丁配置）。
+ * 自带的 Web 配置器（侧栏底部「庖丁配置」入口）。
  *
  * 依赖 util（ROLES / SRC_DIR / PROFILE_NAME_RE）、config（normalizeRoleName）、
  * host（removedReason）、state（collectState /
@@ -31,7 +31,7 @@ export function printHelp() {
 
   dsh plugin --profile web add dsh-paoding
 
-可视化配置随插件通道自带：DSH Web 设置 → 庖丁配置。
+可视化配置随插件通道自带：DSH Web 侧栏底部「庖丁配置」入口。
 
 Usage:
   node tools/install.mjs [options]
@@ -58,9 +58,10 @@ Environment:
   DSH_HOME           Directory holding cordis.patch.yml etc. (default: $HOME/.dsh)
 
 With --auto and no config file, a base template is written: only the dsh
-built-in tools stay enabled — add host/MCP tools afterwards in 设置 → 庖丁配置
-(visual config UI from the plugin channel).  Pass --suggest to fall back to
-the smart defaults that fold detected host tools in automatically.`)
+built-in tools stay enabled — add host/MCP tools afterwards via the 庖丁配置
+entry at the sidebar bottom (visual config UI from the plugin channel).
+Pass --suggest to fall back to the smart defaults that fold detected host
+tools in automatically.`)
 }
 
 // --profile 值白名单：与 bin/dsh-paoding.mjs 共用同一份 PROFILE_NAME_RE（抽在
@@ -311,7 +312,7 @@ export async function main({ argv = process.argv.slice(2) } = {}) {
     // fresh 非交互安装：提示基础模板已落盘、host/MCP 工具去哪补（--suggest 可
     // 恢复智能默认自动纳入）。
     console.log(
-      `\n基础模板已写入 ${configFile}：默认仅 dsh 基础工具，重启后在 设置 → 庖丁配置` +
+      `\n基础模板已写入 ${configFile}：默认仅 dsh 基础工具，重启后在侧栏底部「庖丁配置」入口` +
         `里自定义 host/MCP 工具。`,
     )
   }

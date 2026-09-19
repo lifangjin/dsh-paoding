@@ -34,8 +34,7 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 | 开销 | 每请求固定承载 ~16.2k tokens 工具定义 | 主 agent ~5.5k；角色工具面 ~3.0k–3.8k，仅委派时发生 |
 | 上下文 | 每次搜索 dump、每轮设计稿、每段 diff 都累积进主上下文 | worker 上下文小而专、用完即弃，主 agent 只收摘要 |
 
-组合的静态源是 `presets/orchestrator/agent.cordis.yml`（叠加在 DSH builtin `standard` preset 全量组合
-之上，见「原理：对应 DSH 原生机制」一节），运行时由 `restrict.mjs` 裁剪主 agent 工具面。
+组合的静态源是 `presets/orchestrator/agent.cordis.yml`（原样包含 DSH builtin `standard` preset 的全部组合行——同一组合内复制，而非运行时继承，见「原理：对应 DSH 原生机制」之机制①），运行时由 `restrict.mjs` 裁剪主 agent 工具面。
 四个角色委派实例的 ID 为 `delegation-search-external` / `delegation-design` /
 `delegation-implement` / `delegation-search-internal-deep`，均在组合的 delegation 组内；该组还挂有
 通用委派工具 `subagent` / `subagent_fork` / `workflow` / `ralph`（主 agent 白名单不包含它们，角色委派
@@ -138,7 +137,7 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 内置四角色只是**出厂分工**：任何「工具 + 技能」组合都能以同一机制成为新委派工具——在配置文件 `roles`
 键写一个 toolName（或在庖丁配置面板新建），生成器生成 `delegation-<toolName>` 块、把 toolName
 注入主 agent 白名单，并把角色 persona 首行职责句自动追加为主 agent persona 的委派行（tools 为空的
-角色应用时会被拒绝安装），详见 [docs/configuration.md](configuration.md) 第 6 节；自定义角色同样支持 `model` / `provider` 专用模型（与内置角色同一子键、同一生成机制，见 2.5）。例如建一个装配 `html-ppt`
+角色应用时会被拒绝安装），详见 [docs/configuration.md](configuration.md) 第 6 节；自定义角色同样支持 `model` / `provider` 专用模型与 `background_mode` 会话模式（与内置角色同一子键、同一生成机制——生成器为自定义角色块恒写 `backgroundMode` 行，`continuable` 同样生效，见 2.5 / 2.6）。例如建一个装配 `html-ppt`
 技能的 `ppt` agent，做 PPT 这类任务就有了专属子 agent。
 
 | 委派工具 | 实例 ID | persona 一句话职责 | 加载成本 |
@@ -148,12 +147,15 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 | `implement` | `delegation-implement` | 写与改代码：先读上下文 → 精准修改 → 验证（build/test/grep）；不改架构 | ~3.8k，仅委派时 |
 | `search_internal_deep` | `delegation-search-internal-deep` | 只做仓库探索：不改文件、不联网；处理主 agent 上下文装不下的任务（全仓 grep dump、超页大文件通读、跨目录符号/定义追踪），只回浓缩摘要 | 未单独估算，仅委派时 |
 
-上表是出厂默认形态，配置层可再裁剪与定制（详见 [docs/configuration.md](configuration.md)）：`search_external` / `design` / `implement` 三个可经 `roles_remove` 整条删除（2.3，`search_internal_deep` 删不掉）；内置角色可配显示名 `roles.<toolName>.name`，只替换该角色 persona 首行身份句主语（2.4）；可配专用模型 `roles.<toolName>.model` / `.provider`，生成器在委派块注入 `agentOptions`，不配则跟随主 agent（2.5）；可配会话模式 `roles.<toolName>.background_mode`，配成 `continuable` 时委派块注入 `backgroundMode` 行、子会话跨轮保留（2.6）；主 agent 的 persona 身份行不可改名（编排主 agent 的身份不属于可配置项），另有 `main_agent_display_name` 只改 preset 显示名、不动 persona 身份行（见 configuration.md 第 5 节）。
+上表是出厂默认形态，配置层可再裁剪与定制（详见 [docs/configuration.md](configuration.md)）：`search_external` / `design` / `implement` 三个可经 `roles_remove` 整条删除（2.3，`search_internal_deep` 删不掉）；内置角色可配显示名 `roles.<toolName>.name`，只替换该角色 persona 首行身份句主语（2.4）；可配专用模型 `roles.<toolName>.model` / `.provider`，生成器在委派块注入 `agentOptions`，不配则跟随主 agent（2.5）；可配会话模式 `roles.<toolName>.background_mode`，配成 `continuable` 时委派块注入 `backgroundMode` 行、子会话跨轮保留——内置角色与自定义角色同语义，生成器为自定义角色块恒写 `backgroundMode` 行（2.6）；主 agent 的 persona 身份行不可改名（编排主 agent 的身份不属于可配置项），另有 `main_agent_display_name` 只改 preset 显示名、不动 persona 身份行（见 configuration.md 第 5 节）。
 
 ### 角色 toolFilter.allow 明细
 
 以下 allow 列表逐字抄录自 `agent.cordis.yml`（安装期生成器按「preset 自带工具面 ∪ 运行时检测库存」
-白名单对账重写各列表，两头都不占的名字剔除并说明原因，见 [docs/configuration.md](configuration.md)）。
+白名单对账重写的只是 `search_external` / `design` / `implement` 三个可配角色的 allow——两头都不占的
+名字被剔除并在「预览生成」的 removed 列表给出原因；`search_internal_deep` 为静态委派，其 allow 列表
+**不做**库存对账：手写进去、两头都不占的名字不会被剔除，会静默落盘、运行时以 unknown tools 拒创建
+（与下方该角色的 codegraph 注同一口径），见 [docs/configuration.md](configuration.md)）。
 
 **`search_external`（外部调研，10 项）**
 

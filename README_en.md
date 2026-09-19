@@ -13,10 +13,10 @@ dsh-paoding (Chinese brand 「庖丁」/ Pao Ding, from the Zhuangzi parable of 
 - **A dedicated model per helper**: pin the coder to a stronger model and the researcher to a lighter, faster one; unset, they follow the main agent's current session model.
 - **Helpers that finish the job in place**: flip a role's session mode to continuable and, when a run fails or disappoints, the main agent resumes the same child conversation with `send_message` instead of re-delegating from scratch. Every role defaults to one-shot — run and discard — so nothing changes until you flip it.
 - **Cheaper requests, cleaner context**: a helper's tools load only when it is called — pay per use. The main agent's per-request tool overhead drops by roughly two-thirds, and it keeps only summaries instead of accumulating search dumps and diffs.
-- **Roles bend to your setup**: delete built-in roles you don't need, give roles display names, set a display name for the main agent — all one line of config; hit Save & Apply in the panel once and the preset regenerates instantly.
+- **Roles bend to your setup**: delete built-in roles you don't need, give roles display names, set a display name for the main agent — all one line of config; hit Save & Apply in the panel once and the preset regenerates on the spot, taking effect after a DSH restart or a new session.
 - **Whatever you've installed, it's recognized**: MCP servers, local plugins, installed skills — detected throughout install and configuration; the default install carries only DSH base tools, and detected host tools are opted into per tool in **Paoding Config**; disable one, re-apply, and its tools drop out on their own.
 - **A different lineup per workspace**: each project can carry its own main/sub-agent setup — pick the workspace in 庖丁配置, configure it separately, and it gets its own preset (`orchestrator-<basename>`); choose that preset when starting a session. The global default stays untouched.
-- **A visual configurator**: prefer clicking to editing YAML? the 庖丁配置 (Paoding Config) page in the left sidebar covers everything, sharing the exact same generation pipeline as the CLI.
+- **A visual configurator**: prefer clicking to editing YAML? the 庖丁配置 (Paoding Config) entry in the sidebar bottom action bar (above the Settings row) covers everything, sharing the exact same generation pipeline as the CLI.
 - **Notified of new releases, one-click upgrade in the panel**: the panel compares your local version against the latest npm registry publish (GitHub release as fallback) and points to the release page when a newer one is out. The Upgrade button runs `dsh plugin update dsh-paoding` in place (profile auto-detected) to swap in the new version; a DSH restart applies it, and the orchestrator preset regenerates itself against the new version on startup. A dev checkout in link: form cannot be upgraded in place — the panel tells you how to switch back to the registry version. If the check fails (offline, rate-limited), it stays silent and nothing is interrupted.
 - **Installs and uninstalls cleanly**: no DSH source changes; active in a new session right after install, gone when you delete one directory.
 
@@ -34,15 +34,16 @@ Prerequisites: **Node.js ≥ 18**, **pnpm**, and a working DSH host (**@deepseek
 dsh plugin --profile web add dsh-paoding
 ```
 
-Equivalent shortcut: `npx dsh-paoding@latest` (delegates to the command above; default profile web; requires dsh on PATH).
+Equivalent shortcut: `npx dsh-paoding@latest` (delegates to the command above; default profile web; requires dsh on PATH). Whichever version npx pulls is what gets installed: the actual install is `dsh-paoding@<the version npx resolved>`.
 
 `dsh plugin` is a transparent pass-through to pnpm: the package is installed into the profile by pnpm, and the bundle patch declared inside it mounts the 庖丁配置 (Paoding Config) page into the DSH Web left sidebar. **Restart DSH (`dsh web`)** and the install is complete — on startup the plugin checks itself, and if the orchestrator preset is missing or carries an outdated version marker it regenerates it once (applying `~/.dsh/dsh-paoding.config.yml` when present, writing the base template otherwise). Nothing else to click. Pick "编排模式 (Orchestrator)" in the new-session preset selector; to make it the default, choose it in Settings → Agent Presets.
 
-Out of the box only DSH's built-in base tools are enabled — detected MCP/host tools are not written in automatically. Open **庖丁配置 (Paoding Config)** in the sidebar, opt into the tools and roles you need, and hit Save & Apply. When you no longer want it, uninstalling is just as clean:
+Out of the box only DSH's built-in base tools are enabled — detected MCP/host tools are not written in automatically. Open **庖丁配置 (Paoding Config)** in the sidebar, opt into the tools and roles you need, and hit Save & Apply. When you no longer want it, three commands uninstall it for good — the per-workspace presets created by workspace-specific configs are removed too:
 
 ```bash
 dsh plugin --profile web remove dsh-paoding
 rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"
+rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets"/orchestrator-*
 ```
 
 **Dev checkout install** — to hack on the plugin or the preset sources, link the repository directly (changes go live via HMR or a restart):
@@ -69,7 +70,7 @@ While a helper runs, the main agent can send follow-ups, check progress, or stop
 
 ## Configuration
 
-All preferences live in `~/.dsh/dsh-paoding.config.yml`: role add/remove/tweak, skill assignment, per-role models, per-role session modes (one-shot / continuable), the main agent's tools and skills… Edit it, open Settings → 庖丁配置 (Paoding Config), and hit Save & Apply — the preset syncs. It is regenerated from "static source + config" every time, so no manual patches pile up. The full key reference is in the [configuration guide](docs/configuration_en.md); the rationale and the cost ledger are in the [architecture guide](docs/architecture_en.md).
+All preferences live in `~/.dsh/dsh-paoding.config.yml`: role add/remove/tweak, skill assignment, per-role models, per-role session modes (one-shot / continuable), the main agent's tools and skills… Edit it, open the 庖丁配置 (Paoding Config) entry at the bottom of the sidebar, and hit Save & Apply — the preset syncs. It is regenerated from "static source + config" every time, so no manual patches pile up. The full key reference is in the [configuration guide](docs/configuration_en.md); the rationale and the cost ledger are in the [architecture guide](docs/architecture_en.md).
 
 ## Documentation
 

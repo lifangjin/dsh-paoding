@@ -28,7 +28,7 @@ dsh-paoding 把「按角色分工的编排 preset」做成**配置驱动**：你
 
 ### 1.2 顶层键
 
-以下键名与 `tools/install.mjs` 的 `normalizeConfig` 一致（配置文件 schema 的唯一权威来源）。
+以下键名与 `tools/lib/config.mjs` 的 `normalizeConfig` 一致（配置文件 schema 的唯一权威来源；`tools/install.mjs` 仅转出口）。
 
 | 顶层键 | 类型 | 语义 |
 |---|---|---|
@@ -55,14 +55,14 @@ dsh-paoding 把「按角色分工的编排 preset」做成**配置驱动**：你
 - `roles` 下键名不在三角色内 = 自定义角色（见第 6 节）；请勿把静态角色 `search_internal_deep` 写进 `roles`（见 2.2）。
 - 内置角色可**整体删除**：`roles_remove` 键只认三角色名，删除效果、与 `roles` 键的一致性及恢复路径见 2.3。
 
-`main_agent_extra` 缺省 / 为空时回落到「按本次检测的智能默认」（检测到的 codegraph、`memory_search` 等归主 agent）——这也是不写任何配置时主 agent 仍能直接调 codegraph 工具的原因。
+`main_agent_extra` **键缺失**（老配置 / 未写过该键）时回落到「按本次检测的智能默认」（检测到的 codegraph、`memory_search` 等归主 agent）；**显式 `main_agent_extra: []` 表示明确不要 host 工具，不再回落**——fresh 首装落盘的基础模板即显式 `main_agent_extra: []` 形态，默认不含任何 host 工具（codegraph 等需在配置或面板里显式开启才可用）。
 
 ### 1.3 完整最小示例
 
 一个覆盖全部常用键的配置文件（键序与面板写出的 `serializeConfig` 一致）：
 
 ```yaml
-# dsh-paoding（庖丁）安装配置 —— 可手编；改后在 设置 → 庖丁配置 应用，或重跑 node tools/install.mjs --auto
+# dsh-paoding（庖丁）安装配置 —— 可手编；改后在侧栏底部「庖丁配置」入口应用，或重跑 node tools/install.mjs --auto
 
 profile: web            # 检测时扫描 profiles/<profile>/cordis.patch.yml
 
@@ -84,7 +84,7 @@ roles:                  # toolName -> { persona?, tools[] }
   design:               # 只改 persona、tools 留空 = 保留静态 allow
     persona: |-
       You are the design agent. Produce UI/UX designs and specs; never implement final code.
-  code-reviewer:        # 自定义角色（toolName 匹配 /^[a-z][a-z0-9_]*$/）
+  code-reviewer:        # 自定义角色（toolName 匹配 /^[a-z][a-z0-9_-]{1,31}$/）
     persona: |-
       You are the code-reviewer agent. Review diffs and files for bugs, security
       issues and style regressions; report a prioritized list with file:line.
@@ -106,7 +106,7 @@ main_agent_remove:      # 裁基础工具（实测四项约省 ≈0.8k tokens/�
   - exit_plan_mode
 main_agent_skills:      # 软引导：persona 技能行 + 主 agent 用 read 按需加载
   - caveman
-main_agent_skills_inline: []   # 硬内联（空 = 不用）；与 skills 同列时只内联不写软行
+main_agent_skills_inline: []   # 硬内联（空 = 不用）；与 `main_agent_skills` 同列时只内联不写软行
 main_agent_persona_extra: |-   # null/缺省 = 默认 codegraph 规则；'' = 不追加；其他 = 覆盖
   Never call codegraph_* tools without passing projectPath = {{cwd}}.
 
@@ -309,9 +309,9 @@ main_agent_extra:
 
 要点：
 
-- 追加项会进入生成的 `orchestrator-restrict config.allow`。注入同样走白名单对账：名字必须落在 **preset 自带工具面**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 各角色静态 allow）或**检测库存**里，host 工具（`mcp__*`、`mnemon_*` 等插件工具）以实际检测结果为准——没检测到（MCP/插件未启用、拼写错误）就不注入、不报错，「预览生成」的角色 removed 列表可看原因。
+- 追加项会进入生成的 `orchestrator-restrict config.allow`。注入同样走白名单对账：名字必须落在 **preset 自带工具面**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 各角色静态 allow）或**检测库存**里，host 工具（`mcp__*`、`mnemon_*` 等插件工具）以实际检测结果为准——没检测到（MCP/插件未启用、拼写错误）就不注入、不报错。注意「预览生成」的 removed 列表只覆盖**角色 allow** 的对账结果；`main_agent_extra` 被丢弃的名字只在 CLI 输出里汇总数量、不列明细，需要明细可直接看预览的主 agent allow 终值。
 - 面板的「主 agent」卡片里可勾选的具体 MCP / 插件工具，以检测结果（工具池）为准。
-- `main_agent_extra` 缺省/为空时，生成器回落到智能默认（检测到的 codegraph、`memory_search` 建议归主 agent）。
+- `main_agent_extra` **键缺失**时，生成器回落到智能默认（检测到的 codegraph、`memory_search` 建议归主 agent）；显式 `main_agent_extra: []` = 明确不要 host 工具、不再回落（fresh 首装落盘的基础模板即此形态）。
 
 ### 3.3 移除基础工具：main_agent_remove
 
@@ -431,11 +431,11 @@ main_agent_display_name: 庖丁   # 仅 preset 显示名换成「庖丁」，per
 | 显式 `''` | **不追加任何内容**（连默认规则也不加） |
 | 其它文本 | **覆盖**默认，追加你的文本 |
 
-写入格式：`''` 会以 `main_agent_persona_extra: ''` 写出（区别于缺省）；多行文本以 `|-` 块标量写出。`tools/install.mjs` 的 `normalizeConfig` 只接受 string（非 string / 缺省 → `null`）。
+写入格式：`''` 会以 `main_agent_persona_extra: ''` 写出（区别于缺省）；多行文本以 `|-` 块标量写出。`tools/lib/config.mjs` 的 `normalizeConfig` 只接受 string（非 string / 缺省 → `null`）。
 
 ### 5.3 默认常量原文
 
-单点事实源是 `tools/install.mjs` 里的 `DEFAULT_MAIN_AGENT_PERSONA_EXTRA`（`presets/orchestrator/agent.cordis.yml` **不再内置**该行）。默认值原文（英文）：
+单点事实源是 `tools/lib/util.mjs` 里的 `DEFAULT_MAIN_AGENT_PERSONA_EXTRA`（`tools/install.mjs` 仅 re-export 转出口，不定义；`presets/orchestrator/agent.cordis.yml` **不再内置**该行）。默认值原文（英文）：
 
 > Codegraph MCP default project may be a DIFFERENT repository than {{cwd}}. Never call codegraph_* tools without passing projectPath = {{cwd}} (the absolute path of your working directory). If {{cwd}} has no .codegraph index, fall back to glob/grep/read directly and do not loop or comment on project mismatches.
 
@@ -467,7 +467,7 @@ main_agent_display_name: 庖丁   # 仅 preset 显示名换成「庖丁」，per
 
 面板流程（左侧栏「庖丁配置」→「Agent 工具分配」→ 底部「新建自定义 agent 角色」）：
 
-1. 新建角色：输入 `toolName`，须匹配 `/^[a-z][a-z0-9_]*$/`；
+1. 新建角色：输入 `toolName`，须匹配 `/^[a-z][a-z0-9_-]{1,31}$/`（2–32 位：首字符小写字母，其余为小写字母 / 数字 / 下划线 / 连字符；安装器侧另拒保留名、`mcp__` 前缀与 YAML 字面量）；
 2. 从工具池多选工具（工具池 = 三角色静态 allow ∪ 检测到的 MCP / 插件工具）；
 3. 写 persona（可给完整 persona，首行写成一句简短职责）；
 4. 点「保存并应用」——生成器自动把新 `toolName` 注入主 agent 的 `orchestrator-restrict config.allow` —— **`restrict.mjs` 文件本身不用改**；并把分配持久化到配置文件（`roles` 键下多一项）。
@@ -616,7 +616,7 @@ workspaces:
 ### 9.2 预设命名规则
 
 - **slug** 取工作区目录名：小写、非法字符归并为 `-`；归并后为空、或恰好叫 `orchestrator`（与全局预设撞名）时改用 `ws`。
-- 多个工作区目录同名时，自动追加路径哈希（sha1 前 6 位）后缀，如同为 `Shop` 的两个项目得到 `orchestrator-shop-acd95b` 与 `orchestrator-shop-34b6aa`——改名或挪动目录后重新应用即可，旧预设目录不会被自动清理，不再需要的可在 DSH 预设页删除。
+- 多个工作区目录同名时，自动追加路径哈希（sha1 前 6 位）后缀，如同为 `Shop` 的两个项目得到 `orchestrator-shop-acd95b` 与 `orchestrator-shop-34b6aa`——改名或挪动目录后重新应用即可。旧路径条目仍留在配置 `workspaces` 段时，旧预设目录暂被保留；条目移除后，下一次任何成功应用会自动回收该孤儿预设（rmSync + 告警可见），无需手动删。
 - 预设显示名：条目配了 `main_agent_display_name` 就用它；没配则在默认名后缀「·目录名」（如 `编排模式 (Orchestrator)·Shop`），预设列表里一眼可辨。
 
 ### 9.3 面板用法
