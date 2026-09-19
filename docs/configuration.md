@@ -191,7 +191,7 @@ roles_remove:
   - design     # 不再生成 delegation-design 块；主 agent persona 里的 design 委派指引一并移除
 ```
 
-与 `roles` 键的关系：`roles` 里仍保留**未被删**的内置角色条目（想覆盖其 persona / tools 照旧写）。「删除」的完整状态 = `roles_remove` 含该名 **且** `roles` 无该 key —— UI / CLI 会保证这一致性，手编配置请自行保持一致；两者冲突时，生成以 `roles_remove` 为准。
+与 `roles` 键的关系：`roles` 里仍保留**未被删**的内置角色条目（想覆盖其 persona / tools 照旧写）。「删除」的完整状态 = `roles_remove` 含该名 **且** `roles` 无该 key —— 面板（与兜底 CLI）会保证这一致性，手编配置请自行保持一致；两者冲突时，生成以 `roles_remove` 为准。
 
 恢复：
 
@@ -309,7 +309,7 @@ main_agent_extra:
 
 要点：
 
-- 追加项会进入生成的 `orchestrator-restrict config.allow`。注入同样走白名单对账：名字必须落在 **preset 自带工具面**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 各角色静态 allow）或**检测库存**里，host 工具（`mcp__*`、`mnemon_*` 等插件工具）以实际检测结果为准——没检测到（MCP/插件未启用、拼写错误）就不注入、不报错。注意「预览生成」的 removed 列表只覆盖**角色 allow** 的对账结果；`main_agent_extra` 被丢弃的名字只在 CLI 输出里汇总数量、不列明细，需要明细可直接看预览的主 agent allow 终值。
+- 追加项会进入生成的 `orchestrator-restrict config.allow`。注入同样走白名单对账：名字必须落在 **preset 自带工具面**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 各角色静态 allow）或**检测库存**里，host 工具（`mcp__*`、`mnemon_*` 等插件工具）以实际检测结果为准——没检测到（MCP/插件未启用、拼写错误）就不注入、不报错。注意「预览生成」的 removed 列表只覆盖**角色 allow** 的对账结果；`main_agent_extra` 被丢弃的名字只在兜底 CLI 输出里汇总数量、不列明细，需要明细可直接看预览的主 agent allow 终值。
 - 面板的「主 agent」卡片里可勾选的具体 MCP / 插件工具，以检测结果（工具池）为准。
 - `main_agent_extra` **键缺失**时，生成器回落到智能默认（检测到的 codegraph、`memory_search` 建议归主 agent）；显式 `main_agent_extra: []` = 明确不要 host 工具、不再回落（fresh 首装落盘的基础模板即此形态）。
 
@@ -391,7 +391,7 @@ main_agent_skills_inline:
 | 找不到对应 SKILL.md | **警告并跳过**（不中断安装）；对两条键各警告一次、去重 |
 | SKILL.md 存在但正文为空 | 视为找不到，跳过 |
 | `description` 解析 | 支持单行、引号（单/双）、折叠块（`>`）与字面块（`\|`，含标记独立成行）；空白折叠、去外层引号、截断至 200 字符；缺省为空串 |
-| SKILL.md 扫描范围 | 全局（CLI 安装 / 面板「全局默认」）只扫用户级两根：`$DSH_HOME/skills`（默认 `~/.dsh/skills`）、`$DSH_AGENTS_HOME/skills`（默认 `~/.agents/skills`）；按工作区生成时另加该工作区目录的 `.dsh/skills` 与 `.agents/skills`（见第 9 节）。同根内 `<root>/<name>/SKILL.md` 优先于裸 `<root>/<name>.md` |
+| SKILL.md 扫描范围 | 全局（兜底 CLI 安装 / 面板「全局默认」）只扫用户级两根：`$DSH_HOME/skills`（默认 `~/.dsh/skills`）、`$DSH_AGENTS_HOME/skills`（默认 `~/.agents/skills`）；按工作区生成时另加该工作区目录的 `.dsh/skills` 与 `.agents/skills`（见第 9 节）。同根内 `<root>/<name>/SKILL.md` 优先于裸 `<root>/<name>.md` |
 
 技能名来自应用时的技能检测（同上四个根）；面板只会列出检测到的技能。
 

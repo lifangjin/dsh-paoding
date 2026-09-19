@@ -223,7 +223,7 @@ continuable 不是免费的，启用前请确认以下四点：
 
 主 agent 只能调用白名单内的工具。首选直接编辑 `presets/orchestrator/restrict.mjs` 的 `MAIN_AGENT_ALLOW`（21 项白名单常量，`new Set([...])`），在其中加一行 `'implement_cont'`（改的是 SRC，改完需重新应用，见第 4 步）。
 
-为什么不走配置文件：`main_agent_extra` 的注入走白名单对账——名字必须落在 **presetUniverse**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 各角色 allow）或**检测库存**里才会保留，两头都不占的名字一律剔除。`implement_cont` 这类自定义委派名恰好两头都不占：写进 `main_agent_extra` 会被生成器丢弃（CLI 输出只汇总数量、不列明细），面板「主 agent」卡也勾不到它。想让配置层路径生效，手写名必须先存在于 presetUniverse / 检测库存之中。
+为什么不走配置文件：`main_agent_extra` 的注入走白名单对账——名字必须落在 **presetUniverse**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 各角色 allow）或**检测库存**里才会保留，两头都不占的名字一律剔除。`implement_cont` 这类自定义委派名恰好两头都不占：写进 `main_agent_extra` 会被生成器丢弃（兜底 CLI 输出只汇总数量、不列明细），面板「主 agent」卡也勾不到它。想让配置层路径生效，手写名必须先存在于 presetUniverse / 检测库存之中。
 
 注意**覆盖语义**：运行时 `allow = config.allow ?? MAIN_AGENT_ALLOW`（空 allow 拒绝加载）。生成器从 `restrict.mjs` 源码现场解析该常量作为 base，生成 `config.allow = (base + main_agent_extra − main_agent_remove) ∩ (presetUniverse ∪ inventory)`，且**只在结果与 base 不同时才注入** `config.allow` 行。因此：改完常量必须重新应用（base 重新解析、安装副本刷新）；若运行中的 `agent.cordis.yml` 已有注入的 `config.allow`，运行时以它为准、常量只作回退。
 

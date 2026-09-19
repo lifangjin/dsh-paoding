@@ -83,7 +83,7 @@ dsh plugin --profile web add link:"$PWD/dsh-paoding"
 
 ## 贡献
 
-欢迎 issue 与 PR：使用中发现问题、想要新的角色、或发现文档与实现不一致，都可以提。动手前请先读 [架构](docs/architecture.md) 与 [配置](docs/configuration.md)；文档与实现冲突时，以 `presets/orchestrator/` 与 `tools/install.mjs` 源码为准。
+欢迎 issue 与 PR：使用中发现问题、想要新的角色、或发现文档与实现不一致，都可以提。动手前请先读 [架构](docs/architecture.md) 与 [配置](docs/configuration.md)；文档与实现冲突时，以 `presets/orchestrator/` 与 `tools/` 源码为准。
 
 ## 许可
 

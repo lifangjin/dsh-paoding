@@ -57,7 +57,7 @@ dsh plugin --profile web add dsh-paoding
 
 ### 版本标记与自动重生成
 
-`.generator-version` 标记（内容 = 生成器版本）由插件启动自愈在生成 preset 后写入。面板「保存并应用」与 CLI 生成走整目录重建、不写回标记——重建即移除旧标记，下次 DSH 启动自愈发现标记缺失会多补跑一次生成并重写标记（产物相同，只是多跑一轮）。版本不符触发重生成的语义不变：插件升级后标记与包版本不符，下次 DSH 启动自动按新版重生成，「升级后 preset 还是旧版产物」的漂移就此消除。标记只在缺失或版本不符时触发重生成，面板不监视配置文件改动；想立刻按当前配置重新生成，点面板「保存并应用」。
+`.generator-version` 标记（内容 = 生成器版本）由插件启动自愈在生成 preset 后写入。面板「保存并应用」与兜底 CLI 的生成走整目录重建、不写回标记——重建即移除旧标记，下次 DSH 启动自愈发现标记缺失会多补跑一次生成并重写标记（产物相同，只是多跑一轮）。版本不符触发重生成的语义不变：插件升级后标记与包版本不符，下次 DSH 启动自动按新版重生成，「升级后 preset 还是旧版产物」的漂移就此消除。标记只在缺失或版本不符时触发重生成，面板不监视配置文件改动；想立刻按当前配置重新生成，点面板「保存并应用」。
 
 ### 基础模板与工具勾选
 
@@ -85,7 +85,7 @@ dsh plugin --profile <name> update dsh-paoding
 
 手动升级等价：直接在终端跑上面这条 `dsh plugin update` 命令，同样重启生效。
 
-**开发 link 形态**（见第 4 节）没有版本号可比、无法就地升级：面板会提示手动跑 `dsh plugin add dsh-paoding@latest` 切回 registry 版。
+**开发 link 形态**（见第 4 节）版本比较照常（更新卡有新版照常提示），但无法就地升级——升级器要求包真实装在某个 profile 的 node_modules 下，link 直连仓库匹配不到；点「升级」会如实报这一点，并提示手动跑 `dsh plugin add dsh-paoding@latest` 切回 registry 版。
 
 检测失败（断网、限流）时静默跳过，不影响任何使用。
 
@@ -127,7 +127,7 @@ dsh plugin --profile web add link:"$PWD"
 
 ### allow 重写规则
 
-对每个被重写的角色：allow 里的名字按**白名单**对账，必须落在 **preset 自带工具面**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 各角色静态 allow）或**检测库存**之一，两头都不占的名字（插件停用后残留的 `mnemon_*`、拼写错误等）一律剔除，「预览生成」/CLI 报告的 removed 列表会给出原因。其中 **host 依赖名**（`mcp__*` 与已知插件工具）即便写在源 preset 里，也必须真实检测到才保留；`mnemon_*` 这类插件直注册、无 `mcp__` 前缀的工具同样按检测库存对账；standard 组合保证的核心工具（read/write/edit/glob/grep/bash/skill/web_search 等）本就在 preset 自带面内，不依赖检测直接保留。结果 = 配置意图 ∩ 实际启用工具：停用的 host 工具名自动剔除，保证 `tools.restrict()` 永不报 unknown tools。主 agent 侧同理：`restrict.mjs` 的 base allow 里 host 依赖名按检测结果过滤，`main_agent_extra` 追加的 host 工具与自定义角色 toolName 注入 `config.allow`，`main_agent_remove` 剔除（移除结果为空列表会**拒绝安装**，防止运行时空 allow 拒载）。静态 preset 中不由生成器重写的其它委派行（如 `search_internal_deep`）原样保留。
+对每个被重写的角色：allow 里的名字按**白名单**对账，必须落在 **preset 自带工具面**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 各角色静态 allow）或**检测库存**之一，两头都不占的名字（插件停用后残留的 `mnemon_*`、拼写错误等）一律剔除，「预览生成」/兜底 CLI 报告的 removed 列表会给出原因。其中 **host 依赖名**（`mcp__*` 与已知插件工具）即便写在源 preset 里，也必须真实检测到才保留；`mnemon_*` 这类插件直注册、无 `mcp__` 前缀的工具同样按检测库存对账；standard 组合保证的核心工具（read/write/edit/glob/grep/bash/skill/web_search 等）本就在 preset 自带面内，不依赖检测直接保留。结果 = 配置意图 ∩ 实际启用工具：停用的 host 工具名自动剔除，保证 `tools.restrict()` 永不报 unknown tools。主 agent 侧同理：`restrict.mjs` 的 base allow 里 host 依赖名按检测结果过滤，`main_agent_extra` 追加的 host 工具与自定义角色 toolName 注入 `config.allow`，`main_agent_remove` 剔除（移除结果为空列表会**拒绝安装**，防止运行时空 allow 拒载）。静态 preset 中不由生成器重写的其它委派行（如 `search_internal_deep`）原样保留。
 
 **重新应用的时机**：改动了 patch 配置（启用/停用 MCP 服务器或插件、增删额外 patch 文件）后，到「庖丁配置」点一次「保存并应用」同步 allow——想先看将发生的剔除清单，点「预览生成」，或用兜底 CLI 的 `--dry-run`。兜底 CLI 还会比较 patch 文件与上次生成结果的时间戳，发现 patch 更新过会打印提醒。
 
@@ -141,7 +141,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 
 例 2——插件停用：停用 magic-memory 后重新应用一次，各角色 allow 中的 `memory_search` 自动剔除；此后想恢复就重新启用插件再应用。
 
-例 3——额外的 patch 文件：把额外的 MCP/插件配置放独立文件，检测时用兜底 CLI 的 `--patch <file>` 一并纳入（不必动 home/profile 层文件）。
+例 3——额外的 patch 文件（仅限兜底 CLI，克隆仓库的开发者）：把额外的 MCP/插件配置放独立文件，检测时用 `--patch <file>` 一并纳入（不必动 home/profile 层文件）；面板检测只读 home/profile 两层，无对应入口。
 
 ## 6. 庖丁配置面板
 
@@ -156,7 +156,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 
 ### 数据接口与安全
 
-面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地 `dsh plugin update`）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
+面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地 `dsh plugin update`）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
 
 ### 面板能力
 

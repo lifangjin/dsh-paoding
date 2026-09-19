@@ -191,7 +191,7 @@ roles_remove:
   - design     # the delegation-design block is no longer generated; the design bullet in the main-agent persona goes too
 ```
 
-Relationship with the `roles` key: `roles` keeps the entries of built-in roles that are **not** deleted (override their persona / tools there as usual). The full "deleted" state is: `roles_remove` contains the name **and** `roles` has no such key — the UI / CLI keeps these consistent; keep them consistent when hand-writing too. On conflict, generation follows `roles_remove`.
+Relationship with the `roles` key: `roles` keeps the entries of built-in roles that are **not** deleted (override their persona / tools there as usual). The full "deleted" state is: `roles_remove` contains the name **and** `roles` has no such key — the panel (and the fallback CLI) keeps these consistent; keep them consistent when hand-writing too. On conflict, generation follows `roles_remove`.
 
 Restoring:
 
@@ -309,7 +309,7 @@ main_agent_extra:
 
 Points:
 
-- The entries land in the generated `orchestrator-restrict config.allow`. Injection follows the same whitelist: a name must belong to the **preset's own tool face** (the `restrict.mjs` main-agent allow ∪ the static role allows in the source preset) or to the **detection inventory**, and host tools (`mcp__*`, plugin tools like `mnemon_*`) go by what was actually detected — undetected names (MCP/plugin disabled, typo) are silently not injected. Note that the removed list in Preview only covers the **role allow** reconciliation; names dropped from `main_agent_extra` are only counted in the CLI output summary, with no per-name detail (read the final main-agent allow in the preview for details).
+- The entries land in the generated `orchestrator-restrict config.allow`. Injection follows the same whitelist: a name must belong to the **preset's own tool face** (the `restrict.mjs` main-agent allow ∪ the static role allows in the source preset) or to the **detection inventory**, and host tools (`mcp__*`, plugin tools like `mnemon_*`) go by what was actually detected — undetected names (MCP/plugin disabled, typo) are silently not injected. Note that the removed list in Preview only covers the **role allow** reconciliation; names dropped from `main_agent_extra` are only counted in the fallback CLI output summary, with no per-name detail (read the final main-agent allow in the preview for details).
 - The concrete MCP / plugin tools checkable on the panel's "main agent" card are those shown by the detection results (the tool pool).
 - When the `main_agent_extra` **key is missing** the generator falls back to smart defaults (detected codegraph / `memory_search` tools are suggested for the main agent); an explicit `main_agent_extra: []` means no host tools, deliberately, with no fallback (the fresh-install base template is exactly this form).
 

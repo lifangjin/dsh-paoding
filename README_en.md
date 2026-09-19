@@ -83,7 +83,7 @@ All preferences live in `~/.dsh/dsh-paoding.config.yml`: role add/remove/tweak, 
 
 ## Contributing
 
-Issues and PRs are welcome: report problems, request new roles, or point out where the docs and the implementation disagree. Before contributing, read the [architecture](docs/architecture_en.md) and [configuration](docs/configuration_en.md) guides; when a document and the code conflict, the source of truth is `presets/orchestrator/` and `tools/install.mjs`.
+Issues and PRs are welcome: report problems, request new roles, or point out where the docs and the implementation disagree. Before contributing, read the [architecture](docs/architecture_en.md) and [configuration](docs/configuration_en.md) guides; when a document and the code conflict, the source of truth is `presets/orchestrator/` and `tools/`.
 
 ## License
 
