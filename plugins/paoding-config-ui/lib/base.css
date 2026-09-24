@@ -44,7 +44,7 @@
   flex: none;
   padding: 1px 8px;
   border-radius: 999px;
-  background: var(--dsw-alias-accent-soft, var(--dsw-alias-bg-layer-2));
+  background: var(--dsw-alias-interactive-bg-hover-accent, var(--dsw-alias-bg-layer-2));
   font-size: 11px;
   line-height: 16px;
   font-weight: 500;

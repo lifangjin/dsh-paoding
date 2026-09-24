@@ -19,6 +19,7 @@ dsh-paoding（中文品牌「庖丁」，典出《庄子》——庖丁顺纹理
 - **图形界面配置**：不习惯改配置文件的话，点开左侧栏底部动作条（设置行上方）的「庖丁配置」入口，整页点选即可，「保存并应用」即时重生成预设——与首装自动化同一条生成管线。
 - **版本更新有提醒，面板一键升级**：面板会对比 npm registry（GitHub release 兜底）上的最新版本，发现新版就地提示并附上发布页链接；点「升级」就地执行 `dsh plugin update dsh-paoding`（profile 自动探测）换上新版，重启 DSH 后生效，编排预设会在重启时按新版自动重生成。开发检出的 link 形态无法就地升级，面板会提示切回 registry 版的办法；检测失败（比如断网）就静默跳过，不影响任何使用。
 - **来去自由**：不改 DSH 一行源码；装完新会话即用，卸载即删目录。
+- **两代宿主都兼容**：DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 全支持——两代宿主发现预设的机制不同（目录扫描 vs patch 声明行），安装器自动检测宿主版本选对落点，宿主升级、降级后的首次保存/自愈自动迁移，全程无感。
 
 ## 插件截图
 
@@ -26,7 +27,7 @@ dsh-paoding（中文品牌「庖丁」，典出《庄子》——庖丁顺纹理
 
 ## 快速开始
 
-前置：**Node.js ≥ 18**、**pnpm** 与一台已装好的 DSH host（**@deepseek-ai/dsh ≥ 0.1.5**，最低支持版本）。
+前置：**Node.js ≥ 18**、**pnpm** 与一台已装好的 DSH host（**@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.1** 全支持，预设落点自动适配两代宿主机制）。
 
 **官方插件通道（唯一安装入口）**——不用克隆仓库，一条命令，装完重启即用：
 
@@ -36,7 +37,7 @@ dsh plugin --profile web add dsh-paoding
 
 等价捷径：`npx dsh-paoding@latest`（内部转成上面这条命令，默认 profile web，需本机已装 dsh）。npx 拉到哪版就装哪版：实际安装的是 `dsh-paoding@<npx 拉取到的版本>`。
 
-`dsh plugin` 是 pnpm 的透明转发器：包被 pnpm 装进 profile，包内声明的 bundle patch 把「庖丁配置」面板挂进 DSH Web 左侧栏。**重启 DSH（`dsh web`）**即完成全部安装——插件启动时会自动检测，编排预设缺失或版本不符就自动生成一次（有 `~/.dsh/dsh-paoding.config.yml` 按配置应用，没有则写基础模板），无需再点任何按钮。新会话的预设选择器里选「编排模式 (Orchestrator)」即可；要设为默认，在 Settings → Agent Presets 里选。
+`dsh plugin` 是 pnpm 的透明转发器：包被 pnpm 装进 profile，包内声明的 bundle patch 把「庖丁配置」面板挂进 DSH Web 左侧栏。**重启 DSH（`dsh web`）**即完成全部安装——插件启动时会自动检测，编排预设缺失或版本不符就自动生成一次（有 `~/.dsh/dsh-paoding.config.yml` 按配置应用，没有则写基础模板），无需再点任何按钮。DSH 0.1.7 起宿主改用 patch 声明行发现预设，插件会自动改写登记方式，装法不变。新会话的预设选择器里选「编排模式 (Orchestrator)」即可；要设为默认，在 Settings → Agent Presets 里选。
 
 开箱默认只带 DSH 自带的基础工具，检测到的 MCP/host 工具不会自动写入——装完点开左侧栏的**「庖丁配置」**按需勾选工具与角色，「保存并应用」即生效。不想要了，三条命令卸干净（按工作区配置生成的各工作区预设也一并删除）：
 
@@ -45,6 +46,8 @@ dsh plugin --profile web remove dsh-paoding
 rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"
 rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets"/orchestrator-*
 ```
+
+宿主是 DSH 0.1.7+ 时再补一步：删去 `~/.dsh/cordis.patch.yml` 里的 dsh-paoding 托管块（带 auto-generated 起止标记），免得留下指向已删目录的声明行（详见[安装文档](docs/installation.md)第 7 节）。
 
 **开发检出自装**——想改插件或预设源码时，用 link 形态直连仓库（改动经 HMR/重启生效）：
 
@@ -77,7 +80,7 @@ dsh plugin --profile web add link:"$PWD/dsh-paoding"
 | 文档 | 内容 |
 |---|---|
 | [架构](docs/architecture.md) | 为什么这样设计——概述、成本账、角色与工具、对应 DSH 原生机制、Token 治理、已知边界。 |
-| [安装](docs/installation.md) | 官方插件通道一条命令安装、首装自动化与版本标记、升级、开发检出自装、host patch 检测机制、庖丁配置面板、卸载、排查。 |
+| [安装](docs/installation.md) | 官方插件通道一条命令安装、版本支持与预设落点双轨（DSH 0.1.5 – 0.1.7-rc.1）、首装自动化与版本标记、升级、开发检出自装、host patch 检测机制、庖丁配置面板、卸载、排查。 |
 | [编排](docs/orchestration.md) | 编排总览、失败如何呈现与三层处理、one-shot vs continuable、上下文隔离。 |
 | [配置](docs/configuration.md) | 配置键全参考、内置角色微调、主 agent 工具与技能、自定义角色、按角色分模型、角色会话模式。 |
 

@@ -1,12 +1,15 @@
 /**
  * 公共状态管线：collectState（patch 分层扫描 / MCP 工具名解析 / 插件与技能检测 /
- * smart defaults，含可选 runtimeFacts 合并 / 已落盘 preset 目录扫描）与
- * generateAndInstall（compose + yaml 校验 + dst 目录落盘 + saveConfig，支持按
- * 工作区落到 orchestrator-<slug> 独立 preset 目录并把条目并进配置 workspaces 段；
- * 配置读取失败 / 状态不可信时拒绝破坏性落盘，成功后回收孤儿工作区 preset）。
+ * smart defaults，含可选 runtimeFacts 合并 / 预设安装轨道探测 / 已落盘 preset
+ * 目录扫描）与 generateAndInstall（compose + yaml 校验 + dst 目录落盘 +
+ * saveConfig，支持按工作区落到 orchestrator-<slug> 独立 preset 目录并把条目
+ * 并进配置 workspaces 段；配置读取失败 / 状态不可信时拒绝破坏性落盘，成功后
+ * 回收孤儿工作区 preset；并按 presetSystem 双轨收尾——0.1.7+ 声明行轨把声明行
+ * upsert 进 home patch 托管块，≤0.1.6 目录扫描轨撤掉残留声明块自愈）。
  * install.mjs 的公共导出（collectState / generateAndInstall）即来自本模块。
- * 依赖 util / yaml / config / host / skills / spans / compose / alloc / workspaces
- * 与 node:fs / node:path；被 cli 与 plugins/paoding-config-ui 引用。
+ * 依赖 util / yaml / config / host / skills / spans / compose / alloc /
+ * workspaces / preset-system 与 node:fs / node:path / node:url；被 cli 与
+ * plugins/paoding-config-ui 引用。
  */
 import {
   chmodSync,
@@ -20,6 +23,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { DEFAULT_MAIN_AGENT_PERSONA_EXTRA, ROLES, SRC_DIR, warn } from './util.mjs'
 import { flattenEntries, loadYaml, parsePatchFile } from './yaml.mjs'
 import {
@@ -43,6 +47,14 @@ import { detectSkills, findSkillMeta } from './skills.mjs'
 import { locateAllowBlocks, locatePersonaBlocks } from './spans.mjs'
 import { composeGenerated, extractMainAgentAllow } from './compose.mjs'
 import { smartDefaults } from './alloc.mjs'
+import {
+  buildPresetRowText,
+  detectPresetSystem,
+  presetRowId,
+  readHomePatchRows,
+  stripHomePatchRows,
+  upsertHomePatchRows,
+} from './preset-system.mjs'
 
 /**
  * Reusable state collection for the CLI and the visual config UI.
@@ -51,11 +63,13 @@ import { smartDefaults } from './alloc.mjs'
  * without writing anything or prompting. Throws on hard errors.
  *
  * `runtimeFacts`（可选，仅 Web 配置器经 ctx 传入）是运行时优先的补充事实：
- * { ok, error?, pluginEntries, toolNames }，来自 plugins/paoding-config-ui/
- * runtime-inventory.mjs。不传时整段合并逻辑跳过，行为与旧版完全一致；传入时
- * 把 preset 未覆盖的运行时工具并进 inventory / mcpReports / pluginReports，
- * 让 bundle 形态加载的插件（@hyzyn/dsh-codegraph、dsh-mnemon 等）也能被识别。
- * 文件扫描路径（KNOWN_HOST_PLUGINS 白名单等）始终保持为兜底，不动。
+ * { ok, error?, pluginEntries, toolNames, presetSystem }，来自
+ * plugins/paoding-config-ui/runtime-inventory.mjs。不传时整段合并逻辑跳过，
+ * 行为与旧版完全一致；传入时把 preset 未覆盖的运行时工具并进 inventory /
+ * mcpReports / pluginReports，让 bundle 形态加载的插件（@hyzyn/dsh-codegraph、
+ * dsh-mnemon 等）也能被识别；presetSystem（预设安装轨道）直接采信，免去
+ * dsh --version 子进程探测。文件扫描路径（KNOWN_HOST_PLUGINS 白名单等）
+ * 始终保持为兜底，不动。
  */
 export async function collectState({ dshHome, configFile, profile = null, patches = [], cwd = process.cwd(), runtimeFacts = null }) {
   const dstDir = path.join(dshHome, '.agent-presets', 'orchestrator')
@@ -211,10 +225,17 @@ export async function collectState({ dshHome, configFile, profile = null, patche
     }
   }
 
+  // 预设安装轨道探测（declarative = 0.1.7+ 声明行轨 / directory = ≤0.1.6 目录
+  // 扫描轨）。运行时事实里带 presetSystem（Web 插件对宿主服务的实时探测）时
+  // 直接采信零开销；CLI / 首装链路没有运行时事实，走 dsh --version + 文件探测
+  //（见 preset-system.detectPresetSystem 的降级链）。
+  const presetSystem = await detectPresetSystem({ dshHome, runtimeSystem: runtimeFacts?.presetSystem ?? null })
+
   // 已落盘 preset 目录扫描（编排类）：.agent-presets 下的 orchestrator 基础
   // preset 与 orchestrator-<slug> 工作区专属 preset。扫描失败（目录尚不存在、
   // 无读权限等）一律降级为空列表，绝不影响检测结果本体；generateAndInstall
-  // 成功落盘后以它为对账清单做孤儿工作区 preset 回收。
+  // 成功落盘后以它为对账清单做孤儿工作区 preset 回收。两轨的产物目录同名同
+  // 位置（.agent-presets/<presetId>/），这一扫描天然覆盖两轨的 installed 判定。
   let installedPresets = []
   try {
     installedPresets = readdirSync(path.join(dshHome, '.agent-presets'))
@@ -248,6 +269,8 @@ export async function collectState({ dshHome, configFile, profile = null, patche
     // 已落盘的编排类 preset 目录名列表（含基础 orchestrator 与各工作区专属），
     // 供 UI 的 workspaceMeta 对账「该工作区 preset 是否已生成」。
     installedPresets,
+    // 预设安装轨道（generateAndInstall 据此双轨收尾；serializeState 透传给面板）
+    presetSystem,
     // 主 persona 尾部追加的默认常量（配置键 main_agent_persona_extra 缺省值）：
     // 供 UI state（serializeState → /api/paoding/state）展示与「恢复默认」用。
     mainPersonaExtraDefault: DEFAULT_MAIN_AGENT_PERSONA_EXTRA,
@@ -260,14 +283,62 @@ export async function collectState({ dshHome, configFile, profile = null, patche
 }
 
 /**
+ * SRC preset.yml 显示元数据提取（name / description / order）：声明行轨把这些
+ * 值写进 home patch 声明行的 config，取值口径与目录轨写 preset.yml 完全同源
+ * （name 可被 main_agent_display_name / 工作区派生名覆盖，见 generateAndInstall
+ * 调用处）。preset.yml 是仓库内受控格式：顶层 name / order 单行标量 +
+ * description 多行纯量（续行按 YAML 折叠语义以空格拼接成单值，落声明行时由
+ * JSON.stringify 转义）。读不到 / 解析不出时返回空元数据——声明行的
+ * name / description / order 都是宿主可选键，缺省不致命。
+ */
+function readPresetMeta() {
+  try {
+    const text = readFileSync(path.join(SRC_DIR, 'preset.yml'), 'utf8')
+    const lines = text.split(/\r?\n/)
+    const firstMatch = (re) => {
+      for (const line of lines) {
+        const m = re.exec(line)
+        if (m) return m
+      }
+      return null
+    }
+    const name = firstMatch(/^name:[ \t]*(.+?)[ \t]*$/)?.[1] ?? null
+    const orderRaw = firstMatch(/^order:[ \t]*(\d+)[ \t]*$/)
+    const order = orderRaw ? Number(orderRaw[1]) : null
+    let description = null
+    const di = lines.findIndex((l) => /^description:/.test(l))
+    if (di !== -1) {
+      const parts = [lines[di].slice('description:'.length).trim()]
+      for (let i = di + 1; i < lines.length; i++) {
+        const line = lines[i]
+        if (line.trim() === '' || !/^[ \t]/.test(line)) break // 续行尽 / 撞上下一个顶层键
+        parts.push(line.trim())
+      }
+      description = parts.filter((p) => p !== '').join(' ') || null
+    }
+    return { name, description, order }
+  } catch {
+    return { name: null, description: null, order: null }
+  }
+}
+
+/**
  * Compose, validate and (unless dry-run) install the generated preset from an
  * assignments object. Shared by the CLI and the visual config UI.
- * Returns { text, roleResults, staleNote, wrote, presetId }.
+ * Returns { text, roleResults, staleNote, wrote, presetId, presetSystem }.
  *
  * 破坏性落盘护栏：配置读取失败直接抛错中止（不静默降级 prev=null 继续装）；
  * 配置缺失（prev=null）而目标 preset 目录已存在时同样拒绝重建。落盘成功后对
  * state.installedPresets 做孤儿工作区 preset 回收（不被 workspaces 引用的
  * orchestrator-<slug> 目录 rmSync + warn；基础 preset 永不清）。
+ *
+ * 预设安装双轨收尾（wrote=true 才动，dry-run 零副作用）：
+ *   - declarative（0.1.7+，目录扫描机制已删）：把本 preset 以一条 `- insert:`
+ *     声明行 upsert 进 $DSH_HOME/cordis.patch.yml 托管块（restrict.mjs 用绝对
+ *     file: URL）；孤儿工作区回收处同步撤对应声明行——目录与行同生同灭。
+ *   - directory（≤0.1.6）：上面落盘即完成；home patch 里若有残留托管声明块
+ *    （宿主刚从 0.1.7 降级等场景）整块撤下自愈——残留声明行会让 profile 启动
+ *     失败。
  *
  * workspacePath（可选）：传工作区绝对路径时生成落到 orchestrator-<slug> 独立
  * preset 目录（slug 由磁盘配置现有 workspaces 键 ∪ 本路径统一分配，同名目录
@@ -282,6 +353,10 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
   // assignments 剥污染键：profile / workspaces 不属于目标字段，UI/CLI 透传
   // 一律丢弃，防其混进生成的 preset 或覆盖配置文件里对应的段。
   assignments = stripNonTargetKeys(assignments)
+
+  // 预设安装轨道（collectState 已探测；缺省按目录轨兜底——安全侧，理由见
+  // preset-system 模块头注释）
+  const presetSystem = state.presetSystem ?? 'directory'
 
   // 工作区定位：路径归一（容忍尾斜杠 / 相对写法），空值一律视为全局。
   const wsPath = workspacePath === null || workspacePath === undefined || workspacePath === ''
@@ -452,9 +527,45 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
         warn(`孤儿工作区 preset 已回收: ${dir}（配置 workspaces 已无引用）`)
       } catch (err) {
         warn(`孤儿工作区 preset 回收失败（已保留）: ${dir}: ${err?.message ?? err}`)
+        continue
+      }
+      if (presetSystem === 'declarative') {
+        // 声明行轨：目录回收了，home patch 托管块里的对应声明行同步撤下——
+        // 目录与行必须同生同灭，否则 0.1.7 宿主会挂出一个指向已删目录的 preset。
+        try {
+          stripHomePatchRows(dshHome, [presetRowId(name)])
+        } catch (err) {
+          warn(`孤儿 preset 的声明行撤除失败（${presetRowId(name)}）: ${err?.message ?? err}`)
+        }
       }
     }
   }
 
-  return { text: generatedText, roleResults, staleNote, wrote, presetId }
+  // ── 预设安装双轨收尾（wrote=true 才动；dry-run 零副作用）────────────────
+  // declarative（0.1.7+）：目录扫描机制已删，必须把本 preset 以一条 `- insert:`
+  // 声明行写进 home patch 托管块才算安装完成（preset 元信息与写 preset.yml 同
+  // 源：显示名取 displayName ?? SRC preset.yml 的 name，description / order 取
+  // SRC；restrict.mjs 用绝对 file: URL——声明行没有「相对 preset 目录」语义）。
+  // directory（≤0.1.6）：上面落盘即完成；home patch 里若有残留托管声明块
+  //（宿主刚从 0.1.7 降级等场景）整块撤下自愈——残留声明行会让 profile 启动失败。
+  if (wrote) {
+    if (presetSystem === 'declarative') {
+      const meta = readPresetMeta()
+      upsertHomePatchRows(dshHome, [
+        buildPresetRowText({
+          presetId,
+          name: displayName ?? meta.name,
+          description: meta.description,
+          order: meta.order,
+          agentYmlText: generatedText,
+          restrictFileUrl: pathToFileURL(path.join(dstDir, 'restrict.mjs')).href,
+        }),
+      ])
+    } else if (readHomePatchRows(dshHome).length > 0) {
+      stripHomePatchRows(dshHome, null)
+      warn('cordis.patch.yml 检出 dsh-paoding 声明块，但当前宿主是目录扫描轨（DSH ≤ 0.1.6），已整块撤下（残留声明行会导致 profile 启动失败）')
+    }
+  }
+
+  return { text: generatedText, roleResults, staleNote, wrote, presetId, presetSystem }
 }

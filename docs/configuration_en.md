@@ -4,7 +4,7 @@
 
 # Configuration
 
-dsh-paoding makes the role-based orchestration preset **configuration-driven**: you hand-write (or click together in the 庖丁配置 panel) a YAML config file, and the generator (`tools/`; the panel's Save & Apply and the in-repo fallback CLI share the same generation pipeline, `collectState` / `generateAndInstall`) rewrites the target preset — `~/.dsh/.agent-presets/orchestrator/agent.cordis.yml` — when it is applied, covering the role allows, role personas, the main-agent allow list (`config.allow` injection) and the main-agent persona's skill rows / inlines and persona extra.
+dsh-paoding makes the role-based orchestration preset **configuration-driven**: you hand-write (or click together in the 庖丁配置 panel) a YAML config file, and the generator (`tools/`; the panel's Save & Apply and the in-repo fallback CLI share the same generation pipeline, `collectState` / `generateAndInstall`) rewrites the target preset — `~/.dsh/.agent-presets/orchestrator/agent.cordis.yml` — when it is applied, covering the role allows, role personas, the main-agent allow list (`config.allow` injection) and the main-agent persona's skill rows / inlines and persona extra. The artifact path is the same on both host generations; the generations discover the preset differently (≤ 0.1.6 directory scan / ≥ 0.1.7 declaration managed block in the patch), and the installer adapts automatically — see "Version support and the dual preset landing" in the [installation guide](installation_en.md).
 
 The config file describes **declarative intent**. The target file is regenerated from scratch every time — "source preset + this config file": edit the config → hit Save & Apply in the panel = idempotent sync, with no accumulating hand patches.
 
@@ -642,7 +642,7 @@ With a workspace selected, preview and apply target it alone; the success note r
 ### 9.4 How it takes effect, and boundaries
 
 - **Preset choice happens at session creation**: pick the workspace on the new-session screen, then pick the matching `orchestrator-<slug>` in the preset selector. The global default preset is untouched. A new session (or a DSH restart) is needed for a freshly generated preset to appear.
-- Preset directories live under `$DSH_HOME/.agent-presets/` and are shared machine-wide: separate DSH instances launched from different projects never clobber each other, because their slugs differ.
+- Preset directories live under `$DSH_HOME/.agent-presets/` and are shared machine-wide: separate DSH instances launched from different projects never clobber each other, because their slugs differ. On DSH ≥ 0.1.7 these presets are additionally registered through declaration rows in the managed block of `$DSH_HOME/cordis.patch.yml` (`config.id` being `orchestrator` / `orchestrator-<slug>`); the same slug naming works on both generations — see "Version support and the dual preset landing" in the [installation guide](installation_en.md).
 - The fallback CLI still targets the global entry only; the `workspaces` section survives a CLI apply unchanged.
 - A running session never switches presets — a session's roles and tool surfaces are assembled at creation and fixed for its lifetime; to change the lineup, start a new session with the new preset.
 

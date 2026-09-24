@@ -12,14 +12,15 @@ Check the following before installing:
 
 - **Node.js ≥ 18**. The DSH host and the plugin chain both run on Node; with an older version `dsh` won't start in the first place. Check with `node --version`.
 - **pnpm available**. `dsh plugin` is a transparent pass-through to pnpm: installing a plugin package into a profile is done by pnpm. If pnpm is missing the install command fails with a pnpm error — install pnpm (`npm i -g pnpm` or `corepack enable`) and retry.
-- **A working DSH host** (the `dsh` command, including its Web/agent runtime; **@deepseek-ai/dsh ≥ 0.1.5**, the minimum supported version). This plugin does not modify DSH source code; it only writes the orchestrator preset into DSH's preset roster and mounts the Paoding Config page into the Web sidebar, so a usable DSH home directory must exist first.
+- **A working DSH host** (the `dsh` command, including its Web/agent runtime; **@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.1**, all supported — the installer adapts to the two preset mechanisms automatically; see §2 "Version support and the dual preset landing"). This plugin does not modify DSH source code; it only writes the orchestrator preset into DSH's preset roster and mounts the Paoding Config page into the Web sidebar, so a usable DSH home directory must exist first.
 - **Path facts** (constants built into the generation pipeline; know them before customizing):
 
 | Item | Default | Description |
 |---|---|---|
 | `$DSH_HOME` | `~/.dsh` | The DSH home directory (the `DSH_HOME` environment variable is honored, defaulting to `$HOME/.dsh`). The home-layer `cordis.patch.yml`, `node_modules`, `profiles/<name>/cordis.patch.yml`, and plugin profile directories live under it |
-| preset roster root | `$DSH_HOME/.agent-presets/` | The directory `dsh-agent-presets` scans for locally authored presets |
-| Install target of this preset | `$DSH_HOME/.agent-presets/orchestrator` | The generated artifact: `agent.cordis.yml` (rewritten role config), `preset.yml`, `restrict.mjs`, and the `.generator-version` marker — a static directory |
+| preset roster root | `$DSH_HOME/.agent-presets/` | Under DSH ≤ 0.1.6, `dsh-agent-presets` scans this directory for locally authored presets; under DSH ≥ 0.1.7 the host no longer scans it and the directory is just where the preset files live (see §2 "Version support and the dual preset landing") |
+| Install target of this preset | `$DSH_HOME/.agent-presets/orchestrator` | The generated artifact: `agent.cordis.yml` (rewritten role config), `preset.yml`, `restrict.mjs`, and the `.generator-version` marker — a static directory; per-workspace presets land in sibling `orchestrator-<slug>` directories |
+| Declaration managed block (DSH ≥ 0.1.7 only) | a managed block inside `$DSH_HOME/cordis.patch.yml` | Opens with `# --- dsh-paoding presets (auto-generated; do not edit) ---` and closes with the matching end marker; the `- insert:` rows inside carry `@deepseek-ai/dsh-agent-preset` declarations, maintained by the installer — see §2 |
 | Config file | `$DSH_HOME/dsh-paoding.config.yml` | Role/tool assignments written by the Paoding Config panel's Save & Apply (`0o600`, hand-editable); first-install automation reads and writes it too |
 
 - **Environment variables**: `DSH_HOME` overrides the DSH home directory (default `~/.dsh`); `DSH_PAODING_CONFIG` overrides the config-file path (honored by the panel; the in-repo fallback CLI uses `--config <file>` instead).
@@ -47,13 +48,39 @@ The orchestrator preset needs no separate install — the plugin fills it in aut
 
 ### Profile semantics
 
-`--profile web` decides which profile the plugin is installed into: the Paoding Config page appears only in a DSH Web launched with that profile. `web` is the default profile of `dsh web`, so most machines need no change; multi-profile users run `dsh plugin add` once per profile they want it in. The orchestrator preset itself lives under `$DSH_HOME/.agent-presets/` and is shared machine-wide, independent of profiles — Save & Apply from any profile's panel writes the same preset.
+`--profile web` decides which profile the plugin is installed into: the Paoding Config page appears only in a DSH Web launched with that profile. `web` is the default profile of `dsh web`, so most machines need no change; multi-profile users run `dsh plugin add` once per profile they want it in. The orchestrator preset itself lives under `$DSH_HOME/.agent-presets/` and is shared machine-wide, independent of profiles — under DSH ≥ 0.1.7 the declaration rows go into the home-layer `$DSH_HOME/cordis.patch.yml`, equally profile-independent — Save & Apply from any profile's panel writes the same preset.
+
+### Version support and the dual preset landing (DSH 0.1.5 – 0.1.7-rc.1)
+
+The plugin supports two host generations: **DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 are all supported**, with an identical install and usage flow. As of plugin 0.3.4, package.json declares `peerDependencies: @deepseek-ai/dsh >= 0.1.5` explicitly — from 0.1.7 the host runs a plugin-compatibility precheck before installing: no declaration meant a default pass, an explicit one gets checked against the real compatibility surface; 0.1.5 / 0.1.6 never read the field, where the declaration is pure metadata and changes nothing about the install.
+
+The two generations discover "local authored presets" differently, so the installer maintains a dual landing, detecting the host automatically — nothing for the user to do:
+
+- **Directory track (DSH ≤ 0.1.6)**: the host discovers presets by scanning directories under `$DSH_HOME/.agent-presets/` — the directory is the registration. The installer writes the artifacts to `$DSH_HOME/.agent-presets/orchestrator/` (`agent.cordis.yml` + `preset.yml` + `restrict.mjs`) as before; workspace-specific presets land in sibling `orchestrator-<slug>` directories.
+- **Declaration track (DSH ≥ 0.1.7)**: the host no longer scans directories; it reads `@deepseek-ai/dsh-agent-preset` declaration rows from the patch instead. The installer maintains a managed block in `$DSH_HOME/cordis.patch.yml` — opening with `# --- dsh-paoding presets (auto-generated; do not edit) ---` and closing with the matching end marker — whose `- insert:` rows write the declarations: the global preset gets `config.id: orchestrator`, a workspace preset gets `config.id: orchestrator-<slug>`, each with all plugin rows inlined under `plugins`; `restrict.mjs` is referenced by an absolute `file:` URL. The artifact trio still lands in `.agent-presets/<id>/` — demoted from "the directory is the registration" to "a place where the files live". User content outside the block is left untouched, byte for byte; the block carries a do-not-edit marker, and anything hand-edited inside it is overwritten by the next save.
+
+The installer decides which track to take in this order:
+
+1. runtime probe from the Web panel first — the `agentPresets` service's `register` method exists only since 0.1.7; finding it means the declaration track;
+2. `dsh --version` on the CLI side;
+3. a last-resort probe of `$DSH_HOME/node_modules/@deepseek-ai/dsh-agent-preset` (that singular package being present means 0.1.7+);
+4. if all fail, default to ≤ 0.1.6 (the safe side).
+
+The first save/self-heal after the host version changes migrates automatically, in both directions, with no manual steps:
+
+- **Downgrade self-heal (0.1.7 → 0.1.6)**: 0.1.6 does not understand declaration rows — leaving them in the patch breaks profile startup — so the installer removes the managed block from the home patch automatically; the directory-track artifacts are already complete, and the preset slips back to directory scanning seamlessly.
+- **Upgrade migration (0.1.6 → 0.1.7)**: the installer writes the managed block automatically; sessions on presets generated under the old track (`.agent-presets/`, `agentPreset: orchestrator`) keep matching under the new track by `config.id`, so old sessions resume without a gap.
+
+Two cross-version behavior alignments happen the same automatic way, with no user action:
+
+- **Summary budget**: from 0.1.7 the host raises the compaction `maxTokens` default to 65536; this preset pins `maxTokens: 8192` on `dsh-compaction-basic` explicitly, so the 0.1.5 / 0.1.6 summary-budget behavior is preserved identically on both generations.
+- **Panel icons**: 0.1.7 changed the ui-primitives icon naming; the panel's icons carry a cross-version fallback, so one bundle renders correctly on both host generations and the panel behaves identically on either.
 
 ### First-install automation: restart = full install
 
 At startup the plugin checks whether the orchestrator preset is in place: if the `$DSH_HOME/.agent-presets/orchestrator` directory is missing, or its `.generator-version` marker does not match the plugin package version, it automatically performs one install equivalent to `--auto` — applying `~/.dsh/dsh-paoding.config.yml` when it exists, writing the base template otherwise (DSH base tools only; see below). It runs the same detection/generation pipeline as the panel's Save & Apply (`collectState` / `generateAndInstall`) — the same pipeline, but the startup self-heal detects with a pure file scan and no runtime detection facts while the panel detects with them; when a bundle-form plugin is installed on the host, the two detection inventories may differ, and the outputs differ slightly with them.
 
-So **`dsh plugin add` + restart = a complete install**: preset generated, config template on disk, panel ready — all in one step. If the automatic generation fails it never takes the plugin down — a warning is logged, and you can apply manually from the panel.
+So **`dsh plugin add` + restart = a complete install**: preset generated, config template on disk, panel ready — all in one step. If the automatic generation fails it never takes the plugin down — a warning is logged, and you can apply manually from the panel. The startup self-heal also maintains the dual landing and the cross-version migration: after the host moves between 0.1.6 and 0.1.7, the first self-heal writes or removes the managed block in `$DSH_HOME/cordis.patch.yml` automatically (see "Version support and the dual preset landing" above).
 
 ### The version marker and auto-regeneration
 
@@ -164,7 +191,7 @@ Panel data goes over the **same-origin `/api/paoding/*`**: the Node side registe
 - **Agent tool-assignment cards**: one fixed card for the main agent (unchecking a base tool adds it to `main_agent_remove`, dropping it from the main agent; checking an MCP / plugin tool adds it to `main_agent_extra`; skills in two groups, "read on demand" and "inline full text"; plus a "persona extra" editor — edit, clear, or restore the default) ＋ three built-in role cards (`search_external` / `design` / `implement`) ＋ any number of custom role cards (with a delete button); every role card presents its tools in three groups — base / MCP / plugin — with per-item checkboxes, and the persona is editable. "Create a custom agent role" at the bottom.
 - **Skill assignment**: one row per skill, check which agents it goes to (written into the matching personas as `Available skills` soft guidance; role skills are soft guidance, main-agent skills have the read-on-demand/inline groups).
 - **Preview**: generates `agent.cordis.yml` without writing, showing each role's intent → kept counts plus the full generated text.
-- **Save & Apply**: after confirmation, writes the preset (overwriting `$DSH_HOME/.agent-presets/orchestrator`) and saves the current assignments to `$DSH_HOME/dsh-paoding.config.yml`; success asks you to restart DSH or start a new session (and flags when a patch is newer than the generated output). Opening the panel loads the existing config file as the current values — hand-edited choices are visible and editable right away.
+- **Save & Apply**: after confirmation, writes the preset (overwriting `$DSH_HOME/.agent-presets/orchestrator`) and registers it per host generation — on ≤ 0.1.6 the directory scan picks it up as-is, on ≥ 0.1.7 the declaration managed block in `$DSH_HOME/cordis.patch.yml` is maintained in the same pass (see §2) — then saves the current assignments to `$DSH_HOME/dsh-paoding.config.yml`; success asks you to restart DSH or start a new session (and flags when a patch is newer than the generated output). Opening the panel loads the existing config file as the current values — hand-edited choices are visible and editable right away.
 
 ## 7. Uninstalling
 
@@ -178,6 +205,8 @@ rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets"/orchestrator-*
 
 The first removes the plugin and the sidebar panel (scoped to the given profile), the second deletes the orchestrator preset directory, and the third removes the per-workspace preset directories (`orchestrator-<basename>`) created when you configured individual workspaces (if you never did, the glob matches nothing and it's harmless) — the base `orchestrator` directory is already gone with the previous command and is not covered by that glob. The config file `~/.dsh/dsh-paoding.config.yml` is not removed with them — keep it or delete it, it does not affect any other DSH configuration, and a reinstall's first-install automation would apply it again.
 
+On a DSH ≥ 0.1.7 host, check one more place: `$DSH_HOME/cordis.patch.yml` may still carry the dsh-paoding managed block (the `- insert:` declaration rows wrapped in marker comments). Once the preset directories are gone those declaration rows dangle, pointing at deleted directories — remove the whole managed block (from the `# --- dsh-paoding presets (auto-generated; do not edit) ---` opening line through the end marker) as well; content outside the block is untouched.
+
 Uninstalling touches nothing else on the host (MCP, plugins, sessions), and stays decoupled from DSH source code; "编排模式 (Orchestrator)" disappears from the preset selector for new sessions.
 
 ## 8. Troubleshooting
@@ -188,7 +217,7 @@ Uninstalling touches nothing else on the host (MCP, plugins, sessions), and stay
 
 **The plugin is installed but "编排模式 (Orchestrator)" is not in the preset list**
 
-The preset is generated automatically when the plugin starts: first make sure you **restarted DSH** after installing; presets load when a session is created, so after the restart you also need a new session for it to appear in the selector. Still nothing? Check the DSH log for `paoding-config-ui` warnings (a failed auto-generation is logged; apply manually from the panel), then check `ls "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"` — an empty directory usually means the plugin's runtime `$DSH_HOME` differs from the home directory you assumed (export `DSH_HOME=…` explicitly before launching DSH).
+The preset is generated automatically when the plugin starts: first make sure you **restarted DSH** after installing; presets load when a session is created, so after the restart you also need a new session for it to appear in the selector. Still nothing? Check the DSH log for `paoding-config-ui` warnings (a failed auto-generation is logged; apply manually from the panel), then check `ls "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"` — an empty directory usually means the plugin's runtime `$DSH_HOME` differs from the home directory you assumed (export `DSH_HOME=…` explicitly before launching DSH). If the directory is there, the host is 0.1.7+, and the selector still shows nothing, check `$DSH_HOME/cordis.patch.yml` for the dsh-paoding managed block — 0.1.7 discovers presets through the declaration rows inside it; if the block is missing, hit Save & Apply once in the panel to write it (see §2 "Version support and the dual preset landing").
 
 **`tools.restrict()` reports unknown tools / subagent creation is rejected**
 

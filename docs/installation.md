@@ -12,14 +12,15 @@
 
 - **Node.js ≥ 18**。DSH host 与插件链路都跑在 Node 上；版本过低时 `dsh` 本身就起不来。可用 `node --version` 自查。
 - **pnpm 可用**。`dsh plugin` 是 pnpm 的透明转发器：插件包装进 profile 时由 pnpm 完成。缺失时安装命令会报 pnpm 相关错误，装好 pnpm（`npm i -g pnpm` 或 `corepack enable`）后重试。
-- **已安装 DSH host**（`dsh` 可用，含其 Web/agent 运行时；**@deepseek-ai/dsh ≥ 0.1.5**，最低支持版本）。本插件不改 DSH 源码，只往 DSH 的 preset roster 写入编排预设、并把「庖丁配置」面板挂进 Web 左侧栏，因此先要有可用的 DSH 家目录。
+- **已安装 DSH host**（`dsh` 可用，含其 Web/agent 运行时；**@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.1** 全支持，安装器自动适配两代预设机制，详见第 2 节「版本支持与预设落点双轨」）。本插件不改 DSH 源码，只往 DSH 的 preset roster 写入编排预设、并把「庖丁配置」面板挂进 Web 左侧栏，因此先要有可用的 DSH 家目录。
 - **路径事实**（生成管线内建常量，写死前先了解它们）：
 
 | 项 | 默认值 | 说明 |
 |---|---|---|
 | `$DSH_HOME` | `~/.dsh` | DSH 家目录（认环境变量 `DSH_HOME`，缺省 `$HOME/.dsh`）。host 层配置 `cordis.patch.yml`、`node_modules`、`profiles/<name>/cordis.patch.yml`、插件 profile 目录都在其下 |
-| preset roster 根目录 | `$DSH_HOME/.agent-presets/` | `dsh-agent-presets` 扫描本地 authored presets 的目录 |
-| 本预设安装目标 | `$DSH_HOME/.agent-presets/orchestrator` | 生成产物：`agent.cordis.yml`（重写后的角色配置）、`preset.yml`、`restrict.mjs`、`.generator-version` 版本标记，是一个静态目录 |
+| preset roster 根目录 | `$DSH_HOME/.agent-presets/` | DSH ≤ 0.1.6 由 `dsh-agent-presets` 扫描此目录发现本地 authored presets；DSH ≥ 0.1.7 宿主不再扫目录，此目录退为预设文件存放处（见第 2 节「版本支持与预设落点双轨」） |
+| 本预设安装目标 | `$DSH_HOME/.agent-presets/orchestrator` | 生成产物：`agent.cordis.yml`（重写后的角色配置）、`preset.yml`、`restrict.mjs`、`.generator-version` 版本标记，是一个静态目录；按工作区配置生成的预设落同一父目录下的 `orchestrator-<slug>` |
+| 声明行托管块（仅 DSH ≥ 0.1.7） | `$DSH_HOME/cordis.patch.yml` 内的托管块 | 以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、配套 end 标记收尾，块内 `- insert:` 写 `@deepseek-ai/dsh-agent-preset` 声明行；安装器自动维护，详见第 2 节 |
 | 配置文件 | `$DSH_HOME/dsh-paoding.config.yml` | 「庖丁配置」面板「保存并应用」写入的角色与工具分配（`0o600`，可手编）；首装自动化同样读写它 |
 
 - **环境变量**：`DSH_HOME` 覆盖 DSH 家目录（默认 `~/.dsh`）；`DSH_PAODING_CONFIG` 覆盖配置文件路径（面板认它；仓库内兜底 CLI 则用 `--config <file>` 指定）。
@@ -47,13 +48,39 @@ dsh plugin --profile web add dsh-paoding
 
 ### profile 语义
 
-`--profile web` 决定插件装进哪个 profile：「庖丁配置」面板只在以该 profile 启动的 DSH Web 里出现。`web` 是 `dsh web` 的默认 profile，多数机器无需改动；多 profile 用户对每个需要的 profile 各执行一次 `dsh plugin add`。编排预设本体落在 `$DSH_HOME/.agent-presets/`，全机共享、不随 profile 走——在任何 profile 的面板里「保存并应用」，写的都是同一份预设。
+`--profile web` 决定插件装进哪个 profile：「庖丁配置」面板只在以该 profile 启动的 DSH Web 里出现。`web` 是 `dsh web` 的默认 profile，多数机器无需改动；多 profile 用户对每个需要的 profile 各执行一次 `dsh plugin add`。编排预设本体落在 `$DSH_HOME/.agent-presets/`，全机共享、不随 profile 走——DSH ≥ 0.1.7 的声明行写在 home 层 `$DSH_HOME/cordis.patch.yml`，同样与 profile 无关——在任何 profile 的面板里「保存并应用」，写的都是同一份预设。
+
+### 版本支持与预设落点双轨（DSH 0.1.5 – 0.1.7-rc.1）
+
+本插件兼容两代宿主：**DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 全部支持**，安装与使用流程完全一致。插件 0.3.4 起，package.json 显式声明 `peerDependencies: @deepseek-ai/dsh >= 0.1.5`——0.1.7 起宿主装插件前做兼容性预检，无声明等于默认放行，显式声明后按真实兼容面把关；0.1.5 / 0.1.6 不读这个字段，声明纯属元数据，不影响安装。
+
+两代宿主发现「本地 authored preset」的机制不同，安装器据此分双轨落点，宿主检测全自动、用户无感：
+
+- **目录轨（DSH ≤ 0.1.6）**：宿主扫描 `$DSH_HOME/.agent-presets/` 下的目录来发现 preset，目录即注册。安装器照旧把产物写成 `$DSH_HOME/.agent-presets/orchestrator/`（`agent.cordis.yml` + `preset.yml` + `restrict.mjs`）；按工作区配置生成的预设落同目录下的 `orchestrator-<slug>`。
+- **声明行轨（DSH ≥ 0.1.7）**：宿主不再扫目录，改为读取 patch 里的 `@deepseek-ai/dsh-agent-preset` 声明行。安装器在 `$DSH_HOME/cordis.patch.yml` 里维护一个托管块——以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、以配套的 end 标记收尾——块内用 `- insert:` 写声明行：全局预设 `config.id: orchestrator`，工作区预设 `config.id: orchestrator-<slug>`，各自的 `plugins` 内联全部插件行；`restrict.mjs` 以绝对 `file:` URL 引用。产物三件套仍落在 `.agent-presets/<id>/`，只是从「目录即注册」变成「文件存放处」。托管块之外的用户内容一字节不动；块内带 do not edit 标记，手改块内内容会在下次保存时被覆盖。
+
+安装器按下面的顺序判定走哪条轨：
+
+1. Web 面板运行时探测优先——`agentPresets` 服务的 `register` 方法 0.1.7 才有，探测到即在声明行轨；
+2. CLI 侧 `dsh --version`；
+3. 兜底探测 `$DSH_HOME/node_modules/@deepseek-ai/dsh-agent-preset`（这个单数包在，即为 0.1.7+）；
+4. 都失败时默认按 ≤ 0.1.6 处理（安全侧）。
+
+宿主版本变化后的首次保存/自愈会自动迁移，双向都不用手动干预：
+
+- **降级自愈（0.1.7 → 0.1.6）**：0.1.6 不认识声明行，声明行留在 patch 里会让 profile 启动失败——安装器自动撤下 home patch 里的托管块；目录轨产物本就齐全，预设无缝回到目录扫描。
+- **升级迁移（0.1.6 → 0.1.7）**：安装器自动补写托管块；`.agent-presets/` 里按旧轨生成的 preset 会话（`agentPreset: orchestrator`）在新轨下按 `config.id` 继续对上，老会话恢复不断档。
+
+另有两处跨版本行为对齐，同样自动完成、无需用户动作：
+
+- **摘要预算**：0.1.7 起宿主把 compaction 的 `maxTokens` 默认升到 65536；本 preset 对 `dsh-compaction-basic` 显式钉 `maxTokens: 8192`，0.1.5 / 0.1.6 的摘要预算行为原样保持，两代宿主上一致。
+- **面板图标**：0.1.7 改了 ui-primitives 的图标命名，面板图标已做跨版本兜底，同一 bundle 在两代宿主上都能正常渲染；面板功能在两代宿主上一致。
 
 ### 首装自动化：重启即完整安装
 
 插件启动时自动检测编排预设是否就位：`$DSH_HOME/.agent-presets/orchestrator` 目录缺失，或其中的 `.generator-version` 标记与插件包版本不符时，自动执行一次等价 `--auto` 的安装——`~/.dsh/dsh-paoding.config.yml` 已存在就按配置应用；没有就写基础模板（只含 DSH 自带的基础工具，见下）。它走的是与面板「保存并应用」同一条检测/生成管线（`collectState` / `generateAndInstall`）——同一管线，但启动自愈的检测是纯文件扫描、不带运行时检测事实，面板则带；host 上装有 bundle 形态插件时，两者的检测库存可能不同，产物随之略有差异。
 
-所以 **`dsh plugin add` + 重启 = 完整安装**：预设生成、配置模板落盘、面板可点，一步到位。自动生成失败不会拖垮插件启动——只在 DSH 日志里记一条告警，可到面板手动「保存并应用」补上。
+所以 **`dsh plugin add` + 重启 = 完整安装**：预设生成、配置模板落盘、面板可点，一步到位。自动生成失败不会拖垮插件启动——只在 DSH 日志里记一条告警，可到面板手动「保存并应用」补上。启动自愈同时负责双轨落点的维护与跨版本迁移——宿主在 0.1.6 与 0.1.7 之间升级、降级后，首次自愈会自动补写或撤下 `$DSH_HOME/cordis.patch.yml` 里的托管块（见上节「版本支持与预设落点双轨」）。
 
 ### 版本标记与自动重生成
 
@@ -164,7 +191,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 - **Agent 工具分配卡片**：主 agent 一张固定卡（基础工具取消勾选 = 加入 `main_agent_remove` 从主 agent 剔除；MCP / 插件工具勾选 = 加入 `main_agent_extra`；技能「read 按需」与「内联全文」两组勾选；另有「人设追加」编辑区，可改、清空、恢复默认）＋ `search_external` / `design` / `implement` 三张内置角色卡 ＋ 任意自定义角色卡（带删除按钮）；每张角色卡把工具按「基础工具 / MCP 工具 / 插件工具」三组呈现、可逐项勾选，并可编辑 persona。底部「新建自定义 agent 角色」。
 - **技能分配**：每个 skill 一行，勾选分配给哪些 agent（写入对应 persona 的 `Available skills` 软引导；角色技能软引导，主 agent 技能另有 read 按需/内联两组）。
 - **预览生成**：不写盘生成 `agent.cordis.yml`，显示每个角色 allow 的 intent → kept 计数与生成全文。
-- **保存并应用**：确认后写入 preset（覆盖 `$DSH_HOME/.agent-presets/orchestrator`）并把当前分配保存到 `$DSH_HOME/dsh-paoding.config.yml`；应用成功后提示重启 DSH 或新建会话生效（检测到 patch 比生成结果新时提示重启后生效）。打开面板时会加载既有配置文件作为当前值——手编过的选择直接可见、可改。
+- **保存并应用**：确认后写入 preset（覆盖 `$DSH_HOME/.agent-presets/orchestrator`）并按宿主版本同步登记——≤ 0.1.6 目录扫描即生效，≥ 0.1.7 同步维护 `$DSH_HOME/cordis.patch.yml` 里的声明行托管块（见第 2 节）——再把当前分配保存到 `$DSH_HOME/dsh-paoding.config.yml`；应用成功后提示重启 DSH 或新建会话生效（检测到 patch 比生成结果新时提示重启后生效）。打开面板时会加载既有配置文件作为当前值——手编过的选择直接可见、可改。
 
 ## 7. 卸载
 
@@ -178,6 +205,8 @@ rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets"/orchestrator-*
 
 第一条摘掉插件与侧栏面板（只影响指定 profile），第二条删掉编排预设目录，第三条清掉按工作区配置时生成的各工作区预设目录（`orchestrator-<目录名>`；没用过按工作区配置就没有这类目录，通配不命中、无害）——基础 `orchestrator` 目录已由上一条命令删掉，不含在这个通配里。配置文件 `~/.dsh/dsh-paoding.config.yml` 不随之上删——留着或删掉都不影响 DSH 其它配置，重装时首装自动化会再次按它应用。
 
+宿主为 DSH ≥ 0.1.7 时再多看一眼：`$DSH_HOME/cordis.patch.yml` 里可能还留着 dsh-paoding 托管块（起止标记注释包着 `- insert:` 声明行）。预设目录删掉后，块内声明行就成了指向已删目录的悬空引用，请把整个托管块（从 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始行到 end 标记行）一并删去——块外内容不受影响。
+
 卸载不影响 host 的其它内容（MCP、插件、会话等），与 DSH 源码零耦合；之后新建会话时「编排模式 (Orchestrator)」不再出现在预设选择器里。
 
 ## 8. 常见问题与排查
@@ -188,7 +217,7 @@ rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets"/orchestrator-*
 
 **装了插件，预设列表里却没有「编排模式 (Orchestrator)」**
 
-预设由插件启动时自动生成：先确认装完后**重启过 DSH**；预设在新会话创建时装载，重启后还要新建一个会话才会出现在选择器里。仍没有就查 DSH 日志里 `paoding-config-ui` 的告警（自动生成失败会记日志，可到面板手动「保存并应用」补上），再检查 `ls "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"`——目录为空多半是插件运行时的 `$DSH_HOME` 与你以为的家目录不一致（启动 DSH 前显式 `export DSH_HOME=…`）。
+预设由插件启动时自动生成：先确认装完后**重启过 DSH**；预设在新会话创建时装载，重启后还要新建一个会话才会出现在选择器里。仍没有就查 DSH 日志里 `paoding-config-ui` 的告警（自动生成失败会记日志，可到面板手动「保存并应用」补上），再检查 `ls "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"`——目录为空多半是插件运行时的 `$DSH_HOME` 与你以为的家目录不一致（启动 DSH 前显式 `export DSH_HOME=…`）。目录在、宿主又是 0.1.7+ 而选择器里仍没有时，再查 `$DSH_HOME/cordis.patch.yml` 里有无 dsh-paoding 托管块——0.1.7 靠块内声明行发现预设，缺块就到面板点一次「保存并应用」补写（见第 2 节「版本支持与预设落点双轨」）。
 
 **`tools.restrict()` 报 unknown tools / 子 agent 创建被拒**
 

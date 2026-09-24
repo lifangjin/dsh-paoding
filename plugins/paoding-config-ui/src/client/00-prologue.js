@@ -24,6 +24,8 @@
  *  - factory 内 require() 只解析平台 seed 模块（react / cordis /
  *    ui-slots / ui-primitives 与已物化模块）；本 bundle 依赖 react 与
  *    @deepseek-ai/dsh-client-ui-primitives。
+ *  - 图标跨版本兜底：DSH ≤0.1.6 图标导出名带尺寸后缀（IconCheckOutline16），
+ *    0.1.7-rc.1 起改粗细命名 + size prop，factory 内把旧名别名到 Regular 版。
  *  - 挂载点：左侧栏底部动作位入口（sidebar.footer.action 键控槽，与插件
  *    广场 cordis 徽章同槽，设置行上方）+ 会话中栏全页 overlay
  *    （data-dsh-paoding-view / html[data-dsh-paoding-active]）；
@@ -50,4 +52,34 @@ window.__ModuleLoader__.load({
     var h = React.createElement;
     var useState = React.useState, useEffect = React.useEffect, useCallback = React.useCallback, useRef = React.useRef;
     var P = require("@deepseek-ai/dsh-client-ui-primitives");
+
+    // 图标跨版本兜底：DSH ≤0.1.6 的 ui-primitives 图标导出名带尺寸后缀
+    // （IconCheckOutline16 / IconChevronDownOutline14，IconProps { size,
+    // className }）；0.1.7-rc.1 起改粗细命名（…OutlineRegular / …Medium，
+    // size 变 prop、默认 16），12 个旧名全部消失。同一份 bundle 要在两代
+    // 宿主上都能跑：旧名缺、新名在，才把旧名别名到对应 Regular 版——新
+    // 组件接受 size prop，ic() 的 size 传参照常生效，旧 14px 名 → Regular
+    // + size 14 视觉等价（同为 1px 描边）。旧宿主上有原生实现就用原生，
+    // Button / Pill 等两代都有的导出一律不动。
+    P = Object.assign({}, P); // 复制一份导出面再补别名：不往共享模块对象上写属性（避免污染宿主里其他 ui-primitives 消费者）；P 是 factory 作用域的 var，重赋值后所有后续片段看到的就是这份副本
+    (function () {
+      var ICON_ALIAS = {
+        IconCheckOutline16: "IconCheckOutlineRegular",
+        IconChevronDownOutline14: "IconChevronDownOutlineRegular",
+        IconCordisPluginOutline14: "IconCordisPluginOutlineRegular",
+        IconDataOutline16: "IconDataOutlineRegular",
+        IconEditOutline16: "IconEditOutlineRegular",
+        IconLoadingOutline16: "IconLoadingOutlineRegular",
+        IconPlusOutline16: "IconPlusOutlineRegular",
+        IconRefreshOutline16: "IconRefreshOutlineRegular",
+        IconSkillOutline16: "IconSkillOutlineRegular",
+        IconTrashOutline16: "IconTrashOutlineRegular",
+        IconUserOutline16: "IconUserOutlineRegular",
+        IconWarningOutline16: "IconWarningOutlineRegular",
+      };
+      Object.keys(ICON_ALIAS).forEach(function (oldName) {
+        var newName = ICON_ALIAS[oldName];
+        if (P[oldName] === undefined && P[newName] !== undefined) P[oldName] = P[newName];
+      });
+    })();
 

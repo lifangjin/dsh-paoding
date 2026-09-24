@@ -118,6 +118,9 @@ export function serializeState(s) {
     suggested: s.suggested,
     installedPresets,
     workspaceMeta,
+    // 预设安装轨道（declarative = 0.1.7+ 声明行 / directory = ≤0.1.6 目录扫描），
+    // 面板可据此展示；旧版 collectState 产出的 state 无此字段时按目录轨兜底
+    presetSystem: s.presetSystem ?? 'directory',
     // 主 persona 尾部追加的默认常量（供 UI「人设追加」默认展示 / 恢复默认）
     mainPersonaExtraDefault: s.mainPersonaExtraDefault ?? null,
     // 运行时识别结果透传（字段缺失视为未启用运行时检测，与旧版 UI 行为一致）
@@ -166,9 +169,11 @@ const PRESET_ENSURE_ABORTED = '插件已卸载（dispose），本次 preset 生�
  *
  * 判定：preset 目录缺失，或 .generator-version 标记缺失 / 版本与 generatorVersion
  * 不符 → 执行一次自动安装：局部 collectState()（不带运行时事实的纯文件扫描，
- * 首装触发点在插件启动、宿主服务未必就绪，且与 CLI --auto 语义对齐；不走
- * refreshState()——那会拿无事实的扫描覆盖路由层的共享缓存）后按既有配置合成
- * assignments（无配置写基础模板），经 generateAndInstall 落盘，最后写标记文件。
+ * 首装触发点在插件启动、宿主服务未必就绪，且与 CLI --auto 语义对齐；预设安装
+ * 轨道由 collectState 内部按 dsh --version / 文件探测兜底，state.presetSystem
+ * 随 state 一并进 generateAndInstall 双轨收尾；不走 refreshState()——那会拿
+ * 无事实的扫描覆盖路由层的共享缓存）后按既有配置合成 assignments（无配置写
+ * 基础模板），经 generateAndInstall 落盘，最后写标记文件。
  * shouldAbort 在各 await 点后检查：插件 dispose 后在途的生成不再继续写盘。
  * 可脱离 ctx 独立调用（单测友好），任何异常自捕、绝不抛出。
  *

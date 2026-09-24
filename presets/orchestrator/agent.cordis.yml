@@ -147,6 +147,9 @@
       name: '@deepseek-ai/dsh-compaction-basic'
       config:
         thresholdRatio: 0.45
+        # 钉住摘要预算：0.1.7 起该键默认从 8192 升到 65536，显式 8192 保持
+        # 0.1.5/0.1.6 的实际行为不变（摘要单次预算不随宿主版本漂移）。
+        maxTokens: 8192
 
     - id: command-compact
       name: '@deepseek-ai/dsh-command-compact'

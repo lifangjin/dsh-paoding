@@ -4,7 +4,7 @@
 
 # 配置
 
-dsh-paoding 把「按角色分工的编排 preset」做成**配置驱动**：你手编（或在「庖丁配置」面板里点选）一个 YAML 配置文件，生成器（`tools/`，面板「保存并应用」与仓库内兜底 CLI 共用同一生成管线 `collectState` / `generateAndInstall`）在应用时据此重写目标 preset —— `~/.dsh/.agent-presets/orchestrator/agent.cordis.yml`，覆盖角色 allow、角色 persona、主 agent 白名单（`config.allow` 注入）、主 agent persona 的技能行/内联与人设追加。
+dsh-paoding 把「按角色分工的编排 preset」做成**配置驱动**：你手编（或在「庖丁配置」面板里点选）一个 YAML 配置文件，生成器（`tools/`，面板「保存并应用」与仓库内兜底 CLI 共用同一生成管线 `collectState` / `generateAndInstall`）在应用时据此重写目标 preset —— `~/.dsh/.agent-presets/orchestrator/agent.cordis.yml`，覆盖角色 allow、角色 persona、主 agent 白名单（`config.allow` 注入）、主 agent persona 的技能行/内联与人设追加。产物路径在两代宿主上一致；两代宿主发现 preset 的机制不同（≤ 0.1.6 目录扫描 / ≥ 0.1.7 patch 声明行托管块），安装器自动适配，见[安装](installation.md)的「版本支持与预设落点双轨」。
 
 配置文件描述的是**声明式意图**。目标文件每次都由「源码 preset + 本配置文件」重新生成：改配置 → 在面板点「保存并应用」= 幂等同步，不会累积手工补丁。
 
@@ -632,7 +632,7 @@ workspaces:
 ### 9.4 生效方式与边界
 
 - **预设选择发生在新建会话时**：新建会话界面选好工作区后，在预设选择器里选对应的 `orchestrator-<slug>`。全局默认预设不受任何影响。预设生效需要新会话（或 DSH 重启后可见）。
-- 预设目录落在 `$DSH_HOME/.agent-presets/` 下，全机共享：同一台机器上不同项目各起的 DSH 实例，因 slug 不同互不覆盖。
+- 预设目录落在 `$DSH_HOME/.agent-presets/` 下，全机共享：同一台机器上不同项目各起的 DSH 实例，因 slug 不同互不覆盖。DSH ≥ 0.1.7 上这些预设另经 `$DSH_HOME/cordis.patch.yml` 托管块里的声明行登记（`config.id` 即 `orchestrator` / `orchestrator-<slug>`），同一套 slug 命名两代宿主通用，见[安装](installation.md)的「版本支持与预设落点双轨」。
 - 兜底 CLI 本次仍只作用于全局条目；`workspaces` 段在 CLI 应用后原样保留，不会被冲掉。
 - 运行中的会话不会换预设——子 agent 的角色与工具面在会话创建时随预设组装定型，会话内不可变；要换套班底，开新会话选新预设。
 

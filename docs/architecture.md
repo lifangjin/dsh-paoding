@@ -246,6 +246,8 @@ SOP（按 stop reason 分流：error 重委派一次 / max-tokens 拆小 / refus
 
 **⑦ 热插拔 = preset 是静态目录 + 插件通道挂载。** 插件本体经 `dsh plugin add`（pnpm + 包内 bundle patch）装入 profile，侧栏面板即挂即卸；编排预设本身是一个静态目录——生成器把静态源复制/改写为
 `$DSH_HOME/.agent-presets/orchestrator`，编辑 YAML / mjs、面板「保存并应用」重新生成、重启 host 或新建会话即生效；
+产物路径两代宿主一致，登记机制按宿主版本双轨——DSH ≤ 0.1.6 目录扫描即注册，DSH ≥ 0.1.7 由 `$DSH_HOME/cordis.patch.yml`
+托管块里的 `@deepseek-ai/dsh-agent-preset` 声明行注册，安装器自动适配与迁移（见[安装](installation.md)第 2 节）；
 卸载 = `dsh plugin remove` 加删目录（见[安装](installation.md)）。DSH 源码零改动，preset 可整体移除、不残留。
 
 ## Web 配置页 client bundle：源头多文件，产物单文件
@@ -266,7 +268,8 @@ grep inline cap 与对照同设计）后，根因锁定为：**默认压缩从�
 **已落地配置。** `agent.cordis.yml` 的 compaction-basic 已设 `thresholdRatio: 0.45`（≈117,965 tokens
 触发），配合 retainRatio 默认保留约 16% 尾部（≈42K）+ 摘要 checkpoint，稳态平均回落到 ~80K 量级。
 压缩每次触发调用一次 LLM 摘要——复用前缀缓存，成本极低——因此触发频繁一点也几乎不额外花钱；
-0.45 是「省 token 与不频繁摘要」之间的平衡点。
+0.45 是「省 token 与不频繁摘要」之间的平衡点。compaction-basic 另显式钉了 `maxTokens: 8192`：
+DSH 0.1.7 起宿主默认升到 65536，显式值让 0.1.5 – 0.1.7-rc.1 全系的摘要预算行为保持一致。
 
 **参数与效果。**
 

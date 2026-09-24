@@ -318,7 +318,11 @@ integration summary) — see [docs/orchestration_en.md](orchestration_en.md).
 into a profile via `dsh plugin add` (pnpm plus the in-package bundle patch), so the sidebar panel mounts and
 unmounts with it; the orchestrator preset is a static directory — the generator copies/rewrites the static
 sources into `$DSH_HOME/.agent-presets/orchestrator`; editing the YAML / mjs, hitting Save & Apply in the
-panel to regenerate, and restarting the host or opening a new session takes effect. Uninstall = `dsh plugin
+panel to regenerate, and restarting the host or opening a new session takes effect. The artifact path is the
+same on both host generations, while registration is dual-track by host version — DSH ≤ 0.1.6 registers by
+directory scan, DSH ≥ 0.1.7 registers through `@deepseek-ai/dsh-agent-preset` declaration rows in the managed
+block of `$DSH_HOME/cordis.patch.yml`, with the installer adapting and migrating automatically (see §2 of the
+[Installation guide](installation_en.md)). Uninstall = `dsh plugin
 remove` plus deleting the directory (see [Installation](installation_en.md)). No DSH source changes; the
 preset leaves nothing behind when removed.
 
@@ -346,7 +350,9 @@ history periodically compressed back down.
 (≈42K) plus a summary checkpoint; the steady-state average falls to the ~80K range. Each compaction run
 performs one LLM summarization call that reuses the prefix cache, so its cost is negligible — triggering
 somewhat more often costs almost nothing extra; 0.45 is the balance point between saving tokens and not
-summarizing too frequently.
+summarizing too frequently. compaction-basic also pins `maxTokens: 8192` explicitly: from DSH 0.1.7 the host
+default rises to 65536, and the explicit value keeps the summary-budget behavior identical across
+0.1.5 – 0.1.7-rc.1.
 
 **Parameters and effect.**
 

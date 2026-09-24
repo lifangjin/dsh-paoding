@@ -19,6 +19,7 @@ dsh-paoding (Chinese brand 「庖丁」/ Pao Ding, from the Zhuangzi parable of 
 - **A visual configurator**: prefer clicking to editing YAML? the 庖丁配置 (Paoding Config) entry in the sidebar bottom action bar (above the Settings row) covers everything; Save & Apply regenerates the preset on the spot — the same generation pipeline as first-install automation.
 - **Notified of new releases, one-click upgrade in the panel**: the panel compares your local version against the latest npm registry publish (GitHub release as fallback) and points to the release page when a newer one is out. The Upgrade button runs `dsh plugin update dsh-paoding` in place (profile auto-detected) to swap in the new version; a DSH restart applies it, and the orchestrator preset regenerates itself against the new version on startup. A dev checkout in link: form cannot be upgraded in place — the panel tells you how to switch back to the registry version. If the check fails (offline, rate-limited), it stays silent and nothing is interrupted.
 - **Installs and uninstalls cleanly**: no DSH source changes; active in a new session right after install, gone when you delete one directory.
+- **Works on both host generations**: DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 are all supported — the two generations discover presets differently (directory scan vs patch declaration rows), and the installer picks the right landing automatically, then migrates on the first save/self-heal after a host upgrade or downgrade, all without user action.
 
 ## Screenshots
 
@@ -26,7 +27,7 @@ dsh-paoding (Chinese brand 「庖丁」/ Pao Ding, from the Zhuangzi parable of 
 
 ## Quick Start
 
-Prerequisites: **Node.js ≥ 18**, **pnpm**, and a working DSH host (**@deepseek-ai/dsh >= 0.1.5**, the minimum supported version).
+Prerequisites: **Node.js ≥ 18**, **pnpm**, and a working DSH host (**@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.1**, all supported — the preset landing adapts to the host generation automatically).
 
 **The official plugin channel (the only install route)** — no clone needed; one command, then a restart:
 
@@ -36,7 +37,7 @@ dsh plugin --profile web add dsh-paoding
 
 Equivalent shortcut: `npx dsh-paoding@latest` (delegates to the command above; default profile web; requires dsh on PATH). Whichever version npx pulls is what gets installed: the actual install is `dsh-paoding@<the version npx resolved>`.
 
-`dsh plugin` is a transparent pass-through to pnpm: the package is installed into the profile by pnpm, and the bundle patch declared inside it mounts the 庖丁配置 (Paoding Config) page into the DSH Web left sidebar. **Restart DSH (`dsh web`)** and the install is complete — on startup the plugin checks itself, and if the orchestrator preset is missing or carries an outdated version marker it regenerates it once (applying `~/.dsh/dsh-paoding.config.yml` when present, writing the base template otherwise). Nothing else to click. Pick "编排模式 (Orchestrator)" in the new-session preset selector; to make it the default, choose it in Settings → Agent Presets.
+`dsh plugin` is a transparent pass-through to pnpm: the package is installed into the profile by pnpm, and the bundle patch declared inside it mounts the 庖丁配置 (Paoding Config) page into the DSH Web left sidebar. **Restart DSH (`dsh web`)** and the install is complete — on startup the plugin checks itself, and if the orchestrator preset is missing or carries an outdated version marker it regenerates it once (applying `~/.dsh/dsh-paoding.config.yml` when present, writing the base template otherwise). Nothing else to click. From DSH 0.1.7 the host discovers presets through patch declaration rows instead, and the plugin switches the registration over by itself — the install steps stay the same. Pick "编排模式 (Orchestrator)" in the new-session preset selector; to make it the default, choose it in Settings → Agent Presets.
 
 Out of the box only DSH's built-in base tools are enabled — detected MCP/host tools are not written in automatically. Open **庖丁配置 (Paoding Config)** in the sidebar, opt into the tools and roles you need, and hit Save & Apply. When you no longer want it, three commands uninstall it for good — the per-workspace presets created by workspace-specific configs are removed too:
 
@@ -45,6 +46,8 @@ dsh plugin --profile web remove dsh-paoding
 rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"
 rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets"/orchestrator-*
 ```
+
+On a DSH 0.1.7+ host there is one extra step: delete the dsh-paoding managed block from `~/.dsh/cordis.patch.yml` (the auto-generated marker comments), so no declaration rows are left pointing at the removed directories (see §7 of the [installation guide](docs/installation_en.md)).
 
 **Dev checkout install** — to hack on the plugin or the preset sources, link the repository directly (changes go live via HMR or a restart):
 
@@ -77,7 +80,7 @@ All preferences live in `~/.dsh/dsh-paoding.config.yml`: role add/remove/tweak, 
 | Document | Contents |
 |---|---|
 | [Architecture](docs/architecture_en.md) | Why it is designed this way — overview, the cost ledger, roles and tools, mapping to DSH's native mechanisms, token governance, known limits. |
-| [Installation](docs/installation_en.md) | The single official channel (`dsh plugin add`), first-install automation and the version marker, upgrading, dev-checkout install, host patch detection, the Paoding Config panel, uninstalling, troubleshooting. |
+| [Installation](docs/installation_en.md) | The single official channel (`dsh plugin add`), version support and the dual preset landing (DSH 0.1.5 – 0.1.7-rc.1), first-install automation and the version marker, upgrading, dev-checkout install, host patch detection, the Paoding Config panel, uninstalling, troubleshooting. |
 | [Orchestration](docs/orchestration_en.md) | Orchestration overview, how failures surface and the three recovery layers, one-shot vs continuable, context isolation. |
 | [Configuration](docs/configuration_en.md) | The full key reference, tuning built-in roles, main-agent tools and skills, custom roles, per-role models, per-role session modes. |
 

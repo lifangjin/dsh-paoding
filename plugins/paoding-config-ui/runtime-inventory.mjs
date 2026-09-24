@@ -18,6 +18,9 @@
  *     MCP 工具由 dsh-mcp-client 以 `mcp__<server>__<tool>` 公开名注册，
  *     故 schemas()/entries() 等能枚举出形如 mcp__tavily__tavily_search 的
  *     全名，与 tools/install.mjs 的 inventory 命名约定一致。
+ *   - 预设安装轨道（presetSystem）：agentPresets 服务有无 register 方法——
+ *     0.1.7+ 的 agent-preset-registry（声明行轨）有，≤0.1.6 的目录扫描服务
+ *     没有；collectState 拿它免掉 dsh --version 子进程探测。
  *
  * 约定：本模块只负责“取数”，任何一步失败都不抛出——错误记入 error 字符串
  * （多条用 '; ' 连接、整体截断），返回可用的部分结果；列表带截断上限防爆。
@@ -188,6 +191,22 @@ function readRegisteredToolNames(ctx, errors) {
 }
 
 /**
+ * 预设安装轨道探测：0.1.7+ 宿主的 agentPresets 服务是 agent-preset-registry
+ * （带 register 方法，声明行轨）；≤0.1.6 的同名服务只做 .agent-presets 目录
+ * 扫描、没有 register。ctx.reflect.get(name, false) 读不到服务返回 undefined、
+ * 不触发 inject 护栏，整个探测自捕——任何异常都按 directory（安全侧）处理，
+ * 永不抛出。
+ */
+function detectPresetSystemOf(ctx) {
+  try {
+    const svc = ctx?.reflect?.get?.('agentPresets', false)
+    return svc != null && typeof svc.register === 'function' ? 'declarative' : 'directory'
+  } catch {
+    return 'directory'
+  }
+}
+
+/**
  * 采集运行时事实（供 collectState 合并 / UI 展示）。
  * 永不抛出：任何异常都会落到 error 里，返回部分结果。
  */
@@ -209,5 +228,6 @@ export function collectRuntimeFacts(ctx) {
     ...(error !== '' ? { error } : {}),
     pluginEntries: plugin.entries,
     toolNames: tools.names,
+    presetSystem: detectPresetSystemOf(ctx),
   }
 }
