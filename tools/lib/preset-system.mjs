@@ -5,9 +5,10 @@
  * name: '@deepseek-ai/dsh-agent-preset' 的行（config = { id 必填, name?,
  * description?, order?, plugins[] 必填 }，宿主 agent-preset-registry 挂载
  * plugins 子树；行 name 相对声明行 baseUrl 解析，绝对 file: URL 直接采用）。
- * 本模块为双轨化提供三件事：
+ * 本模块为双轨化提供四件事：
  *   1) 轨道探测 detectPresetSystem：运行时探测（Web 插件对宿主服务的实时反射，
- *      最权威）> `dsh --version` 版本号 > $DSH_HOME 单数包存在性 > 默认
+ *      最权威）> 进程 argv 宿主版本（插件进程内零开销，反映正在运行的宿主而非
+ *      PATH 上的 dsh）> `dsh --version` 版本号 > $DSH_HOME 单数包存在性 > 默认
  *      directory（安全侧：声明行误落 0.1.6 会炸 profile 启动，目录轨误落
  *      0.1.7 只是预设不显示）；
  *   2) 声明行构造 buildPresetRowText：把生成的 agent.cordis.yml 全文内联成
@@ -17,11 +18,16 @@
  *      readHomePatchRows：对 $DSH_HOME/cordis.patch.yml 的 MANAGED 标记块做
  *      行级增删查，块外用户内容一字节不动；托管块损坏（缺结束标记）时拒绝
  *      写盘并明确报错，与仓库「配置不可信时拒绝落盘」口径一致。
- * 零运行时依赖（node:child_process / node:fs / node:path）；被 state 引用。
+ *   4) 轨道迁移对账 backfillHomePatchRows / listOrchestratorPresetIds /
+ *      parseGeneratorMarker / formatGeneratorMarker：宿主只升 dsh 不动插件时
+ *      （标记版本一致、轨道翻转——升级最常见路径），按磁盘产物补写缺失声明行
+ *      而不整盘重生成；生成器标记记「版本 + 轨道」两行，任一不符即触发自愈。
+ * 零运行时依赖（node:child_process / node:fs / node:path / node:url）；被 state 引用。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { warn } from './util.mjs'
 
 /** 托管块起始标记：其后到结束标记之间是本工具自动生成的声明行，用户勿改。 */
@@ -62,14 +68,22 @@ export function isDeclarativeTriple(triple) {
 /**
  * 探测当前宿主的预设安装轨道，返回 'declarative' | 'directory'。逐级降级：
  *   1) runtimeSystem 直通：Web 插件运行时对宿主服务的实时探测结果最权威；
- *   2) `dsh --version`（timeout 10s；spawn 失败 / 超时 / 输出不可解析一律吞掉
+ *   2) 进程 argv 宿主版本：插件与宿主同进程时零开销、且反映正在运行的宿主
+ *      （PATH 上的 dsh 可能已换代而旧进程还在跑，此时以 argv 为准才不会把
+ *      声明行提前写出去）；CLI / 测试进程不是 dsh，返回 null 落到下一级；
+ *   3) `dsh --version`（timeout 10s；spawn 失败 / 超时 / 输出不可解析一律吞掉
  *      落到下一级）；
- *   3) 文件探测：单数包 @deepseek-ai/dsh-agent-preset 是 0.1.7 的声明行宿主
+ *   4) 文件探测：单数包 @deepseek-ai/dsh-agent-preset 是 0.1.7 的声明行宿主
  *      组件，在即声明轨（复数包时代没有它）；
- *   4) 默认 directory —— 安全侧兜底（理由见模块头注释）。
+ *   5) 默认 directory —— 安全侧兜底（理由见模块头注释）。
  */
 export async function detectPresetSystem({ dshHome, runtimeSystem = null } = {}) {
   if (runtimeSystem === 'declarative' || runtimeSystem === 'directory') return runtimeSystem
+  const argvVersion = hostVersionFromArgv()
+  if (argvVersion !== null) {
+    const triple = parseVersionTriple(argvVersion)
+    if (triple !== null) return isDeclarativeTriple(triple) ? 'declarative' : 'directory'
+  }
   const versionText = dshVersionText()
   if (versionText !== null) {
     const triple = parseVersionTriple(versionText)
@@ -77,6 +91,32 @@ export async function detectPresetSystem({ dshHome, runtimeSystem = null } = {})
   }
   if (existsSync(path.join(dshHome, 'node_modules', '@deepseek-ai', 'dsh-agent-preset'))) return 'declarative'
   return 'directory'
+}
+
+/**
+ * 从当前进程 argv[1] 推断正在运行的宿主版本：沿脚本所在目录向上找最近的
+ * package.json，name 是 @deepseek-ai/dsh 即取其 version。插件跑在宿主进程里，
+ * 这比 PATH 上的 `dsh --version` 又快又准（无需子进程）；找不到（CLI / 测试 /
+ * 任意非 dsh 进程）返回 null。找到的第一个 package.json 不是 dsh 即止——
+ * 向上穿越无关包目录没有意义。
+ */
+function hostVersionFromArgv() {
+  try {
+    const entry = process.argv[1]
+    if (typeof entry !== 'string' || entry === '') return null
+    let dir = path.dirname(path.resolve(entry))
+    for (let i = 0; i < 6 && dir !== path.dirname(dir); i++) {
+      const pkgPath = path.join(dir, 'package.json')
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+        return pkg?.name === '@deepseek-ai/dsh' ? String(pkg.version ?? '') : null
+      }
+      dir = path.dirname(dir)
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 /** `dsh --version` 取裸版本号文本；任何失败（ENOENT / 超时 / 非零退出）返回 null。 */
@@ -387,4 +427,131 @@ export function readHomePatchRows(dshHome) {
   } catch {
     return []
   }
+}
+
+// ── 轨道迁移对账（宿主升降级自愈）────────────────────────────────────────────
+//
+// 只升 dsh 不动插件是升级的最常见路径：标记版本照旧吻合、自愈不会触发，但
+// .agent-presets/ 目录轨产物在 0.1.7 下已经无人扫描——preset 静默消失。这一节
+// 的原语补上这条缝：标记从「只记版本」升级为「版本 + 轨道」两行，轨道翻转即
+// 触发自愈；且声明轨上的自愈可以只补 home patch 声明行（磁盘产物原样保留、
+// 字节不动），不必整盘重生成。
+
+/** 编排类 preset 目录名（orchestrator / orchestrator-<slug>）的形状过滤。 */
+const ORCHESTRATOR_PRESET_ID_RE = /^orchestrator(-[a-z0-9-]+)?$/
+
+/**
+ * 列出 $DSH_HOME/.agent-presets/ 下的编排类 preset 目录名（含基础 orchestrator
+ * 与各工作区专属 orchestrator-<slug>），按名排序。目录不存在 / 不可读一律返回
+ * 空列表。非编排类目录（liangshen 之类自制 preset）不在此列——迁移对账只认
+ * 本工具生成的产物形状。
+ */
+export function listOrchestratorPresetIds(dshHome) {
+  try {
+    return readdirSync(path.join(dshHome, '.agent-presets'))
+      .filter((name) => ORCHESTRATOR_PRESET_ID_RE.test(name))
+      .sort()
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 读任意 preset 目录下 preset.yml 的显示元数据（name / description / order），
+ * 与 generateAndInstall 写 preset.yml / 声明行 config 的取值口径同源：顶层
+ * name / order 单行标量 + description 多行纯量（续行按 YAML 折叠语义以空格
+ * 拼接成单值）。读不到 / 解析不出时返回空元数据——声明行的 name /
+ * description / order 都是宿主可选键，缺省不致命。
+ */
+export function readPresetDirMeta(dir) {
+  try {
+    const text = readFileSync(path.join(dir, 'preset.yml'), 'utf8')
+    const lines = text.split(/\r?\n/)
+    const firstMatch = (re) => {
+      for (const line of lines) {
+        const m = re.exec(line)
+        if (m) return m
+      }
+      return null
+    }
+    const name = firstMatch(/^name:[ \t]*(.+?)[ \t]*$/)?.[1] ?? null
+    const orderRaw = firstMatch(/^order:[ \t]*(\d+)[ \t]*$/)
+    const order = orderRaw ? Number(orderRaw[1]) : null
+    let description = null
+    const di = lines.findIndex((l) => /^description:/.test(l))
+    if (di !== -1) {
+      const parts = [lines[di].slice('description:'.length).trim()]
+      for (let i = di + 1; i < lines.length; i++) {
+        const line = lines[i]
+        if (line.trim() === '' || !/^[ \t]/.test(line)) break // 续行尽 / 撞上下一个顶层键
+        parts.push(line.trim())
+      }
+      description = parts.filter((p) => p !== '').join(' ') || null
+    }
+    return { name, description, order }
+  } catch {
+    return { name: null, description: null, order: null }
+  }
+}
+
+/**
+ * 把磁盘上已有的编排类 preset 目录补写进 home patch 托管块（缺行才补，已有行
+ * 原样不动）；行在、目录没了的撤行——目录与行同生同灭。产物不全（缺
+ * agent.cordis.yml / restrict.mjs）的目录跳过并 warn，不拖垮其余补写。
+ * 返回实际补写成功的 presetId 列表（既没补也没撤时为空数组）。
+ */
+export function backfillHomePatchRows(dshHome, presetIds) {
+  const rowsOnDisk = readHomePatchRows(dshHome)
+  const wanted = new Set((Array.isArray(presetIds) ? presetIds : []).filter((id) => ORCHESTRATOR_PRESET_ID_RE.test(id)))
+  const rows = []
+  const backfilled = []
+  for (const presetId of wanted) {
+    if (rowsOnDisk.some((r) => r.presetId === presetId)) continue
+    const dir = path.join(dshHome, '.agent-presets', presetId)
+    try {
+      const agentYmlText = readFileSync(path.join(dir, 'agent.cordis.yml'), 'utf8')
+      const restrictFile = path.join(dir, 'restrict.mjs')
+      if (!existsSync(restrictFile)) throw new Error('restrict.mjs 缺失')
+      const meta = readPresetDirMeta(dir)
+      rows.push(
+        buildPresetRowText({
+          presetId,
+          name: meta.name,
+          description: meta.description,
+          order: meta.order,
+          agentYmlText,
+          restrictFileUrl: pathToFileURL(restrictFile).href,
+        }),
+      )
+      backfilled.push(presetId)
+    } catch (err) {
+      warn(`声明行补写跳过 ${presetId}（产物不全，可整盘重生成修复）: ${err?.message ?? err}`)
+    }
+  }
+  if (rows.length > 0) upsertHomePatchRows(dshHome, rows)
+  // 反向对账：托管块里有行、磁盘上已无对应目录的（用户手删目录等），行同步撤下
+  const orphanRowIds = rowsOnDisk.filter((r) => r.presetId !== null && !wanted.has(r.presetId)).map((r) => r.rowId)
+  if (orphanRowIds.length > 0) stripHomePatchRows(dshHome, orphanRowIds)
+  return backfilled
+}
+
+/**
+ * 解析 .generator-version 标记文本为 { version, track }。v2 格式两行：首行
+ * 生成器版本、次行预设安装轨道（declarative / directory）；旧格式（单行版本，
+ * 0.3.4 及以前）解析出 track: null —— 恰是「宿主轨道已翻转但产物版本未动」的
+ * 迁移触发态。空文本 / 全空白返回 null（按未生成处理）。
+ */
+export function parseGeneratorMarker(text) {
+  const lines = String(text ?? '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== '')
+  if (lines.length === 0) return null
+  const track = lines[1] === 'declarative' || lines[1] === 'directory' ? lines[1] : null
+  return { version: lines[0], track }
+}
+
+/** 生成 .generator-version 标记文本（版本 + 轨道两行，v2 格式）。 */
+export function formatGeneratorMarker(version, presetSystem) {
+  return `${version}\n${presetSystem}\n`
 }

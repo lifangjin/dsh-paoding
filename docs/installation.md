@@ -19,7 +19,7 @@
 |---|---|---|
 | `$DSH_HOME` | `~/.dsh` | DSH 家目录（认环境变量 `DSH_HOME`，缺省 `$HOME/.dsh`）。host 层配置 `cordis.patch.yml`、`node_modules`、`profiles/<name>/cordis.patch.yml`、插件 profile 目录都在其下 |
 | preset roster 根目录 | `$DSH_HOME/.agent-presets/` | DSH ≤ 0.1.6 由 `dsh-agent-presets` 扫描此目录发现本地 authored presets；DSH ≥ 0.1.7 宿主不再扫目录，此目录退为预设文件存放处（见第 2 节「版本支持与预设落点双轨」） |
-| 本预设安装目标 | `$DSH_HOME/.agent-presets/orchestrator` | 生成产物：`agent.cordis.yml`（重写后的角色配置）、`preset.yml`、`restrict.mjs`、`.generator-version` 版本标记，是一个静态目录；按工作区配置生成的预设落同一父目录下的 `orchestrator-<slug>` |
+| 本预设安装目标 | `$DSH_HOME/.agent-presets/orchestrator` | 生成产物：`agent.cordis.yml`（重写后的角色配置）、`preset.yml`、`restrict.mjs`、`.generator-version` 版本与轨道标记，是一个静态目录；按工作区配置生成的预设落同一父目录下的 `orchestrator-<slug>` |
 | 声明行托管块（仅 DSH ≥ 0.1.7） | `$DSH_HOME/cordis.patch.yml` 内的托管块 | 以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、配套 end 标记收尾，块内 `- insert:` 写 `@deepseek-ai/dsh-agent-preset` 声明行；安装器自动维护，详见第 2 节 |
 | 配置文件 | `$DSH_HOME/dsh-paoding.config.yml` | 「庖丁配置」面板「保存并应用」写入的角色与工具分配（`0o600`，可手编）；首装自动化同样读写它 |
 
@@ -80,11 +80,17 @@ dsh plugin --profile web add dsh-paoding
 
 插件启动时自动检测编排预设是否就位：`$DSH_HOME/.agent-presets/orchestrator` 目录缺失，或其中的 `.generator-version` 标记与插件包版本不符时，自动执行一次等价 `--auto` 的安装——`~/.dsh/dsh-paoding.config.yml` 已存在就按配置应用；没有就写基础模板（只含 DSH 自带的基础工具，见下）。它走的是与面板「保存并应用」同一条检测/生成管线（`collectState` / `generateAndInstall`）——同一管线，但启动自愈的检测是纯文件扫描、不带运行时检测事实，面板则带；host 上装有 bundle 形态插件时，两者的检测库存可能不同，产物随之略有差异。
 
-所以 **`dsh plugin add` + 重启 = 完整安装**：预设生成、配置模板落盘、面板可点，一步到位。自动生成失败不会拖垮插件启动——只在 DSH 日志里记一条告警，可到面板手动「保存并应用」补上。启动自愈同时负责双轨落点的维护与跨版本迁移——宿主在 0.1.6 与 0.1.7 之间升级、降级后，首次自愈会自动补写或撤下 `$DSH_HOME/cordis.patch.yml` 里的托管块（见上节「版本支持与预设落点双轨」）。
+所以 **`dsh plugin add` + 重启 = 完整安装**：预设生成、配置模板落盘、面板可点，一步到位。自动生成失败不会拖垮插件启动——只在 DSH 日志里记一条告警，可到面板手动「保存并应用」补上。启动自愈同时负责双轨落点的维护与跨版本迁移——宿主在 0.1.6 与 0.1.7 之间升级、降级后，首次自愈会自动补写或撤下 `$DSH_HOME/cordis.patch.yml` 里的托管块（见上节「版本支持与预设落点双轨」）。**只升级 dsh、不动插件**时同样如此：宿主轨道翻转后首次启动，自愈按磁盘上已有的预设产物补写缺失的声明行——preset 内容一字节不重生成，各工作区预设一并恢复。
 
 ### 版本标记与自动重生成
 
-`.generator-version` 标记（内容 = 生成器版本）由插件启动自愈在生成 preset 后写入。面板「保存并应用」与兜底 CLI 的生成走整目录重建、不写回标记——重建即移除旧标记，下次 DSH 启动自愈发现标记缺失会多补跑一次生成并重写标记（产物相同，只是多跑一轮）。版本不符触发重生成的语义不变：插件升级后标记与包版本不符，下次 DSH 启动自动按新版重生成，「升级后 preset 还是旧版产物」的漂移就此消除。标记只在缺失或版本不符时触发重生成，面板不监视配置文件改动；想立刻按当前配置重新生成，点面板「保存并应用」。
+`.generator-version` 标记由插件启动自愈在生成 preset 后写入，内容两行：**生成器版本 + 预设安装轨道**（旧版只写版本一行，读到时按「轨道未知」处理，恰是宿主升级后的迁移触发态）。三类触发：
+
+- **标记缺失 / 版本不符**（首装、插件升级）→ 整盘重生成。面板「保存并应用」与兜底 CLI 的生成走整目录重建、不写回标记——重建即移除旧标记，下次 DSH 启动自愈发现标记缺失会多补跑一次生成并重写标记（产物相同，只是多跑一轮）。插件升级后标记与包版本不符，下次 DSH 启动自动按新版重生成，「升级后 preset 还是旧版产物」的漂移就此消除。
+- **版本一致、轨道翻转**（只升 dsh 不动插件——升级最常见路径）→ 轻量迁移，不重生成内容：声明轨上按磁盘产物补写缺失的声明行（含各工作区预设），directory 轨上若有残留声明行则整盘重生成撤下（残留会让 0.1.6 profile 启动失败）。
+- **版本轨道都一致** → 对账声明行：缺行补行、目录已删的孤儿行撤行，齐则什么都不动。
+
+面板不监视配置文件改动；想立刻按当前配置重新生成，点面板「保存并应用」。
 
 ### 基础模板与工具勾选
 
@@ -108,7 +114,7 @@ dsh plugin --profile web add dsh-paoding
 dsh plugin --profile <name> update dsh-paoding
 ```
 
-（profile 自动探测，通常无需手填。）升级只换 profile 里的插件包本体，当前进程的代码不变；成功后提示**重启 DSH**，重启时 preset 按 `.generator-version` 标记自动按新版重生成。
+（profile 自动探测，通常无需手填。）升级只换 profile 里的插件包本体，当前进程的代码不变；成功后提示**重启 DSH**，重启时 preset 按 `.generator-version` 标记自动按新版重生成。只升级 dsh 本体（不动插件）同理：重启即触发轨道迁移自愈，无需重装或重新应用。
 
 手动升级等价：直接在终端跑上面这条 `dsh plugin update` 命令，同样重启生效。
 

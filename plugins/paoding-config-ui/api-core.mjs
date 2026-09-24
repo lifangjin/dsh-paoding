@@ -12,6 +12,14 @@ import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'n
 import { readFile } from 'node:fs/promises'
 import { assignSlugs, collectState, generateAndInstall, presetIdOf } from '../../tools/install.mjs'
 import { autoAssignments } from '../../tools/lib/alloc.mjs'
+import {
+  backfillHomePatchRows,
+  detectPresetSystem,
+  formatGeneratorMarker,
+  listOrchestratorPresetIds,
+  parseGeneratorMarker,
+  readHomePatchRows,
+} from '../../tools/lib/preset-system.mjs'
 
 export function resolveDshHome() {
   return process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
@@ -142,10 +150,11 @@ export function installAssignments(state, assignments, { dryRun = false, saveCon
 // ── 首装 / 升级后 preset 自动重生成 ─────────────────────────────────────────
 //
 // 唯一官方安装通道是插件通道（dsh plugin add dsh-paoding），包不再携带 CLI：
-// preset 的落盘改由插件启动时自愈——目录缺失（首装）或由旧版生成器产出（升级
-// 换包）时，按 install --auto 语义重生成一次。对账基准是 preset 目录里的
-// .generator-version 标记文件（内容 = 生成器版本）：插件包版本变 → 标记不符 →
-// 下次启动自动重生成，一举解决「升级后 preset 还是旧版产物」的漂移问题。
+// preset 的落盘改由插件启动时自愈。对账基准是 preset 目录里的 .generator-version
+// 标记文件（v2 起内容 = 生成器版本 + 预设安装轨道两行）：插件包版本变、或宿主
+// 轨道翻转（只升 dsh 不动插件——升级最常见路径，旧标记只记版本时同样解析为
+// 轨道不符）→ 下次启动自动自愈，一举解决「升级后 preset 还是旧版产物」与
+// 「升 dsh 后 preset 静默消失」两类漂移。
 
 // 生成器版本（标记对账基准）：插件包根 package.json 读一次即缓存。读失败兜底
 // '0.0.0'——最坏后果只是每次启动多重生成一次 preset，不会装坏任何东西。
@@ -165,23 +174,30 @@ export function pluginVersion() {
 const PRESET_ENSURE_ABORTED = '插件已卸载（dispose），本次 preset 生成中止'
 
 /**
- * 首装 / 升级后自动重生成 orchestrator preset（等价 install --auto 语义）。
+ * 首装 / 升级后自动安装 orchestrator preset（等价 install --auto 语义）。
  *
- * 判定：preset 目录缺失，或 .generator-version 标记缺失 / 版本与 generatorVersion
- * 不符 → 执行一次自动安装：局部 collectState()（不带运行时事实的纯文件扫描，
- * 首装触发点在插件启动、宿主服务未必就绪，且与 CLI --auto 语义对齐；预设安装
- * 轨道由 collectState 内部按 dsh --version / 文件探测兜底，state.presetSystem
- * 随 state 一并进 generateAndInstall 双轨收尾；不走 refreshState()——那会拿
- * 无事实的扫描覆盖路由层的共享缓存）后按既有配置合成 assignments（无配置写
- * 基础模板），经 generateAndInstall 落盘，最后写标记文件。
+ * 判定（满足其一即动盘）：
+ *   - preset 目录 / 标记缺失，或标记版本与 generatorVersion 不符 → 整盘重生成；
+ *   - 版本一致但标记轨道与当前宿主轨道不符（只升 dsh 不动插件 / 旧格式标记）→
+ *     轻量迁移：声明轨上按磁盘产物补写缺失声明行（内容字节不动，不重生成），
+ *     directory 轨上落回整盘重生成（残留声明行会让 0.1.6 profile 启动失败，
+ *     撤块自愈由其 directory 分支完成）；
+ *   - 版本轨道都一致 → 对账声明行（缺行补行、孤儿行撤行），齐则跳过。
+ * 局部 collectState() 不带运行时事实（首装触发点在插件启动、宿主服务未必就绪，
+ * 且与 CLI --auto 语义对齐；预设安装轨道由 collectState 内部按 argv 宿主版本 /
+ * dsh --version / 文件探测兜底，state.presetSystem 随 state 一并进
+ * generateAndInstall 双轨收尾；不走 refreshState()——那会拿无事实的扫描覆盖
+ * 路由层的共享缓存）后按既有配置合成 assignments（无配置写基础模板），经
+ * generateAndInstall 落盘，最后写标记文件（版本 + 轨道）。
  * shouldAbort 在各 await 点后检查：插件 dispose 后在途的生成不再继续写盘。
  * 可脱离 ctx 独立调用（单测友好），任何异常自捕、绝不抛出。
  *
  * @param {{dshHome?: string, generatorVersion?: string, shouldAbort?: () => boolean}} opts
  *   缺省取 resolveDshHome() 与 pluginVersion()；shouldAbort 返回 true 时中止
  *   （按 reason 返回，不算 error）。
- * @returns {Promise<{installed: boolean, reason?: string, error?: string}>}
- *   installed=true 表示本次实际重生成；false 时带 reason（无需重生成 / 已中止）
+ * @returns {Promise<{installed: boolean, backfilled?: string[], reason?: string, error?: string}>}
+ *   installed=true 表示本次实际重生成；backfilled 非空表示本次补写了哪些
+ *   preset 的声明行（内容未重生成）；两者皆否时带 reason（无需动盘 / 已中止）
  *   或 error（生成失败，调用方只记日志）。
  */
 export async function ensurePresetInstalled({ dshHome = resolveDshHome(), generatorVersion = pluginVersion(), shouldAbort = null } = {}) {
@@ -190,10 +206,35 @@ export async function ensurePresetInstalled({ dshHome = resolveDshHome(), genera
     const markerFile = path.join(presetDir, '.generator-version')
     let marker = null
     try {
-      marker = (await readFile(markerFile, 'utf8')).trim()
+      marker = parseGeneratorMarker(await readFile(markerFile, 'utf8'))
     } catch { /* 目录或标记缺失：按未生成处理 */ }
-    if (marker === generatorVersion) {
-      return { installed: false, reason: 'preset 已由当前版本生成器产出，无需重生成' }
+
+    if (marker !== null && marker.version === generatorVersion) {
+      // 版本一致：内容无需重生成，但宿主轨道可能已随 dsh 升降级翻转（只升 dsh
+      // 不动插件是升级常态），声明行也可能被外部动过——这里做轻量对账。
+      const system = await detectPresetSystem({ dshHome })
+      if (shouldAbort?.()) return { installed: false, reason: PRESET_ENSURE_ABORTED }
+      const presetIds = listOrchestratorPresetIds(dshHome)
+      if (system === 'declarative') {
+        const backfilled = backfillHomePatchRows(dshHome, presetIds)
+        if (marker.track === 'declarative' && backfilled.length === 0) {
+          return { installed: false, reason: 'preset 已由当前版本生成器产出，无需重生成' }
+        }
+        writeFileSync(markerFile, formatGeneratorMarker(generatorVersion, 'declarative'), 'utf8')
+        return backfilled.length > 0
+          ? { installed: false, backfilled, reason: `宿主已切换声明行轨，补写 ${backfilled.length} 条预设声明行（preset 内容未重生成）` }
+          : { installed: false, reason: '预设安装轨道标记已更新为声明行轨（内容无需重生成）' }
+      }
+      // directory 轨：声明行残留会让 0.1.6 profile 启动失败——有残留走整盘
+      // 重生成（directory 分支撤块自愈）；行清白时只升级标记格式，不动内容。
+      if (readHomePatchRows(dshHome).length === 0) {
+        if (marker.track === 'directory') {
+          return { installed: false, reason: 'preset 已由当前版本生成器产出，无需重生成' }
+        }
+        writeFileSync(markerFile, formatGeneratorMarker(generatorVersion, 'directory'), 'utf8')
+        return { installed: false, reason: '预设安装轨道标记已升级为带轨道格式（内容无需重生成）' }
+      }
+      // 声明行残留 + directory 宿主：落到下方整盘重生成
     }
 
     if (shouldAbort?.()) return { installed: false, reason: PRESET_ENSURE_ABORTED }
@@ -220,9 +261,14 @@ export async function ensurePresetInstalled({ dshHome = resolveDshHome(), genera
     // 标记最后写：generateAndInstall 会整目录重建（rmSync），先写必被删。
     if (shouldAbort?.()) return { installed: false, reason: PRESET_ENSURE_ABORTED }
     mkdirSync(presetDir, { recursive: true })
-    writeFileSync(markerFile, `${generatorVersion}\n`, 'utf8')
+    const track = result.presetSystem === 'declarative' ? 'declarative' : 'directory'
+    writeFileSync(markerFile, formatGeneratorMarker(generatorVersion, track), 'utf8')
+    // 声明轨上整盘重生成只重建本 preset 的行：其余工作区 preset 目录若在而
+    // 声明行缺（轨道翻转后首次触发本路径），一并补齐。
+    const backfilled = track === 'declarative' ? backfillHomePatchRows(dshHome, listOrchestratorPresetIds(dshHome)) : []
     return {
       installed: true,
+      ...(backfilled.length > 0 ? { backfilled } : {}),
       reason: state.existing
         ? 'preset 缺失或由旧版生成器产出，已按现有配置重新生成'
         : 'preset 缺失或由旧版生成器产出，已写入基础模板',

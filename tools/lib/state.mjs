@@ -16,7 +16,6 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -50,8 +49,10 @@ import { smartDefaults } from './alloc.mjs'
 import {
   buildPresetRowText,
   detectPresetSystem,
+  listOrchestratorPresetIds,
   presetRowId,
   readHomePatchRows,
+  readPresetDirMeta,
   stripHomePatchRows,
   upsertHomePatchRows,
 } from './preset-system.mjs'
@@ -236,14 +237,7 @@ export async function collectState({ dshHome, configFile, profile = null, patche
   // 无读权限等）一律降级为空列表，绝不影响检测结果本体；generateAndInstall
   // 成功落盘后以它为对账清单做孤儿工作区 preset 回收。两轨的产物目录同名同
   // 位置（.agent-presets/<presetId>/），这一扫描天然覆盖两轨的 installed 判定。
-  let installedPresets = []
-  try {
-    installedPresets = readdirSync(path.join(dshHome, '.agent-presets'))
-      .filter((name) => /^orchestrator(-[a-z0-9-]+)?$/.test(name))
-      .sort()
-  } catch {
-    installedPresets = []
-  }
+  const installedPresets = listOrchestratorPresetIds(dshHome)
 
   return {
     dshHome,
@@ -283,43 +277,13 @@ export async function collectState({ dshHome, configFile, profile = null, patche
 }
 
 /**
- * SRC preset.yml 显示元数据提取（name / description / order）：声明行轨把这些
- * 值写进 home patch 声明行的 config，取值口径与目录轨写 preset.yml 完全同源
+ * SRC preset.yml 显示元数据（name / description / order）：声明行轨把这些值
+ * 写进 home patch 声明行的 config，取值口径与目录轨写 preset.yml 完全同源
  * （name 可被 main_agent_display_name / 工作区派生名覆盖，见 generateAndInstall
- * 调用处）。preset.yml 是仓库内受控格式：顶层 name / order 单行标量 +
- * description 多行纯量（续行按 YAML 折叠语义以空格拼接成单值，落声明行时由
- * JSON.stringify 转义）。读不到 / 解析不出时返回空元数据——声明行的
- * name / description / order 都是宿主可选键，缺省不致命。
+ * 调用处）。解析实现已沉到 preset-system.readPresetDirMeta（迁移对账同源复用）。
  */
 function readPresetMeta() {
-  try {
-    const text = readFileSync(path.join(SRC_DIR, 'preset.yml'), 'utf8')
-    const lines = text.split(/\r?\n/)
-    const firstMatch = (re) => {
-      for (const line of lines) {
-        const m = re.exec(line)
-        if (m) return m
-      }
-      return null
-    }
-    const name = firstMatch(/^name:[ \t]*(.+?)[ \t]*$/)?.[1] ?? null
-    const orderRaw = firstMatch(/^order:[ \t]*(\d+)[ \t]*$/)
-    const order = orderRaw ? Number(orderRaw[1]) : null
-    let description = null
-    const di = lines.findIndex((l) => /^description:/.test(l))
-    if (di !== -1) {
-      const parts = [lines[di].slice('description:'.length).trim()]
-      for (let i = di + 1; i < lines.length; i++) {
-        const line = lines[i]
-        if (line.trim() === '' || !/^[ \t]/.test(line)) break // 续行尽 / 撞上下一个顶层键
-        parts.push(line.trim())
-      }
-      description = parts.filter((p) => p !== '').join(' ') || null
-    }
-    return { name, description, order }
-  } catch {
-    return { name: null, description: null, order: null }
-  }
+  return readPresetDirMeta(SRC_DIR)
 }
 
 /**

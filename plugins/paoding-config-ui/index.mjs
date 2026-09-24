@@ -175,12 +175,16 @@ function triggerPresetEnsure(ctx, isDisposed) {
         ctx.logger?.info?.(
           `paoding-config-ui: orchestrator preset 已重生成（generator v${generatorVersion}，${r.reason}）`,
         )
+      } else if (Array.isArray(r.backfilled) && r.backfilled.length > 0) {
+        // 轨道迁移 / 声明行对账补写（preset 内容未重生成）：值得留一行轨迹，
+        // 方便「升级 dsh 后主子代理消失」这类问题定位。
+        ctx.logger?.info?.(`paoding-config-ui: ${r.reason ?? '预设声明行已补写'}（${r.backfilled.join('、')}）`)
       } else if (r.error) {
         // 失败复位防抖闩：下次 activate（热重载 / 重注册）可重试
         presetEnsureStarted = false
         ctx.logger?.warn?.(`paoding-config-ui: preset 自动生成失败（可在侧栏底部「庖丁配置」入口手动应用）: ${r.error}`)
       }
-      // 版本一致的常规跳过不打日志：每次启动都刷一行纯噪音。
+      // 版本轨道一致的常规跳过 / 纯标记格式升级不打日志：每次启动都刷一行纯噪音。
     })
     .catch((err) => {
       presetEnsureStarted = false
