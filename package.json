@@ -1,6 +1,6 @@
 {
   "name": "dsh-paoding",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "庖丁 — DSH (DeepSeek Harness) 编排模式安装器：host 感知的角色工具过滤 + Web 设置页可视化配置器",
   "type": "module",
   "license": "MIT",
@@ -18,6 +18,9 @@
   ],
   "engines": {
     "node": ">=18"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.5"
   },
   "scripts": {
     "prepublishOnly": "node scripts/build-client.mjs --check"
@@ -46,7 +49,6 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-connection"
       ]
