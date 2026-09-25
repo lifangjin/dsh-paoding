@@ -6,8 +6,9 @@
  *     upgrade/preview/apply/rescan + client.css 静态样式），经
  *     ./api-core.mjs 复用 tools/install.mjs 的检测与生成管线；workspaces 直连
  *     宿主 workspaceRegistry 服务（list / create，幂等）；version
- *     复用 tools/lib/version.mjs 的版本检测（npm registry 优先、GitHub release
- *     兜底）；upgrade 经 tools/lib/upgrade.mjs spawn `dsh plugin update` 完成
+ *     复用 tools/lib/version.mjs 的版本检测（npm registry 优先，npmmirror
+ *     镜像、GitHub release 依次兜底）；upgrade 经 tools/lib/upgrade.mjs
+ *     spawn `dsh plugin update` 完成
  *     一键升级。首装 / 升级后 preset 自动重生成（ensurePresetInstalled，等价
  *     install --auto 语义）在路由注册完成后异步触发，不阻塞启动。
  *   - Client 侧：lib/client.js 经宿主 sidebar.footer.action 键控槽在左侧栏
@@ -530,7 +531,7 @@ export function apply(ctx) {
         }
 
         if (route === 'version' && req.method === 'GET') {
-          // 版本提示：npm registry 优先、GitHub release 兜底（tools/lib/version.mjs，
+          // 版本提示：npm registry 优先，npmmirror / GitHub 依次兜底（version.mjs，
           // 带 1 小时内存缓存，命中不发外网请求）。绝不 5xx——检测失败也回
           // 200 + error 字段，面板据此静默降级（不打扰使用）。timeoutMs 3000：
           // 检测只是锦上添花，不值得让面板等更久。layout 告知客户端挂载形态

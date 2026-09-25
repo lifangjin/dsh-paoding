@@ -10,7 +10,9 @@
  * 开发 link: 直连形态的真实路径在仓库里、匹配不到，如实报「无法就地升级」。
  *
  * 零依赖纯 Node（>=18）：目标版本复用 version.mjs 的 fetchLatestFromRegistry
- * （npm registry 优先），子进程、时钟全部可注入便于单测。升级后不做磁盘后验
+ * / fetchLatestFromMirror（官方源失败再走 npmmirror 镜像——点「升级」的用户
+ * 网络本来就在出状况，多一路快路能实打实救回一次升级），子进程、时钟全部
+ * 可注入便于单测。升级后不做磁盘后验
  * ——本进程代码不随升级变化，无从对账；成功与否以 dsh 子进程退出码为准，
  * 新版本在重启 DSH 后生效（preset 由新包的启动自愈钩子自动重生成）。
  *
@@ -22,7 +24,7 @@ import os from 'node:os'
 import { spawn } from 'node:child_process'
 import { realpath } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { currentVersion, compareVersions, fetchLatestFromRegistry } from './version.mjs'
+import { currentVersion, compareVersions, fetchLatestFromMirror, fetchLatestFromRegistry } from './version.mjs'
 
 // 子进程输出上限：合并 stdout+stderr 后只保留最后 ~8KB（安装进度刷屏无排障
 // 价值，报错结论都在尾部）；累积过程中超过 1MB 就先截一版，防止异常刷爆内存。
@@ -124,13 +126,17 @@ async function doRunUpgrade({ profile, fetchImpl, spawnImpl, timeoutMs, now }) {
   const elapsedMs = () =>
     Math.max(0, (typeof now === 'function' ? now() : typeof now === 'number' ? now : Date.now()) - startedAt)
 
-  // ① 版本预检：拿不到 registry latest 就不做半截升级（宁可不动现有安装）。
-  //    registry 超时给 10s：面板静默检测用 3s 够了，这里是用户显式点了「升级」、
-  //    本来就要等，多花几秒换一次成功率是划算的；仍超时就如实报失败。
+  // ① 版本预检：拿不到 latest 就不做半截升级（宁可不动现有安装）。官方源
+  //    失败再试 npmmirror 镜像。超时给 10s：面板静默检测用 3s 够了，这里是
+  //    用户显式点了「升级」、本来就要等，多花几秒换一次成功率是划算的；
+  //    仍超时就如实报失败。
   const { version: current } = await currentVersion()
   const reg = await fetchLatestFromRegistry({ fetchImpl, timeoutMs: 10000 })
-  if (!reg.ok) return { ok: false, error: `无法确定最新版本：${reg.error}` }
-  const target = reg.latest // 形如 v0.2.3
+  const manifest = reg.ok ? reg : await fetchLatestFromMirror({ fetchImpl, timeoutMs: 10000 })
+  if (!manifest.ok) {
+    return { ok: false, error: `无法确定最新版本：官方源 ${reg.error}；镜像 ${manifest.error}` }
+  }
+  const target = manifest.latest // 形如 v0.2.3
   if (compareVersions(target, current) <= 0) return { ok: true, upToDate: true, current }
   const targetVersion = target.replace(/^v/, '')
 

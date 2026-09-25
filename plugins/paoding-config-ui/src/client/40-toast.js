@@ -40,9 +40,28 @@
     // 渲染并持有升级动作，面板正文不再重复版本信息；当前版本号就在旁边的
     // pd-versionTag 上，卡内不再赘述「（当前 vX）」。note / error 为升级
     // 反馈行（成功提示 / 失败原因，含子进程输出尾部），也收在卡内。
+    // 检测失败（v.error 非空且无新版信息）不再全静默：弱化小字「版本检测
+    // 失败 · 重试」——否则「没新版」与「没测出来」无从区分（真实事故：用户
+    // 端 0.3.2 对 0.3.5 迟迟看不到升级卡，只能靠作者远程猜）。检测成功且确
+    // 无新版仍静默（常态不打扰）。完整失败原因（三路源各自错误 + 代理提示）
+    // 收在 title 悬浮提示里，不占版面。
     function versionRowOf(v, opts) {
       if (!v || typeof v.current !== "string" || !v.current) return null;
-      if (!(v.updateAvailable && v.latest)) return null;
+      if (!(v.updateAvailable && v.latest)) {
+        if (typeof v.error !== "string" || !v.error) return null;
+        var retryBusy = !!(opts && opts.retryBusy);
+        return h("span", { className: "omd-versionRow omd-versionFail", title: v.error },
+          h("span", { className: "omd-versionIcon" }, "⚠"),
+          h("span", { className: "omd-versionText" }, "版本检测失败"),
+          typeof (opts && opts.onRetry) === "function"
+            ? h("button", {
+                type: "button",
+                className: "omd-retryBtn",
+                disabled: retryBusy,
+                onClick: opts.onRetry,
+              }, retryBusy ? "检测中…" : "重试")
+            : null);
+      }
       var busy = !!opts && !!opts.busy;
       var note = (opts && opts.note) || "";
       var error = (opts && opts.error) || "";

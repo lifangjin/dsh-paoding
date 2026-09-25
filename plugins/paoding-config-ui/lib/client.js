@@ -236,8 +236,8 @@ window.__ModuleLoader__.load({
     // 版本提示（渲染在页头标题旁，由 PageShell 持有）：常态版本号不进正文；
     // updateAvailable 时这里渲染醒目提示卡：releaseUrl 新标签页打开 release 页、
     // 「升级」按钮走 onUpgrade（一键 dsh plugin update 自升级），并保留当前版本号。
-    // latest 为 null（含检测失败 error 的情况）一律不显示新版部分——检测失败
-    // 时服务端也只回 200 + error 字段，这里整行静默。
+    // latest 为 null 一律不显示新版部分；检测失败（error 非空）改渲染弱化失败行
+    // （⚠ 版本检测失败 · 重试，完整原因在 title 悬浮提示），不再整行静默。
     // opts（可省）：busy/busyOp 复用面板级互斥（任何操作进行中都禁用升级，
     // 升级进行中也反过来禁用其他按钮），onUpgrade 为点击回调。
     // ── 服务端 API 助手（PageShell 与 ConfigPanel 共用）──────────────────────
@@ -325,9 +325,28 @@ window.__ModuleLoader__.load({
     // 渲染并持有升级动作，面板正文不再重复版本信息；当前版本号就在旁边的
     // pd-versionTag 上，卡内不再赘述「（当前 vX）」。note / error 为升级
     // 反馈行（成功提示 / 失败原因，含子进程输出尾部），也收在卡内。
+    // 检测失败（v.error 非空且无新版信息）不再全静默：弱化小字「版本检测
+    // 失败 · 重试」——否则「没新版」与「没测出来」无从区分（真实事故：用户
+    // 端 0.3.2 对 0.3.5 迟迟看不到升级卡，只能靠作者远程猜）。检测成功且确
+    // 无新版仍静默（常态不打扰）。完整失败原因（三路源各自错误 + 代理提示）
+    // 收在 title 悬浮提示里，不占版面。
     function versionRowOf(v, opts) {
       if (!v || typeof v.current !== "string" || !v.current) return null;
-      if (!(v.updateAvailable && v.latest)) return null;
+      if (!(v.updateAvailable && v.latest)) {
+        if (typeof v.error !== "string" || !v.error) return null;
+        var retryBusy = !!(opts && opts.retryBusy);
+        return h("span", { className: "omd-versionRow omd-versionFail", title: v.error },
+          h("span", { className: "omd-versionIcon" }, "⚠"),
+          h("span", { className: "omd-versionText" }, "版本检测失败"),
+          typeof (opts && opts.onRetry) === "function"
+            ? h("button", {
+                type: "button",
+                className: "omd-retryBtn",
+                disabled: retryBusy,
+                onClick: opts.onRetry,
+              }, retryBusy ? "检测中…" : "重试")
+            : null);
+      }
       var busy = !!opts && !!opts.busy;
       var note = (opts && opts.note) || "";
       var error = (opts && opts.error) || "";
@@ -3042,10 +3061,25 @@ window.__ModuleLoader__.load({
       var _ub = useState(false), upgBusy = _ub[0], setUpgBusy = _ub[1];
       var _un = useState(""), upgNote = _un[0], setUpgNote = _un[1];
       var _ue = useState(""), upgErr = _ue[0], setUpgErr = _ue[1];
+      // 版本检测重试进行中（页头失败行的「重试」按钮禁用态）：与升级三态分开，
+      // 检测失败重试不该锁升级（升级预检在服务端另做一次，不依赖这份 verInfo）。
+      var _vb = useState(false), verRetryBusy = _vb[0], setVerRetryBusy = _vb[1];
 
       // 一键升级逻辑在共享的 runUpgradeFlow（页头更新卡统一走这一份）。
       function doUpgrade() {
         runUpgradeFlow(verInfo, setVerInfo, setUpgBusy, setUpgNote, setUpgErr);
+      }
+
+      // 检测失败重试：直接再拉一次 /api/paoding/version（服务端失败结果不进
+      // 缓存，重试即真实检测；成功则 error 随新响应自然清空）。仍失败维持
+      // 原提示——失败行常驻，重试按钮永远可用。
+      function doRetryVersion() {
+        setVerRetryBusy(true);
+        paodingApi("version").then(function (d) {
+          if (d && typeof d.current === "string" && d.current) setVerInfo(d);
+        }).catch(function () { /* 仍不通：维持失败行，不额外打扰 */ }).finally(function () {
+          setVerRetryBusy(false);
+        });
       }
       useEffect(function () {
         var onKey = function (e) {
@@ -3064,7 +3098,7 @@ window.__ModuleLoader__.load({
                 verInfo && typeof verInfo.current === "string" && verInfo.current
                   ? h("span", { className: "pd-versionTag" }, versionTagOf(verInfo.current))
                   : null),
-              versionRowOf(verInfo, { busy: upgBusy, onUpgrade: doUpgrade, note: upgNote, error: upgErr })),
+              versionRowOf(verInfo, { busy: upgBusy, onUpgrade: doUpgrade, note: upgNote, error: upgErr, onRetry: doRetryVersion, retryBusy: verRetryBusy })),
             h("p", { className: "pd-pageSubtitle" },
               "为主 agent 与子 agent 编排工具、技能与角色，预览并应用生成的 agent.cordis.yml。")),
           h("button", {

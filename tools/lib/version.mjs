@@ -1,8 +1,10 @@
 /**
  * 版本提示 —— 检测线上是否有比本地更新的版本（Web 面板 + CLI 共用）。
  *
- * 检测源两级：npm registry 的 dist-tags/latest 优先（无认证无限流，发布即
- * 可见，不像 GitHub release 需要另行打 tag），GitHub releases/latest 兜底。
+ * 检测源三级：npm registry 的 dist-tags/latest 优先（无认证无限流，发布即
+ * 可见，不像 GitHub release 需要另行打 tag）；失败再试 npmmirror 镜像（数据
+ * 同步自 npm registry，官方源超时 / 被墙时国内几秒内可达，分钟级同步延迟对
+ * 「有没有新版」这个判断无伤大雅）；最后 GitHub releases/latest 兜底。
  *
  * 零依赖纯 Node（>=18）：不引 cordis / npm 依赖，fetch 可注入（缺省用
  * globalThis.fetch），超时用 AbortSignal.timeout()。所有失败路径都不抛错，
@@ -22,6 +24,9 @@ const RELEASE_API = 'https://api.github.com/repos/lifangjin/dsh-paoding/releases
 const RELEASE_PAGE = 'https://github.com/lifangjin/dsh-paoding/releases/latest'
 // npm registry 的 latest 元数据端点（等价 dist-tags.latest，无认证无限流）。
 const REGISTRY_LATEST = 'https://registry.npmjs.org/dsh-paoding/latest'
+// npmmirror 镜像的同名端点：manifest 形状与官方源一致（顶层 version 即
+// latest），同步自 npm registry，官方源不可达时的国内快路。
+const MIRROR_LATEST = 'https://registry.npmmirror.com/dsh-paoding/latest'
 
 // 读不到 package.json 时的版本兜底。当前版本不可知（source: 'fallback'）时
 // updateAvailable 恒 false —— 拿「0.0.0 恒小于任何真实版本」去比较，反而必然
@@ -141,34 +146,52 @@ export async function fetchLatestRelease({ fetchImpl, timeoutMs = 3000 } = {}) {
 }
 
 /**
- * 请求 npm registry 的 latest 元数据（版本检测的首选源，runUpgrade 也复用）。
- * 任何失败（网络 / 超时 / 解析 / 形状不对）都不抛出，返回 { ok: false, error }；
- * 成功返回 { ok: true, latest: 'vX.Y.Z', releaseUrl, source: 'npm' }（registry
- * 的 version 不带 v 前缀，这里统一补齐，与 GitHub tag 的显示口径一致）。
+ * 请求一个 npm 系 manifest 端点（官方源与 npmmirror 镜像共用同一形状：完整
+ * manifest，顶层 version 即 latest）。任何失败（网络 / 超时 / 解析 / 形状不对）
+ * 都不抛出，返回 { ok: false, error }；成功返回 { ok: true, latest: 'vX.Y.Z',
+ * releaseUrl, source }（端点的 version 不带 v 前缀，这里统一补齐，与 GitHub
+ * tag 的显示口径一致）。
  */
-export async function fetchLatestFromRegistry({ fetchImpl, timeoutMs = 3000 } = {}) {
+async function fetchLatestManifest(url, label, source, { fetchImpl, timeoutMs = 3000 } = {}) {
   const doFetch = typeof fetchImpl === 'function' ? fetchImpl : globalThis.fetch
   if (typeof doFetch !== 'function') return { ok: false, error: 'fetch 不可用（当前运行时无 fetch 实现）' }
   try {
-    const res = await doFetch(REGISTRY_LATEST, {
+    const res = await doFetch(url, {
       headers: { accept: 'application/vnd.npm+json' },
       signal: AbortSignal.timeout(timeoutMs),
     })
-    if (!res.ok) return { ok: false, error: `npm registry HTTP ${res.status}` }
+    if (!res.ok) return { ok: false, error: `${label} HTTP ${res.status}` }
     let data = null
     try {
       data = await res.json()
     } catch (err) {
-      return { ok: false, error: `npm registry 响应解析失败: ${err?.message ?? err}` }
+      return { ok: false, error: `${label} 响应解析失败: ${err?.message ?? err}` }
     }
     // /<name>/latest 返回该版本的完整 manifest，顶层 version 即 latest 版本号；
-    // CDN 缓存抖动可能回形状不对的正文，按失败处理走 GitHub 兜底。
+    // CDN 缓存抖动可能回形状不对的正文，按失败处理走下一级检测源。
     const ver = typeof data?.version === 'string' && data.version !== '' ? data.version : null
-    if (!ver) return { ok: false, error: 'npm registry 响应缺少 version' }
-    return { ok: true, latest: `v${ver}`, releaseUrl: RELEASE_PAGE, source: 'npm' }
+    if (!ver) return { ok: false, error: `${label} 响应缺少 version` }
+    return { ok: true, latest: `v${ver}`, releaseUrl: RELEASE_PAGE, source }
   } catch (err) {
     return { ok: false, error: String(err?.message ?? err) }
   }
+}
+
+/**
+ * 请求 npm registry（官方源）的 latest 元数据——版本检测首选源，runUpgrade
+ * 的目标版本解析也复用。
+ */
+export async function fetchLatestFromRegistry(opts) {
+  return await fetchLatestManifest(REGISTRY_LATEST, 'npm registry', 'npm', opts)
+}
+
+/**
+ * 请求 npmmirror 镜像的 latest 元数据——官方源不可达（超时 / 被墙 / 代理
+ * 黑洞）时的国内快路：manifest 形状与官方源一致，同步延迟分钟级，对「有
+ * 没有新版」这个判断无伤大雅。
+ */
+export async function fetchLatestFromMirror(opts) {
+  return await fetchLatestManifest(MIRROR_LATEST, 'npmmirror', 'mirror', opts)
 }
 
 /**
@@ -177,29 +200,33 @@ export async function fetchLatestFromRegistry({ fetchImpl, timeoutMs = 3000 } = 
  * 原样复用（stale-if-error），否则返回带 error 的降级结果（latest 置 null、
  * updateAvailable 恒 false——调用方静默）。当前版本不可知（FALLBACK_VERSION
  * 兜底）时 updateAvailable 恒 false：0.0.0 对任何 latest 都「更小」，比较必
- * 误报新版，升级提示整体抑制。检测源 npm registry 优先，失败再试 GitHub
- * release；双败才算本次检测失败，error 里带上两级的失败原因便于排障。成功
- * 结果的 source 字段记录命中源。
+ * 误报新版，升级提示整体抑制。检测源三级：npm registry 优先，失败再试
+ * npmmirror 镜像，最后 GitHub release；三路皆败才算本次检测失败，error 里
+ * 带上各路失败原因与代理排查提示便于排障。成功结果的 source 字段记录命中源。
  * @param {{fetchImpl?: Function, timeoutMs?: number, now?: Function|number}} opts
  *   now 可注入函数或时间戳（测试用）；缺省 Date.now()。
  * @returns {Promise<{current: string, latest: string|null, updateAvailable: boolean,
  *           releaseUrl: string|null, checkedAt: string, error: string|null,
- *           source: 'npm'|'github'|null}>}
+ *           source: 'npm'|'mirror'|'github'|null}>}
  */
 export async function getVersionInfo({ fetchImpl, timeoutMs = 3000, now } = {}) {
   const nowMs = typeof now === 'function' ? now() : typeof now === 'number' ? now : Date.now()
   if (cache.info && nowMs - cache.at < CACHE_TTL_MS) return cache.info
   const { version: current, source: currentSource } = await currentVersion()
-  // ① npm registry 优先；② 失败时 GitHub releases/latest 兜底。
-  const reg = await fetchLatestFromRegistry({ fetchImpl, timeoutMs })
-  let hit = null
-  let githubErr = null
-  if (reg.ok) {
-    hit = reg
-  } else {
+  // 三级链：① npm registry（官方源）；② npmmirror 镜像（官方源不可达时的
+  // 国内快路）；③ GitHub releases/latest（镜像也挂时的独立数据源）。
+  const failures = []
+  let hit = await fetchLatestFromRegistry({ fetchImpl, timeoutMs })
+  if (!hit.ok) {
+    failures.push(hit.error)
+    hit = await fetchLatestFromMirror({ fetchImpl, timeoutMs })
+  }
+  if (!hit.ok) {
+    failures.push(hit.error)
     const rel = await fetchLatestRelease({ fetchImpl, timeoutMs })
-    if (rel.ok) hit = { ok: true, latest: rel.tag, releaseUrl: rel.url, source: 'github' }
-    else githubErr = rel.error
+    hit = rel.ok
+      ? { ok: true, latest: rel.tag, releaseUrl: rel.url, source: 'github' }
+      : { ok: false, error: rel.error }
   }
   if (hit && hit.ok) {
     const info = {
@@ -216,10 +243,11 @@ export async function getVersionInfo({ fetchImpl, timeoutMs = 3000, now } = {}) 
     cache = { at: nowMs, info }
     return info
   }
-  // 双失败：优先复用 lastGood 窗口（7 天）内的上次成功结果；超窗才给降级结果
-  // （不写缓存）。error 把 registry 与 GitHub 两级原因都带上（谁挂了一目了然）；
-  // 走到这里 githubErr 必有值（能进兜底说明 registry 已失败），无需再兜底文案。
-  const combined = `${reg.error}；GitHub 兜底也失败: ${githubErr}`
+  // 三路皆败：优先复用 lastGood 窗口（7 天）内的上次成功结果；超窗才给降级
+  // 结果（不写缓存）。error 把各路原因都带上（谁挂了一目了然），并附代理排查
+  // 提示——最常见的「浏览器能上网、DSH 进程检测失败」是启动环境的代理变量
+  // 指向了不可用的代理（DSH 遵循 HTTPS_PROXY 等变量，浏览器不走它们）。
+  const combined = `三路检测均失败（npm registry: ${failures[0]}；npmmirror: ${failures[1]}；GitHub: ${hit.error}）。若本机经代理访问外网，请确认代理可用后重启 DSH 再试——DSH 进程遵循 HTTPS_PROXY / HTTP_PROXY 环境变量，浏览器不走它们，两者连通性可能不同`
   if (cache.info && nowMs - cache.at < LASTGOOD_TTL_MS) return cache.info
   return {
     current,

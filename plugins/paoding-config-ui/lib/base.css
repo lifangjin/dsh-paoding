@@ -149,6 +149,34 @@
 
 .omd-upgradeBtn:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: 1px; }
 
+/* 版本检测失败行（弱化）：比更新警示卡低一档的存在感——三级文字色小字
+   ⚠ + 重试小 pill，常态（检测成功且无新版）不渲染。完整失败原因（三路源
+   各自错误与代理排查提示）收在行上的 title 悬浮提示，不占版面。 */
+.omd-versionFail { gap: 4px; }
+
+.omd-retryBtn {
+  flex: none;
+  padding: 1px 10px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.omd-retryBtn:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-l4);
+}
+
+.omd-retryBtn:disabled { opacity: 0.6; cursor: default; }
+
+.omd-retryBtn:focus-visible { outline: 2px solid var(--dsw-alias-border-l4); outline-offset: 1px; }
+
 /* 升级进行中的补充说明（分钟级操作，管理预期）。 */
 .omd-upgradeHint {
   flex: none;

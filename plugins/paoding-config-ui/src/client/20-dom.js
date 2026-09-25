@@ -127,7 +127,7 @@
     // 版本提示（渲染在页头标题旁，由 PageShell 持有）：常态版本号不进正文；
     // updateAvailable 时这里渲染醒目提示卡：releaseUrl 新标签页打开 release 页、
     // 「升级」按钮走 onUpgrade（一键 dsh plugin update 自升级），并保留当前版本号。
-    // latest 为 null（含检测失败 error 的情况）一律不显示新版部分——检测失败
-    // 时服务端也只回 200 + error 字段，这里整行静默。
+    // latest 为 null 一律不显示新版部分；检测失败（error 非空）改渲染弱化失败行
+    // （⚠ 版本检测失败 · 重试，完整原因在 title 悬浮提示），不再整行静默。
     // opts（可省）：busy/busyOp 复用面板级互斥（任何操作进行中都禁用升级，
     // 升级进行中也反过来禁用其他按钮），onUpgrade 为点击回调。

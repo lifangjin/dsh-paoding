@@ -101,10 +101,25 @@
       var _ub = useState(false), upgBusy = _ub[0], setUpgBusy = _ub[1];
       var _un = useState(""), upgNote = _un[0], setUpgNote = _un[1];
       var _ue = useState(""), upgErr = _ue[0], setUpgErr = _ue[1];
+      // 版本检测重试进行中（页头失败行的「重试」按钮禁用态）：与升级三态分开，
+      // 检测失败重试不该锁升级（升级预检在服务端另做一次，不依赖这份 verInfo）。
+      var _vb = useState(false), verRetryBusy = _vb[0], setVerRetryBusy = _vb[1];
 
       // 一键升级逻辑在共享的 runUpgradeFlow（页头更新卡统一走这一份）。
       function doUpgrade() {
         runUpgradeFlow(verInfo, setVerInfo, setUpgBusy, setUpgNote, setUpgErr);
+      }
+
+      // 检测失败重试：直接再拉一次 /api/paoding/version（服务端失败结果不进
+      // 缓存，重试即真实检测；成功则 error 随新响应自然清空）。仍失败维持
+      // 原提示——失败行常驻，重试按钮永远可用。
+      function doRetryVersion() {
+        setVerRetryBusy(true);
+        paodingApi("version").then(function (d) {
+          if (d && typeof d.current === "string" && d.current) setVerInfo(d);
+        }).catch(function () { /* 仍不通：维持失败行，不额外打扰 */ }).finally(function () {
+          setVerRetryBusy(false);
+        });
       }
       useEffect(function () {
         var onKey = function (e) {
@@ -123,7 +138,7 @@
                 verInfo && typeof verInfo.current === "string" && verInfo.current
                   ? h("span", { className: "pd-versionTag" }, versionTagOf(verInfo.current))
                   : null),
-              versionRowOf(verInfo, { busy: upgBusy, onUpgrade: doUpgrade, note: upgNote, error: upgErr })),
+              versionRowOf(verInfo, { busy: upgBusy, onUpgrade: doUpgrade, note: upgNote, error: upgErr, onRetry: doRetryVersion, retryBusy: verRetryBusy })),
             h("p", { className: "pd-pageSubtitle" },
               "为主 agent 与子 agent 编排工具、技能与角色，预览并应用生成的 agent.cordis.yml。")),
           h("button", {
