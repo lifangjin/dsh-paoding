@@ -352,7 +352,7 @@ performs one LLM summarization call that reuses the prefix cache, so its cost is
 somewhat more often costs almost nothing extra; 0.45 is the balance point between saving tokens and not
 summarizing too frequently. compaction-basic also pins `maxTokens: 8192` explicitly: from DSH 0.1.7 the host
 default rises to 65536, and the explicit value keeps the summary-budget behavior identical across
-0.1.5 – 0.1.7-rc.1.
+0.1.5 – 0.1.7-rc.2.
 
 **Parameters and effect.**
 

@@ -1,9 +1,10 @@
 {
   "name": "dsh-paoding",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "庖丁 — DSH (DeepSeek Harness) 编排模式安装器：host 感知的角色工具过滤 + Web 设置页可视化配置器",
   "type": "module",
   "license": "MIT",
+  "icon": "./icon.svg",
   "files": [
     "bin/",
     "tools/",
@@ -11,6 +12,8 @@
     "plugins/",
     "!plugins/paoding-config-ui/src",
     "docs/",
+    "locale/",
+    "icon.svg",
     "README.md",
     "README_en.md",
     "LICENSE",
@@ -43,7 +46,8 @@
   "exports": {
     ".": "./plugins/paoding-config-ui/index.mjs",
     "./client": "./plugins/paoding-config-ui/lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "dsh": {
     "client": {

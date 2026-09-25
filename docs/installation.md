@@ -12,7 +12,7 @@
 
 - **Node.js ≥ 18**。DSH host 与插件链路都跑在 Node 上；版本过低时 `dsh` 本身就起不来。可用 `node --version` 自查。
 - **pnpm 可用**。`dsh plugin` 是 pnpm 的透明转发器：插件包装进 profile 时由 pnpm 完成。缺失时安装命令会报 pnpm 相关错误，装好 pnpm（`npm i -g pnpm` 或 `corepack enable`）后重试。
-- **已安装 DSH host**（`dsh` 可用，含其 Web/agent 运行时；**@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.1** 全支持，安装器自动适配两代预设机制，详见第 2 节「版本支持与预设落点双轨」）。本插件不改 DSH 源码，只往 DSH 的 preset roster 写入编排预设、并把「庖丁配置」面板挂进 Web 左侧栏，因此先要有可用的 DSH 家目录。
+- **已安装 DSH host**（`dsh` 可用，含其 Web/agent 运行时；**@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.2** 全支持，安装器自动适配两代预设机制，详见第 2 节「版本支持与预设落点双轨」）。本插件不改 DSH 源码，只往 DSH 的 preset roster 写入编排预设、并把「庖丁配置」面板挂进 Web 左侧栏，因此先要有可用的 DSH 家目录。
 - **路径事实**（生成管线内建常量，写死前先了解它们）：
 
 | 项 | 默认值 | 说明 |
@@ -50,9 +50,9 @@ dsh plugin --profile web add dsh-paoding
 
 `--profile web` 决定插件装进哪个 profile：「庖丁配置」面板只在以该 profile 启动的 DSH Web 里出现。`web` 是 `dsh web` 的默认 profile，多数机器无需改动；多 profile 用户对每个需要的 profile 各执行一次 `dsh plugin add`。编排预设本体落在 `$DSH_HOME/.agent-presets/`，全机共享、不随 profile 走——DSH ≥ 0.1.7 的声明行写在 home 层 `$DSH_HOME/cordis.patch.yml`，同样与 profile 无关——在任何 profile 的面板里「保存并应用」，写的都是同一份预设。
 
-### 版本支持与预设落点双轨（DSH 0.1.5 – 0.1.7-rc.1）
+### 版本支持与预设落点双轨（DSH 0.1.5 – 0.1.7-rc.2）
 
-本插件兼容两代宿主：**DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 全部支持**，安装与使用流程完全一致。插件 0.3.4 起，package.json 显式声明 `peerDependencies: @deepseek-ai/dsh >= 0.1.5`——0.1.7 起宿主装插件前做兼容性预检，无声明等于默认放行，显式声明后按真实兼容面把关；0.1.5 / 0.1.6 不读这个字段，声明纯属元数据，不影响安装。
+本插件兼容两代宿主：**DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 / 0.1.7-rc.2 全部支持**，安装与使用流程完全一致。插件 0.3.4 起，package.json 显式声明 `peerDependencies: @deepseek-ai/dsh >= 0.1.5`——0.1.7 起宿主装插件前做兼容性预检，无声明等于默认放行，显式声明后按真实兼容面把关；0.1.5 / 0.1.6 不读这个字段，声明纯属元数据，不影响安装。
 
 两代宿主发现「本地 authored preset」的机制不同，安装器据此分双轨落点，宿主检测全自动、用户无感：
 
@@ -108,7 +108,7 @@ dsh plugin --profile web add dsh-paoding
 
 ## 3. 升级
 
-**面板一键升级（推荐）**：面板自动对比 npm registry 上的最新版本（GitHub release 兜底），发现新版就地提示并附上发布页链接。点「升级」按钮，面板就地执行：
+**面板一键升级（推荐）**：面板自动对比 npm registry 上的最新版本（npmmirror 镜像、GitHub release 依次兜底），发现新版就地提示并附上发布页链接。点「升级」按钮，面板就地执行：
 
 ```bash
 dsh plugin --profile <name> update dsh-paoding
@@ -120,7 +120,7 @@ dsh plugin --profile <name> update dsh-paoding
 
 **开发 link 形态**（见第 4 节）版本比较照常（更新卡有新版照常提示），但无法就地升级——升级器要求包真实装在某个 profile 的 node_modules 下，link 直连仓库匹配不到；点「升级」会如实报这一点，并提示手动跑 `dsh plugin add dsh-paoding@latest` 切回 registry 版。
 
-检测失败（断网、限流）时静默跳过，不影响任何使用。
+检测失败（断网、限流、代理不可用）时页头会留一行弱化的「版本检测失败 · 重试」，完整原因（npm registry / npmmirror / GitHub 三路各自的错误，以及代理排查提示）在悬浮提示里，不弹窗打扰；检测成功且确无新版时不显示任何内容。常见误区：浏览器能打开 npm 页面不代表 DSH 进程检测也能通——DSH 遵循启动环境里的 `HTTPS_PROXY` / `HTTP_PROXY` 等代理变量，浏览器不走它们；若靠代理上网，请确认代理可用后重启 DSH 再试。
 
 ## 4. 开发自装（link: 形态）
 

@@ -12,7 +12,7 @@ Check the following before installing:
 
 - **Node.js ≥ 18**. The DSH host and the plugin chain both run on Node; with an older version `dsh` won't start in the first place. Check with `node --version`.
 - **pnpm available**. `dsh plugin` is a transparent pass-through to pnpm: installing a plugin package into a profile is done by pnpm. If pnpm is missing the install command fails with a pnpm error — install pnpm (`npm i -g pnpm` or `corepack enable`) and retry.
-- **A working DSH host** (the `dsh` command, including its Web/agent runtime; **@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.1**, all supported — the installer adapts to the two preset mechanisms automatically; see §2 "Version support and the dual preset landing"). This plugin does not modify DSH source code; it only writes the orchestrator preset into DSH's preset roster and mounts the Paoding Config page into the Web sidebar, so a usable DSH home directory must exist first.
+- **A working DSH host** (the `dsh` command, including its Web/agent runtime; **@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.2**, all supported — the installer adapts to the two preset mechanisms automatically; see §2 "Version support and the dual preset landing"). This plugin does not modify DSH source code; it only writes the orchestrator preset into DSH's preset roster and mounts the Paoding Config page into the Web sidebar, so a usable DSH home directory must exist first.
 - **Path facts** (constants built into the generation pipeline; know them before customizing):
 
 | Item | Default | Description |
@@ -50,9 +50,9 @@ The orchestrator preset needs no separate install — the plugin fills it in aut
 
 `--profile web` decides which profile the plugin is installed into: the Paoding Config page appears only in a DSH Web launched with that profile. `web` is the default profile of `dsh web`, so most machines need no change; multi-profile users run `dsh plugin add` once per profile they want it in. The orchestrator preset itself lives under `$DSH_HOME/.agent-presets/` and is shared machine-wide, independent of profiles — under DSH ≥ 0.1.7 the declaration rows go into the home-layer `$DSH_HOME/cordis.patch.yml`, equally profile-independent — Save & Apply from any profile's panel writes the same preset.
 
-### Version support and the dual preset landing (DSH 0.1.5 – 0.1.7-rc.1)
+### Version support and the dual preset landing (DSH 0.1.5 – 0.1.7-rc.2)
 
-The plugin supports two host generations: **DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 are all supported**, with an identical install and usage flow. As of plugin 0.3.4, package.json declares `peerDependencies: @deepseek-ai/dsh >= 0.1.5` explicitly — from 0.1.7 the host runs a plugin-compatibility precheck before installing: no declaration meant a default pass, an explicit one gets checked against the real compatibility surface; 0.1.5 / 0.1.6 never read the field, where the declaration is pure metadata and changes nothing about the install.
+The plugin supports two host generations: **DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 / 0.1.7-rc.2 are all supported**, with an identical install and usage flow. As of plugin 0.3.4, package.json declares `peerDependencies: @deepseek-ai/dsh >= 0.1.5` explicitly — from 0.1.7 the host runs a plugin-compatibility precheck before installing: no declaration meant a default pass, an explicit one gets checked against the real compatibility surface; 0.1.5 / 0.1.6 never read the field, where the declaration is pure metadata and changes nothing about the install.
 
 The two generations discover "local authored presets" differently, so the installer maintains a dual landing, detecting the host automatically — nothing for the user to do:
 
@@ -108,7 +108,7 @@ Once installed:
 
 ## 3. Upgrading
 
-**One-click upgrade in the panel (recommended)**: the panel compares your local version against the latest npm registry publish (GitHub release as fallback) and points to the release page when a newer one is out. Click the Upgrade button and the panel runs this in place:
+**One-click upgrade in the panel (recommended)**: the panel compares your local version against the latest npm registry publish (npmmirror and GitHub release as successive fallbacks) and points to the release page when a newer one is out. Click the Upgrade button and the panel runs this in place:
 
 ```bash
 dsh plugin --profile <name> update dsh-paoding
@@ -120,7 +120,7 @@ Manual equivalent: run the `dsh plugin update` command above yourself, restart, 
 
 A **dev link: checkout** (see §4) still gets version checks (the update card appears when a newer version exists) but cannot be upgraded in place — the upgrader requires the package to really live under a profile's node_modules, which a link straight into the repo never matches. Hitting Upgrade reports exactly that and suggests running `dsh plugin add dsh-paoding@latest` to switch back to the registry version.
 
-If the check fails (offline, rate-limited), it stays silent and nothing is interrupted.
+If the check fails (offline, rate-limited, proxy down), a subdued "version check failed · retry" row stays in the panel header with the full causes (per-source errors across npm registry / npmmirror / GitHub, plus proxy troubleshooting hints) in its tooltip; a successful check with no new version shows nothing. Common pitfall: being able to open the npm page in a browser does not mean the DSH process can reach it — DSH honors HTTPS_PROXY / HTTP_PROXY from its launch environment while browsers do not. If you rely on a proxy, make sure it is up and restart DSH before retrying.
 
 ## 4. Dev-checkout install (link: form)
 

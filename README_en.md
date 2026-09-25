@@ -17,9 +17,9 @@ dsh-paoding (Chinese brand 「庖丁」/ Pao Ding, from the Zhuangzi parable of 
 - **Whatever you've installed, it's recognized**: MCP servers, local plugins, installed skills — detected throughout install and configuration; the default install carries only DSH base tools, and detected host tools are opted into per tool in **Paoding Config**; disable one, re-apply, and its tools drop out on their own.
 - **A different lineup per workspace**: each project can carry its own main/sub-agent setup — pick the workspace in 庖丁配置, configure it separately, and it gets its own preset (`orchestrator-<basename>`); choose that preset when starting a session. The global default stays untouched.
 - **A visual configurator**: prefer clicking to editing YAML? the 庖丁配置 (Paoding Config) entry in the sidebar bottom action bar (above the Settings row) covers everything; Save & Apply regenerates the preset on the spot — the same generation pipeline as first-install automation.
-- **Notified of new releases, one-click upgrade in the panel**: the panel compares your local version against the latest npm registry publish (GitHub release as fallback) and points to the release page when a newer one is out. The Upgrade button runs `dsh plugin update dsh-paoding` in place (profile auto-detected) to swap in the new version; a DSH restart applies it, and the orchestrator preset regenerates itself against the new version on startup. A dev checkout in link: form cannot be upgraded in place — the panel tells you how to switch back to the registry version. If the check fails (offline, rate-limited), it stays silent and nothing is interrupted.
+- **Notified of new releases, one-click upgrade in the panel**: the panel compares your local version against the latest npm registry publish (npmmirror and GitHub release as successive fallbacks) and points to the release page when a newer one is out. The Upgrade button runs `dsh plugin update dsh-paoding` in place (profile auto-detected) to swap in the new version; a DSH restart applies it, and the orchestrator preset regenerates itself against the new version on startup. A dev checkout in link: form cannot be upgraded in place — the panel tells you how to switch back to the registry version. If the check fails (offline, rate-limited), a subdued "version check failed · retry" row stays in the header (full causes and proxy hints in its tooltip) without popping anything up.
 - **Installs and uninstalls cleanly**: no DSH source changes; active in a new session right after install, gone when you delete one directory.
-- **Works on both host generations**: DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 are all supported — the two generations discover presets differently (directory scan vs patch declaration rows), and the installer picks the right landing automatically, then migrates on the first save/self-heal after a host upgrade or downgrade, all without user action.
+- **Works on both host generations**: DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 / 0.1.7-rc.2 are all supported — the two generations discover presets differently (directory scan vs patch declaration rows), and the installer picks the right landing automatically, then migrates on the first save/self-heal after a host upgrade or downgrade, all without user action.
 
 ## Screenshots
 
@@ -27,7 +27,7 @@ dsh-paoding (Chinese brand 「庖丁」/ Pao Ding, from the Zhuangzi parable of 
 
 ## Quick Start
 
-Prerequisites: **Node.js ≥ 18**, **pnpm**, and a working DSH host (**@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.1**, all supported — the preset landing adapts to the host generation automatically).
+Prerequisites: **Node.js ≥ 18**, **pnpm**, and a working DSH host (**@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.2**, all supported — the preset landing adapts to the host generation automatically).
 
 **The official plugin channel (the only install route)** — no clone needed; one command, then a restart:
 
@@ -80,7 +80,7 @@ All preferences live in `~/.dsh/dsh-paoding.config.yml`: role add/remove/tweak, 
 | Document | Contents |
 |---|---|
 | [Architecture](docs/architecture_en.md) | Why it is designed this way — overview, the cost ledger, roles and tools, mapping to DSH's native mechanisms, token governance, known limits. |
-| [Installation](docs/installation_en.md) | The single official channel (`dsh plugin add`), version support and the dual preset landing (DSH 0.1.5 – 0.1.7-rc.1), first-install automation and the version marker, upgrading, dev-checkout install, host patch detection, the Paoding Config panel, uninstalling, troubleshooting. |
+| [Installation](docs/installation_en.md) | The single official channel (`dsh plugin add`), version support and the dual preset landing (DSH 0.1.5 – 0.1.7-rc.2), first-install automation and the version marker, upgrading, dev-checkout install, host patch detection, the Paoding Config panel, uninstalling, troubleshooting. |
 | [Orchestration](docs/orchestration_en.md) | Orchestration overview, how failures surface and the three recovery layers, one-shot vs continuable, context isolation. |
 | [Configuration](docs/configuration_en.md) | The full key reference, tuning built-in roles, main-agent tools and skills, custom roles, per-role models, per-role session modes. |
 
