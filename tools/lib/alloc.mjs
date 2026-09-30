@@ -17,9 +17,12 @@ import { ROLES } from './util.mjs'
  * and as the suggested values shown in the visual config UI.  codegraph and
  * memory_search stay on
  * the main agent (matching the static preset); other MCP tools are suggested
- * by tool-name keywords.  角色条目形状 { model, provider, background_mode, persona, tools }：
+ * by tool-name keywords.  角色条目形状 { model, provider, start_mode, background_mode, persona, tools }：
  * model / provider（角色专用模型）在此恒为 null（= 不注入 agentOptions，子 agent
- * 继承主 agent 当前模型），仅配置文件 / 配置面板 4d 显式设置；background_mode
+ * 继承主 agent 当前模型），仅配置文件 / 配置面板 4d 显式设置；start_mode
+ * （roles.<toolName>.start_mode，角色启动方式）在此恒为 'fresh'（= 块级 provider
+ * 行保持 spawn，子 agent 全新启动），仅配置文件 / 配置面板显式设置为 'fork'；
+ * background_mode
  * （roles.<toolName>.background_mode，可续模式）在此恒为 'one-shot'（= 不注入
  * backgroundMode 行，dsh-tool-subagent 缺省即 one-shot），仅配置文件 / 配置面板
  * 显式设置为 'continuable'。
@@ -35,7 +38,7 @@ export function smartDefaults(mcpReports, inventory, staticBase) {
     const assign = (role) => {
       // 与 baseAssignments / resolveAssignments 同形状（name 恒 null = 不改名）：
       // 缺 name 键会让下游形状断言/序列化层按缺省处理，和 baseAssignments 不一致。
-      roles[role] ??= { name: null, model: null, provider: null, background_mode: 'one-shot', persona: null, tools: [...staticBase[role]] }
+      roles[role] ??= { name: null, model: null, provider: null, start_mode: 'fresh', background_mode: 'one-shot', persona: null, tools: [...staticBase[role]] }
       for (const t of tools) if (!roles[role].tools.includes(t)) roles[role].tools.push(t)
     }
     if (server === 'codegraph') {
@@ -77,8 +80,9 @@ export function keywords(names, pattern) {
  * 或 --auto）先装完可用基础版，host 工具留给用户在侧栏底部「庖丁配置」入口
  * 里显式开启，避免智能默认把检测到的 host 工具静默塞进委派链。形状与 smartDefaults
  * 返回值完全一致，生成层 / 序列化层无需区分来源；staticBase 复制而非别名，
- * 防调用方原地改写。每个内置角色条目显式带 background_mode: 'one-shot'，随
- * serializeConfig 恒写出 —— fresh 落盘的配置文件里旋钮可见。
+ * 防调用方原地改写。每个内置角色条目显式带 start_mode: 'fresh' 与
+ * background_mode: 'one-shot'，随 serializeConfig 恒写出 —— fresh 落盘的配置
+ * 文件里旋钮可见。
  */
 export function baseAssignments(staticBase) {
   const roles = {}
@@ -87,7 +91,7 @@ export function baseAssignments(staticBase) {
     // 一律剔除 mcp__ 前缀名（KNOWN_HOST_PLUGINS 工具不在 staticBase 里，无需再滤），
     // 保证落盘的配置文件只含 dsh 基础工具 —— host 工具全部经 UI 显式开启。
     const baseTools = (staticBase[role] ?? []).filter((name) => !name.startsWith('mcp__'))
-    roles[role] = { name: null, model: null, provider: null, background_mode: 'one-shot', persona: null, tools: [...baseTools] }
+    roles[role] = { name: null, model: null, provider: null, start_mode: 'fresh', background_mode: 'one-shot', persona: null, tools: [...baseTools] }
   }
   return {
     roles,
@@ -108,8 +112,9 @@ export function baseAssignments(staticBase) {
  * main_agent_remove, main_agent_skills, main_agent_skills_inline,
  * main_agent_persona_extra, main_agent_display_name, skills }；
  * roles 条目形状
- * { name, model, provider, background_mode, persona, tools }（model / provider =
- * 角色专用模型，缺省 null = 不注入 agentOptions；background_mode = 角色可续模式，
+ * { name, model, provider, start_mode, background_mode, persona, tools }（model / provider =
+ * 角色专用模型，缺省 null = 不注入 agentOptions；start_mode = 角色启动方式，
+ * 缺省 'fresh' = 块级 provider 行保持 spawn；background_mode = 角色可续模式，
  * 缺省 'one-shot' = 不注入 backgroundMode 行）。
  */
 export function resolveAssignments(existing, suggested, staticBase) {
@@ -124,6 +129,9 @@ export function resolveAssignments(existing, suggested, staticBase) {
         name: role.name ?? null,
         model: role.model ?? null,
         provider: role.provider ?? null,
+        // 缺键（老配置 / UI 手工构造的半成品对象）回落 'fresh'；非法值由
+        // 生成层按「非 'fork' 即 fresh」口径兜底。
+        start_mode: role.start_mode ?? 'fresh',
         // 缺键（老配置 / UI 手工构造的半成品对象）回落 'one-shot'；非法值由
         // 生成层按「非 'continuable' 即 one-shot」口径兜底。
         background_mode: role.background_mode ?? 'one-shot',

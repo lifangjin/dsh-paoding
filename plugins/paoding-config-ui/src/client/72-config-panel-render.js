@@ -287,9 +287,35 @@
               roleAddBgMode === "continuable" && data && data.persistenceAvailable === false
                 ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_BG_PERSISTENCE_WARN)
                 : null,
+              // 「启动方式」单选（与角色卡 roleStartModeBlock 同款语义）：缺省全新，
+              // 选「继承对话」才写 start_mode: 'fork'（委派块块级 provider 行）。
+              h("label", { className: "pd-modalLabel" }, "启动方式"),
+              h("div", { className: "omd-nameRow" },
+                h("label", { className: "omd-toolItem" },
+                  h("input", {
+                    type: "radio",
+                    className: "omd-check",
+                    name: "pd-sm-roleadd",
+                    checked: roleAddStartMode !== "fork",
+                    onChange: function () { setRoleAddStartMode("fresh"); },
+                  }),
+                  h("span", { className: "omd-toolName" }, "全新（fresh）")),
+                h("label", { className: "omd-toolItem" },
+                  h("input", {
+                    type: "radio",
+                    className: "omd-check",
+                    name: "pd-sm-roleadd",
+                    checked: roleAddStartMode === "fork",
+                    onChange: function () { setRoleAddStartMode("fork"); },
+                  }),
+                  h("span", { className: "omd-toolName" }, "继承对话（fork）"))),
+              roleAddStartMode === "fork"
+                ? h("div", { className: "omd-hint" },
+                    "继承对话的子代理以主 agent 已完成的对话轮次为初始内容启动（一次性快照，之后两边各自推进）；工具面仍以本角色配置为准。")
+                : null,
               roleAddErr ? statusRow("omd-statusError", ic(P.IconWarningOutline16, 16), roleAddErr) : null,
               h("div", { className: "omd-hint" },
-                "角色名须为 2-32 位小写字母/数字/下划线/连字符，小写字母开头；内置名不可新建。显示名可选，不能换行，trim 后最多 60 字符，留空用 toolName 当标题。新角色工具面默认放开全部检测到的工具，可在卡片里再收窄。会话模式缺省一次性（one-shot），选「可续」后仍可在角色卡里改。")),
+                "角色名须为 2-32 位小写字母/数字/下划线/连字符，小写字母开头；内置名不可新建。显示名可选，不能换行，trim 后最多 60 字符，留空用 toolName 当标题。新角色工具面默认放开全部检测到的工具，可在卡片里再收窄。会话模式缺省一次性（one-shot），选「可续」后仍可在角色卡里改。启动方式缺省全新（fresh），选「继承对话」后仍可在角色卡里改。")),
             h("div", { className: "pd-modalFooter" },
               h(P.Button, { variant: "outline", size: "md", onClick: closeRoleAddModal }, "取消"),
               h(P.Button, {
@@ -743,6 +769,50 @@
             : null);
       }
 
+      // 角色「启动方式」行（内置与自定义角色通用，同 roleBgModeBlock 的定位）：
+      // 单选 roles.<toolName>.start_mode ——「全新（fresh）」为缺省（字面量
+      // 'fresh'，与 config 层 normalizeStartMode 恒收两个合法值的序列化形状
+      // 一致），「继承对话（fork）」写 'fork'（委派块的块级 provider 行改落
+      // fork）。选中继承对话且该角色配了专用模型时行内提示互斥：fork 子代理
+      // 继承主 agent 的提供方与模型，专用模型不生效（应用时后端 warn 并忽略）。
+      // 注意与「专用模型」行的 provider 字段（LLM 路由）无关。
+      function roleStartModeBlock(name) {
+        var role = assign.roles[name] || {};
+        var fork = role.start_mode === "fork";
+        var hasModel = typeof role.model === "string" && role.model !== "";
+        function commitStartMode(toFork) {
+          setAssign(function (prev) {
+            var next = JSON.parse(JSON.stringify(prev));
+            next.roles[name].start_mode = toFork ? "fork" : "fresh";
+            return next;
+          });
+        }
+        function smOption(key, label, checked, on) {
+          return h("label", { key: key, className: "omd-toolItem" },
+            h("input", {
+              type: "radio",
+              className: "omd-check",
+              name: "pd-sm-" + name, // 每角色独立单选组；name 含 toolName 不串台
+              checked: checked,
+              disabled: busy,
+              onChange: function () { commitStartMode(on); },
+            }),
+            h("span", { className: "omd-toolName" }, label));
+        }
+        return h("div", { className: "omd-mainName" },
+          h("div", { className: "omd-glabel" }, "启动方式"),
+          h("div", { className: "omd-nameRow" },
+            smOption("fresh", "全新（fresh）", !fork, false),
+            smOption("fork", "继承对话（fork）", fork, true)),
+          fork
+            ? h("div", { className: "omd-hint" },
+                "继承对话的子代理以主 agent 已完成的对话轮次为初始内容启动（一次性快照，之后两边各自推进）；工具面仍以本角色配置为准。")
+            : null,
+          fork && hasModel
+            ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_SM_FORK_MODEL_HINT)
+            : null);
+      }
+
       function roleCard(name) {
         var isMain = name === "__main__";
         var display = isMain ? "主 agent" : name;
@@ -848,9 +918,12 @@
           // warn 并忽略）。留空 = 跟随主 agent 当前模型。
           // 「会话模式」单选紧随模型行（内置 / 自定义通用）：缺省一次性，
           // 选可续时行内给成本提示 + persistence 缺失警告（如有）。
+          // 「启动方式」单选紧随会话模式行（内置 / 自定义通用）：缺省全新，
+          // 选继承对话时行内给快照语义提示；配了专用模型再叠加互斥警告。
           body.push(roleTitleBlock(name, isCustom));
           body.push(roleModelBlock(name));
           body.push(roleBgModeBlock(name));
+          body.push(roleStartModeBlock(name));
           // 三组网格（同 roleCandidateTools 注释的分组口径）：「基础工具」=
           // 非 mcp__ 且不在检测库存（blocks ∪ customCoreToolsOf 减 inventory）；
           // 「MCP 工具」= mcp__ 前缀（含 SRC 自带行，如 tavily）；「插件工具」
@@ -968,6 +1041,15 @@
 
         // 配置对象（全局默认 / 各工作区，标签页）
         workspaceBarOf(),
+
+        // 宿主工作区列表拉取失败的可见降级提示：此时标签条只剩配置文件兜底的
+        // tab，一声不吭的话用户会误以为「注册过的工作区不见了」是功能缺陷。
+        // 仅请求失败 / 响应异常时出现（wsListErr 非空，成功路径零占位）；贴在
+        // 标签条容器下方另起一行，不动标签行自身的收纳 / 下拉锚点布局，
+        // role=status 礼貌播报即可（持久化警告同款 statusRow，错误行才用 alert）。
+        wsListErr
+          ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), wsListErr, "status")
+          : null,
 
         // 「添加工作区」弹窗：fixed 全屏遮罩不占布局流，挂在根数组末尾即可；
         // 未打开时返回 null，零开销

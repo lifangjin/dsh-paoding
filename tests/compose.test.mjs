@@ -7,7 +7,10 @@
  * allow 白名单语义（presetUniverse ∪ inventory：库存缺失的插件名丢弃、在场的
  * 保留、核心名不依赖库存直通）、parseYamlSubset 块标量保真、自定义角色保留名校验、background_mode（解析 warn
  * 回落 / 序列化恒写出与往返幂等 / 内置块源预置行的原位改写与兜底注入 / 自定义
- * 角色恒写该行 / 全默认零 diff / roles_remove 命中忽略）。
+ * 角色恒写该行 / 全默认零 diff / roles_remove 命中忽略）、start_mode（解析 warn
+ * 回落 / 序列化恒写出与往返幂等 / 内置块块级 provider 行原位改写 fork，无行不兜底 /
+ * fork 与专用模型互斥不注入 agentOptions / 与 continuable 正交并存 / 自定义角色按
+ * 启动方式落块级 provider 行 / 全默认零 diff / roles_remove 命中忽略）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -480,6 +483,238 @@ test('background_mode: 自定义角色块恒写 backgroundMode 行（continuable
     const parsedPlain = parseYamlSubset(plain)
     assert.equal(parsedPlain[0]?.config?.backgroundMode, 'one-shot', `background_mode=${bg} 块缺 one-shot 行`)
     assert.equal((plain.match(/backgroundMode:/g) ?? []).length, 1, `background_mode=${bg} 块 backgroundMode 行数不为 1`)
+  }
+})
+
+// ── g2) start_mode：解析 / 序列化 / 块级 provider 行改写 / 零 diff ────────────
+
+test('start_mode: config 解析 —— 合法值收下、非法/非字符串 warn 回落 fresh、缺省 fresh', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'dsh-paoding-test-'))
+  const file = path.join(dir, 'dsh-paoding.config.yml')
+  writeFileSync(
+    file,
+    [
+      'roles:',
+      '  implement:',
+      '    start_mode: fork',
+      '  design:',
+      '    start_mode: 42',
+      '  search_external:',
+      '    start_mode: always',
+      '  reviewer:',
+      '    start_mode: fork',
+      '    tools:',
+      '      - read',
+    ].join('\n') + '\n',
+  )
+  const cfg = captureWarn((warnings) => {
+    const loaded = loadConfig(file, null)
+    // 两处非法值各 warn 一条（键名可归因），合法值与缺省不 warn
+    assert.equal(warnings.filter((w) => w.includes('roles.design.start_mode')).length, 1, 'design 非法值未 warn')
+    assert.equal(warnings.filter((w) => w.includes('roles.search_external.start_mode')).length, 1, 'search_external 非字符串未 warn')
+    assert.equal(warnings.filter((w) => w.includes('start_mode')).length, 2, '出现了计划外的 start_mode warn')
+    return loaded
+  })
+  assert.equal(cfg.roles.implement.start_mode, 'fork', '合法 fork 未收下')
+  assert.equal(cfg.roles.reviewer.start_mode, 'fork', '自定义角色合法值未收下（内置/自定义应同语义）')
+  assert.equal(cfg.roles.design.start_mode, 'fresh', '非法值未回落 fresh')
+  assert.equal(cfg.roles.search_external.start_mode, 'fresh', '非字符串值未回落 fresh')
+})
+
+test('start_mode: serializeConfig 每角色显式写出（含 fresh），load→serialize→load 往返幂等', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'dsh-paoding-test-'))
+  const file = path.join(dir, 'dsh-paoding.config.yml')
+  writeFileSync(
+    file,
+    [
+      'roles:',
+      '  implement:',
+      '    start_mode: fork',
+      '  reviewer:',
+      '    start_mode: fork',
+      '    tools:',
+      '      - read',
+      '  design:',
+      '    persona: |-\n      You are the design agent.',
+    ].join('\n') + '\n',
+  )
+  const cfg1 = loadConfig(file, null)
+  const text1 = serializeConfig(cfg1)
+  // implement / reviewer / design（显式条目、缺 start_mode 键）各一行 = 3 行；
+  // 缺省值也显式写出 fresh（旋钮在配置文件里可见，与 background_mode 同口径）
+  assert.equal((text1.match(/start_mode:/g) ?? []).length, 3, 'start_mode 行数与角色数不符')
+  assert.ok(text1.includes('start_mode: fork'), 'fork 未写出')
+  assert.ok(text1.includes('start_mode: fresh'), '缺省角色未显式写出 fresh')
+  // 键序：start_mode 在 provider 之后、background_mode 之前
+  assert.ok(text1.indexOf('start_mode:') > text1.indexOf('provider:'), 'start_mode 应在 provider 之后')
+  assert.ok(text1.indexOf('start_mode:') < text1.indexOf('background_mode:'), 'start_mode 应在 background_mode 之前')
+  // 往返幂等：再 load 一次再 serialize，逐字节一致
+  const file2 = path.join(dir, 'roundtrip.config.yml')
+  writeFileSync(file2, text1)
+  const cfg2 = loadConfig(file2, null)
+  assert.equal(serializeConfig(cfg2), text1, '往返后序列化结果漂移')
+})
+
+test('start_mode: 内置角色 fork 原位改写源块级 provider 行（键序 provider → toolName，仅命中目标块）；fresh/缺省/非法值零 diff', () => {
+  const blocks = locateAllowBlocks(SRC, yamlMod)
+  const personaBlocks = locatePersonaBlocks(SRC, yamlMod)
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  const inventory = fullInventory()
+
+  // 源 preset 四个内置委派块各预置一行块级 provider: spawn（8 空格，config 键层）；
+  // 另有 tool-subagent / workflow-worker-thread 两块同样形态的 spawn 行——它们不是
+  // 角色委派块，生成层不得触碰（8 空格锚点只命中块级行、块内定位只限角色块）。
+  assert.equal((SRC.match(/\n        provider: spawn\n/g) ?? []).length, 6, '源 preset 预置 spawn 行数不为 6')
+
+  // fork：implement 块该行原位改写为 fork、其余块的源预置 spawn 行原样保留；
+  // 8 空格锚点不得误命中 10 空格的 agentOptions.provider（LLM 路由）子行。
+  const forked = {
+    ...emptyAssignments(),
+    roles: { implement: { name: null, model: null, provider: null, start_mode: 'fork', background_mode: 'one-shot', persona: null, tools: null } },
+  }
+  const { text } = composeGenerated(SRC, blocks, personaBlocks, forked, inventory, restrictBase, {})
+  const delegationRows = parseYamlSubset(text).find((r) => r?.id === 'delegation')?.config ?? []
+  assert.equal(delegationRows.find((r) => r?.id === 'delegation-implement')?.config?.provider, 'fork', 'implement 块级 provider 未改写为 fork')
+  assert.equal(delegationRows.find((r) => r?.id === 'delegation-search-external')?.config?.provider, 'spawn', '未配置角色的源预置 spawn 行被误改')
+  const implSeg = text.slice(text.indexOf('- id: delegation-implement'), text.indexOf('- id: delegation-search-internal-deep'))
+  assert.equal((implSeg.match(/\n        provider: fork\n/g) ?? []).length, 1, 'implement 块出现重复/多余 fork 行')
+  assert.ok(implSeg.indexOf('        provider: fork') < implSeg.indexOf('        toolName: implement'), 'fork 行应先于 toolName 行（provider → toolName 键序）')
+  // 全文 fork 行只比源多 1（源的 tool-subagent-fork 块自带一处 provider: fork）
+  const srcForkCount = (SRC.match(/\n        provider: fork\n/g) ?? []).length
+  const outForkCount = (text.match(/\n        provider: fork\n/g) ?? []).length
+  assert.equal(outForkCount, srcForkCount + 1, 'fork 行出现次数异常（误命中别块/别键）')
+
+  // fork + 专用模型互斥：warn 且不注入 agentOptions（继承主 agent 的提供方与模型）
+  const forkModel = {
+    ...emptyAssignments(),
+    roles: { implement: { name: null, model: 'deepseek-chat', provider: null, start_mode: 'fork', background_mode: 'one-shot', persona: null, tools: null } },
+  }
+  const { text: textForkModel } = captureWarn((warnings) => {
+    const result = composeGenerated(SRC, blocks, personaBlocks, forkModel, inventory, restrictBase, {})
+    assert.ok(
+      warnings.some((w) => w.includes('roles.implement') && w.includes("start_mode: 'fork'") && w.includes('deepseek-chat')),
+      'fork + model 互斥未 warn',
+    )
+    return result
+  })
+  const forkModelSeg = textForkModel.slice(textForkModel.indexOf('- id: delegation-implement'), textForkModel.indexOf('- id: delegation-search-internal-deep'))
+  assert.ok(!forkModelSeg.includes('agentOptions:'), 'fork + model 仍注入了 agentOptions')
+  assert.ok(forkModelSeg.includes('        provider: fork\n'), 'fork + model 时 fork 行丢失')
+
+  // fork 与 continuable 正交：两行并存（provider: fork + backgroundMode: continuable）
+  const forkCont = {
+    ...emptyAssignments(),
+    roles: { implement: { name: null, model: null, provider: null, start_mode: 'fork', background_mode: 'continuable', persona: null, tools: null } },
+  }
+  const { text: textForkCont } = composeGenerated(SRC, blocks, personaBlocks, forkCont, inventory, restrictBase, {})
+  assert.ok(
+    textForkCont.includes('        provider: fork\n') && textForkCont.includes('        backgroundMode: continuable\n'),
+    'fork 与 continuable 未并存',
+  )
+
+  // 零 diff：显式 fresh、缺省（不含该键）、非法值（compose 层按「非 fork 即 fresh」
+  // 静默兜底）产物逐字节一致，且与源一致（源预置 spawn 行原样保留）
+  for (const [label, roles] of [
+    ['显式 fresh', { implement: { name: null, model: null, provider: null, start_mode: 'fresh', background_mode: 'one-shot', persona: null, tools: null } }],
+    ['缺省键', { implement: { name: null, model: null, provider: null, background_mode: 'one-shot', persona: null, tools: null } }],
+    ['非法值', { implement: { name: null, model: null, provider: null, start_mode: 'bogus', background_mode: 'one-shot', persona: null, tools: null } }],
+  ]) {
+    const { text: t } = composeGenerated(SRC, blocks, personaBlocks, { ...emptyAssignments(), roles }, inventory, restrictBase, {})
+    assert.equal(t, SRC, `${label} 产物偏离源 preset（应为零 diff）`)
+  }
+})
+
+test('start_mode: 源块无块级 provider 行（异常源）→ fork 不兜底注入（静默保留）；fresh/缺省不动', () => {
+  // 构造去掉 implement 块块级 provider 行的源文本（模拟手工删掉该行的异常源）
+  const withMarker = '        provider: spawn\n        toolName: implement\n'
+  assert.ok(SRC.includes(withMarker), '构造异常源失败：源 preset 缺 implement 块级 provider 行')
+  const SRC_NO_PROVIDER = SRC.replace(withMarker, '        toolName: implement\n')
+  assert.notEqual(SRC_NO_PROVIDER, SRC, '构造异常源失败：预置行未被移除')
+
+  const blocks = locateAllowBlocks(SRC_NO_PROVIDER, yamlMod)
+  const personaBlocks = locatePersonaBlocks(SRC_NO_PROVIDER, yamlMod)
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  const inventory = fullInventory()
+
+  // fork：块内无行 → 不兜底注入（与 backgroundMode 的兜底口径刻意不同：坏模板
+  // 半截注入救不了，静默保留 + 金测兜底），产物与该源逐字节一致
+  const forked = {
+    ...emptyAssignments(),
+    roles: { implement: { name: null, model: null, provider: null, start_mode: 'fork', background_mode: 'one-shot', persona: null, tools: null } },
+  }
+  const { text } = composeGenerated(SRC_NO_PROVIDER, blocks, personaBlocks, forked, inventory, restrictBase, {})
+  assert.equal(text, SRC_NO_PROVIDER, '无行源上 fork 产出了改动（不应半截注入）')
+
+  // fresh / 缺省：同样零改动
+  const fresh = {
+    ...emptyAssignments(),
+    roles: { implement: { name: null, model: null, provider: null, start_mode: 'fresh', background_mode: 'one-shot', persona: null, tools: null } },
+  }
+  const { text: textFresh } = composeGenerated(SRC_NO_PROVIDER, blocks, personaBlocks, fresh, inventory, restrictBase, {})
+  assert.equal(textFresh, SRC_NO_PROVIDER, '无行源上 fresh 产出了改动')
+})
+
+test('start_mode: roles_remove 命中的内置角色带 fork → warn 且不改写', () => {
+  const blocks = locateAllowBlocks(SRC, yamlMod)
+  const personaBlocks = locatePersonaBlocks(SRC, yamlMod)
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  const assignments = {
+    ...emptyAssignments(),
+    roles_remove: ['design'],
+    roles: { design: { name: null, model: null, provider: null, start_mode: 'fork', background_mode: 'one-shot', persona: null, tools: null } },
+  }
+  const { text } = captureWarn((warnings) => {
+    const result = composeGenerated(SRC, blocks, personaBlocks, assignments, fullInventory(), restrictBase, {})
+    assert.ok(
+      warnings.some((w) => w.includes('roles.design.start_mode') && w.includes('roles_remove')),
+      'roles_remove 命中角色带 start_mode 未 warn',
+    )
+    return result
+  })
+  // design 块删除后其预置 spawn 行随块消失（6 - 1 = 5，其余五块原样保留）；
+  // 其余块源预置 spawn 行原样保留
+  assert.equal((text.match(/\n        provider: spawn\n/g) ?? []).length, 5, 'spawn 行总数异常（已删角色的行应随块消失）')
+  assert.ok(!text.includes('delegation-design'), 'design 委派块未被删除')
+  assert.ok(!text.includes('provider: fork\n        toolName: design'), '已删角色出现了 fork 行')
+})
+
+test('start_mode: 自定义角色块按启动方式落块级 provider 行（fork → fork，fresh/缺省 → spawn）；fork + model 无 agentOptions', () => {
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  const forkBlock = renderCustomRoleBlocks(
+    { reviewer: { name: null, model: null, provider: null, start_mode: 'fork', background_mode: 'one-shot', persona: 'Review code.', tools: ['read'] } },
+    {},
+    restrictBase,
+  )
+  const parsed = parseYamlSubset(forkBlock)
+  assert.equal(parsed[0]?.config?.provider, 'fork', '自定义角色 fork 块块级 provider 未落 fork')
+  // 键序：块级 provider 在 toolName 之前（provider → toolName → agentOptions? → backgroundMode → persona）
+  assert.ok(forkBlock.indexOf('        provider: fork') < forkBlock.indexOf('        toolName: reviewer'), 'fork 行应先于 toolName 行')
+
+  // fork + 专用模型互斥：warn 且不注入 agentOptions 子块
+  captureWarn((warnings) => {
+    const forkModelBlock = renderCustomRoleBlocks(
+      { reviewer: { name: null, model: 'deepseek-chat', provider: null, start_mode: 'fork', background_mode: 'one-shot', persona: 'Review code.', tools: ['read'] } },
+      {},
+      restrictBase,
+    )
+    assert.ok(
+      warnings.some((w) => w.includes('roles.reviewer') && w.includes("start_mode: 'fork'") && w.includes('deepseek-chat')),
+      '自定义角色 fork + model 互斥未 warn',
+    )
+    assert.ok(!forkModelBlock.includes('agentOptions:'), '自定义角色 fork + model 仍注入了 agentOptions')
+    assert.ok(forkModelBlock.includes('        provider: fork\n'), '自定义角色 fork + model 时 fork 行丢失')
+  })
+
+  // 恒写口径（与内置块源模板预置一致）：缺省（未配 start_mode）与显式 fresh 都落恰一行 spawn
+  for (const sm of [undefined, 'fresh']) {
+    const plain = renderCustomRoleBlocks(
+      { reviewer: { name: null, model: null, provider: null, start_mode: sm, background_mode: 'one-shot', persona: 'Review code.', tools: ['read'] } },
+      {},
+      restrictBase,
+    )
+    const parsedPlain = parseYamlSubset(plain)
+    assert.equal(parsedPlain[0]?.config?.provider, 'spawn', `start_mode=${sm} 块缺 spawn 行`)
+    assert.equal((plain.match(/\n        provider: spawn\n/g) ?? []).length, 1, `start_mode=${sm} 块 provider 行数不为 1`)
   }
 })
 

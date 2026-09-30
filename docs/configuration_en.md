@@ -33,7 +33,7 @@ The key names below match `normalizeConfig` in `tools/lib/config.mjs` — the si
 | Top-level key | Type | Semantics |
 |---|---|---|
 | `profile` | string | Which profile's patch layer (`$DSH_HOME/profiles/<profile>/cordis.patch.yml`) is scanned during detection; default `web` |
-| `roles` | map | `toolName` → `{ persona?, name?, tools[], model?, provider?, background_mode? }`. For the three built-in roles (`search_external` / `design` / `implement`): overrides the persona and the allow intent, and may carry a `name` display name (rewrites only the subject of that role's default persona identity sentence — see 2.4), a dedicated model (`model` / `provider`, see 2.5) and a session mode (`background_mode`, see 2.6). Any other key is a **custom role**: the installer emits a fresh `delegation-<toolName>` block and injects the toolName into the main agent's `config.allow` (sections 2 and 6) |
+| `roles` | map | `toolName` → `{ persona?, name?, tools[], model?, provider?, start_mode?, background_mode? }`. For the three built-in roles (`search_external` / `design` / `implement`): overrides the persona and the allow intent, and may carry a `name` display name (rewrites only the subject of that role's default persona identity sentence — see 2.4), a dedicated model (`model` / `provider`, see 2.5), a session mode (`background_mode`, see 2.6) and a start mode (`start_mode`, see 2.7). Any other key is a **custom role**: the installer emits a fresh `delegation-<toolName>` block and injects the toolName into the main agent's `config.allow` (sections 2 and 6) |
 | `roles_remove` | string[] | toolNames of built-in roles deleted wholesale (only `search_external` / `design` / `implement` are accepted; other names are ignored with a warning; default `[]`). Deleting means the delegation block / tool surface / role persona / main-agent delegation guidance are no longer generated (see 2.3) |
 | `skills` | map | `skill` → the list of role toolNames the skill is assigned to; the installer appends an `Available skills: …` guidance sentence to those roles' personas (section 7) |
 | `main_agent_extra` | string[] | Tools appended to the main-agent allow list (host tools such as `mcp__codegraph__codegraph_explore`, `memory_search`, `mnemon_*`); names are checked against the preset's own tool face ∪ the detection inventory — a name in neither is not injected |
@@ -52,6 +52,7 @@ The key names below match `normalizeConfig` in `tools/lib/config.mjs` — the si
 - `roles.<toolName>.model`: a dedicated model id for the role (optional `string`). When set, every sub-agent the role spawns runs on that model instead of following the main agent's current session model; absent = nothing is injected and the child inherits the main agent's model (see 2.5).
 - `roles.<toolName>.provider`: the provider route the role's model lives on (optional `string`). It only takes effect paired with `model`; a lone `provider` is warned about and ignored by the installer, while a lone `model` rides the main agent's provider route (see 2.5).
 - `roles.<toolName>.background_mode`: the role's session mode (optional `'one-shot' | 'continuable'`; default `one-shot`) — run-and-discard, or continuable: the child conversation is kept across turns so the main agent can resume in place with `send_message`. Built-in and custom role entries share the semantics; the continuable prerequisites, costs and panel path are in 2.6.
+- `roles.<toolName>.start_mode`: the role's start mode (optional `'fresh' | 'fork'`; default `fresh`) — a brand-new child, or one that starts with the main agent's completed turns as its initial content (inherit the conversation). Built-in and custom role entries share the semantics; fork semantics, the dedicated-model mutual exclusion and the panel path are in 2.7.
 - Keys under `roles` outside the built-in trio are **custom roles** (section 6). Do not put the static role `search_internal_deep` under `roles` (see 2.2).
 - Built-in roles can be **deleted wholesale**: the `roles_remove` key accepts only the trio's names — deletion effect, consistency with the `roles` key, and the restore paths are in 2.3.
 
@@ -242,6 +243,7 @@ roles:
 Rules and boundaries:
 
 - **`provider` pairs with `model`**: a lone `provider` has no effect — the installer warns and ignores it. `model` alone is valid and rides the main agent's provider route.
+- **Mutually exclusive with the fork start mode**: when the role also sets `start_mode: fork` (see 2.7), the dedicated model has no effect — a forked child inherits the main agent's provider route and model (a hard KV-cache reuse constraint), and the installer warns, ignores `model` and skips the `agentOptions` injection.
 - **Routes and model ids must actually exist**: the available routes depend on which LLM adapters your DSH deployment registers — an official install defaults to `deepseek-official` (models `deepseek-v4-flash` / `deepseek-v4-pro` / `deepseek-v4-flash-vision-exp`); the `pi-ai` gateway accepts anthropic / openai / google etc. profiles configured in DSH settings (set up the matching credentials first). The `model` id must belong to the chosen route, otherwise **every delegation** of that role errors at runtime.
 - **Deleted roles are not involved**: for a role deleted wholesale by `roles_remove`, any `model` / `provider` left in its entry is ignored with a warning (see 2.3).
 - **The static role is out of scope**: `search_internal_deep` has neither sub-key (see 2.2).
@@ -276,6 +278,38 @@ Boundaries:
 - **The static role is out of scope**: `search_internal_deep` is not configured through the `roles` key (see 2.2). Its delegation block carries the same explicit `backgroundMode: one-shot` marker in the base template; to make it continuable, edit that row in the static source and re-apply (the generator never rewrites that row, it carries over verbatim).
 - **Deleted roles are not involved**: for a role deleted wholesale by `roles_remove`, any `background_mode` left in its entry is ignored with a warning (see 2.3).
 - **The main persona already carries the matching branch**: when a continuable role fails or disappoints, the main agent's delegation SOP resumes it in the same session with `send_message` first, and re-delegation drops to a fallback (see [Orchestration](orchestration_en.md)).
+
+Applying works exactly like every other config key: after editing, hit「保存并应用」(save & apply) in 庖丁配置, then restart DSH or open a new session.
+
+### 2.7 Role start mode: roles.\<toolName>.start_mode
+
+The optional `start_mode` sub-key of a role entry decides how that role's child agents start out: `'fresh'` (a brand-new, independent context) or `'fork'` (inherit the conversation — the child starts with the main agent's completed turns as its initial content). Default `fresh`; built-in and custom role entries share the semantics, with no per-role differences.
+
+```yaml
+roles:
+  implement:
+    start_mode: fork   # the helper starts from what the main agent has already done; every other setting (persona / tools etc.) still applies
+```
+
+Fork semantics (stated plainly):
+
+- **Initial content = the main agent's completed turns**: the conversation as finished up to the moment of delegation (the main agent's instructions and outputs included); the turn currently in progress is not part of it. If the main agent has not completed any turn yet, a forked child is indistinguishable from a fresh spawn.
+- **A one-shot snapshot, not live sharing**: the fork happens at delegation time. Later progress on the main-agent side never flows into the child session, and the child's output is not written back into the main session — the two advance independently and only meet through the returned result. For a helper that should "keep following the main agent", that is `background_mode: continuable` (see 2.6) plus `send_message` resumption; the two keys are orthogonal and can be combined.
+- **The tool surface still converges**: fork inherits conversation content only, never the main agent's tool permissions; the child still narrows its tools to the role's `toolFilter.allow` (the `tools` setting applies as usual).
+- **Mutually exclusive with the dedicated model**: a forked child inherits the main agent's provider route and model (a hard KV-cache reuse constraint); when the role also sets `model`, the installer warns, ignores it and skips the `agentOptions` injection (see 2.5).
+
+Typical use case: the main agent has finished its research and written an outline, and hands "turn this outline into a deck" to a helper — fork lets the helper start directly from the conclusions and the outline instead of having the context restated to it.
+
+Generation semantics: the base template ships a block-level `provider: spawn` row in each of the four built-in roles' delegation blocks (the first config row of the block); a role configured as `fork` has that row **rewritten in place** to `provider: fork`, while `fresh` / absent keeps it as is (with an all-default config the generated output stays byte-identical to the source template). Custom-role blocks likewise emit `provider: fork` / `provider: spawn` according to the start mode. For what a forked helper means at the orchestration level, see [Orchestration](orchestration_en.md).
+
+Panel path: 庖丁配置 in the left sidebar → the「启动方式」("start mode") radio on a role card (「全新（fresh）」/「继承对话（fork）」). When inherit-conversation is selected and the role also has a dedicated model, the panel warns about the mutual exclusion in place (saving is not blocked).
+
+Boundaries:
+
+- **Unrelated to `roles.<toolName>.provider`**: that provider is the LLM route (paired with `model`, see 2.5) and lands in the block's `agentOptions` sub-rows; this key decides the delegation block's block-level `provider` row (spawn / fork). Two different places, no interaction.
+- **Invalid values fall back with a warning**: `start_mode` only accepts `'fresh'` / `'fork'`; anything else is warned about and treated as `fresh`.
+- **Deleted roles are not involved**: for a role deleted wholesale by `roles_remove`, any `start_mode` left in its entry is ignored with a warning (see 2.3).
+- **The static role is out of scope**: `search_internal_deep` is not configured through the `roles` key (see 2.2); to change its start mode, edit that delegation block's `provider` row in the static source and re-apply (the generator never rewrites that row, it carries over verbatim).
 
 Applying works exactly like every other config key: after editing, hit「保存并应用」(save & apply) in 庖丁配置, then restart DSH or open a new session.
 
@@ -610,7 +644,7 @@ When you disable tavily / codegraph / magic-memory (comment out the entry in `~/
 
 DSH organizes sessions by workspace (the project directory). The top-level `workspaces` key gives each workspace its own main/sub-agent configuration: the global entry keeps generating the shared `orchestrator` preset, while each workspace entry generates its own `orchestrator-<slug>` preset. They coexist in the preset roster and never overwrite each other.
 
-Each workspace entry is a **complete configuration set**, not a delta: same fields as the top level (except `profile` — detection layers stay global). Role sub-keys carry over as-is — `background_mode` (see 2.6) works per workspace too: let `implement` run continuable in one project while every other project stays one-shot. The first time you configure a workspace in the panel, it starts from the current global config; edit, then hit "Save & Apply" to generate that workspace's preset.
+Each workspace entry is a **complete configuration set**, not a delta: same fields as the top level (except `profile` — detection layers stay global). Role sub-keys carry over as-is — `background_mode` (see 2.6) and `start_mode` (see 2.7) work per workspace too: let `implement` run continuable or conversation-inheriting in one project while every other project stays one-shot and fresh. The first time you configure a workspace in the panel, it starts from the current global config; edit, then hit "Save & Apply" to generate that workspace's preset.
 
 ```yaml
 workspaces:

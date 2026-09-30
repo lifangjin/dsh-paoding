@@ -143,6 +143,7 @@ test('alloc: smartDefaults 形状含 name:null；resolveAssignments 回落数组
     name: null,
     model: null,
     provider: null,
+    start_mode: 'fresh',
     background_mode: 'one-shot',
     persona: null,
     tools: ['read', 'edit', 'mcp__myfs__write_file'],
@@ -170,6 +171,7 @@ test('alloc: background_mode 基础模板恒 one-shot；resolveAssignments 透�
   assert.deepEqual(Object.keys(base.roles), ['search_external', 'design', 'implement'])
   for (const role of Object.values(base.roles)) {
     assert.equal(role.background_mode, 'one-shot', '基础模板角色缺 background_mode: one-shot')
+    assert.equal(role.start_mode, 'fresh', '基础模板角色缺 start_mode: fresh')
   }
 
   // 既有配置：continuable 原样透传；缺键（老配置 / UI 半成品对象）回落 'one-shot'
@@ -185,6 +187,28 @@ test('alloc: background_mode 基础模板恒 one-shot；resolveAssignments 透�
   const resolved = resolveAssignments(existing, smartDefaults([], new Set(), staticBase), staticBase)
   assert.equal(resolved.roles.implement.background_mode, 'continuable', 'continuable 未透传')
   assert.equal(resolved.roles.design.background_mode, 'one-shot', '缺键未回落 one-shot')
+})
+
+test('alloc: start_mode 基础模板恒 fresh；resolveAssignments 透传 fork / 缺键回落', () => {
+  const staticBase = { implement: ['read', 'edit'], design: ['read'] }
+  const base = baseAssignments(staticBase)
+  for (const role of Object.values(base.roles)) {
+    assert.equal(role.start_mode, 'fresh', '基础模板角色缺 start_mode: fresh')
+  }
+
+  // 既有配置：fork 原样透传；缺键（老配置 / UI 半成品对象）回落 'fresh'
+  const existing = {
+    roles: {
+      implement: { start_mode: 'fork', tools: ['read'] },
+      design: { tools: ['read'] },
+    },
+    roles_remove: [],
+    has_main_agent_extra: true,
+    main_agent_extra: [],
+  }
+  const resolved = resolveAssignments(existing, smartDefaults([], new Set(), staticBase), staticBase)
+  assert.equal(resolved.roles.implement.start_mode, 'fork', 'fork 未透传')
+  assert.equal(resolved.roles.design.start_mode, 'fresh', '缺键未回落 fresh')
 })
 
 // ── workspaces: assignSlugs 唯一性 ──────────────────────────────────────────

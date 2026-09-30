@@ -126,7 +126,7 @@ continuable 分支：失败或产出不满、**且该角色已配成 continuable
 
 ### 默认：one-shot（用完即弃）
 
-四个角色委派实例（`delegation-search-external` / `delegation-design` / `delegation-implement` / `delegation-search-internal-deep`）的会话模式都是 one-shot——基础模板把四个内置角色显式写明（委派块里的 `backgroundMode: one-shot` 行，纯为可见性，省得打开文件猜默认值），语义与 `dsh-tool-subagent` 的配置默认值一致。会话模式按角色可配：任一角色（含自定义角色）经 `roles.<toolName>.background_mode` 切成 `continuable`（见[配置](configuration.md) 2.6）；还可经 `roles.<toolName>.model` / `.provider` 固定专用模型——配置后该角色固定用自己的模型，不随主 agent 会话切换模型而变（见[配置](configuration.md) 2.5）。含义：
+四个角色委派实例（`delegation-search-external` / `delegation-design` / `delegation-implement` / `delegation-search-internal-deep`）的会话模式都是 one-shot——基础模板把四个内置角色显式写明（委派块里的 `backgroundMode: one-shot` 行，纯为可见性，省得打开文件猜默认值），语义与 `dsh-tool-subagent` 的配置默认值一致。会话模式按角色可配：任一角色（含自定义角色）经 `roles.<toolName>.background_mode` 切成 `continuable`（见[配置](configuration.md) 2.6）；还可经 `roles.<toolName>.model` / `.provider` 固定专用模型——配置后该角色固定用自己的模型，不随主 agent 会话切换模型而变（见[配置](configuration.md) 2.5）；开局方式也可按角色切换——`roles.<toolName>.start_mode` 让帮手继承主 agent 已完成的对话启动（见本章末节与[配置](configuration.md) 2.7）。含义：
 
 - 一次委派 = 一个用完即弃的子会话。调用默认等子 agent 跑完、把结果交回主 agent（也可按工具参数 `run_in_background` 转为后台 job，用 `job_output` 收结果、`job_kill` 叫停）。
 - 子会话在任务结束时即弃，其工具面与上下文只为该次运行而加载（**按需加载 + 上下文隔离**，这是本 preset 的核心设计）。
@@ -155,6 +155,19 @@ continuable 不是免费的，启用前请确认以下四点：
 | 持久化要求 | 无 | host 层 `sessionPersistence` 后端（机器级） |
 | 长期成本 | 每轮只付新任务 | 每轮携带累积上下文，成本上升 |
 | 适用 | 一切委派（默认） | 多轮打磨类委派（按角色开启，见[配置](configuration.md) 2.6） |
+
+### 启动方式：全新（spawn）与继承对话（fork）
+
+会话模式管「怎么收场」，启动方式（`roles.<toolName>.start_mode`，见[配置](configuration.md) 2.7）管「怎么开局」，两者正交——fork 帮手可以一次性用完即弃，也可以再配 continuable 跨轮续修。生成层把角色委派块的块级 `provider` 行写成 `spawn`（缺省，全新启动）或 `fork`（继承对话）；preset 自带的 `subagent_fork` 通用委派工具就是同一个 fork 提供方，主 agent 白名单刻意不向其暴露，fork 只经角色配置按键生效。
+
+fork 的语义（如实说明）：
+
+- **初始内容 = 主 agent 已完成的轮次。** 委派发生时，子 agent 拿到的是主 agent 到此刻已经收尾的对话（指令与产出都在）；进行中的那一轮不算数。主 agent 一个已完成轮次都没有时，fork 与全新启动没有区别。
+- **一次性快照，两边各自推进。** fork 之后主 agent 的新进展不会流进子会话，子 agent 的产出也不回写主会话；交汇点只有「子 agent 返回结果」。要持续跟着主 agent 走的帮手，用 continuable + `send_message`（见上节），两者可叠加。
+- **只继承对话，不继承工具与权限。** fork 帮手的工具面仍按该角色 `toolFilter.allow` 收敛，DSH 权限语义（被拒操作不重试）原样适用。
+- **模型跟随主 agent。** fork 子 agent 继承主 agent 当前的 provider 路由与模型（KV cache 复用的硬约束），角色配的专用模型此时不生效（安装器告警并忽略，见[配置](configuration.md) 2.5）。
+
+什么时候值得 fork：主 agent 已经做完一轮有分量的产出（调研结论、大纲、方案），接下来的活需要「知道这些」但又不想把这些内容在委派 prompt 里复述一遍——比如把写好的大纲做成 PPT、按已定的方案改代码。fork 让帮手直接从已完成上下文开工；反过来，任务与主 agent 上下文无关时不必 fork，全新启动上下文更干净。
 
 ## 进阶：免面板手编 implement_cont
 

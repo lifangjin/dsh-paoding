@@ -113,6 +113,7 @@
       var _swr = useState(0), switchRev = _swr[0], setSwitchRev = _swr[1];
       var _wsl = useState([]), wsList = _wsl[0], setWsList = _wsl[1]; // 宿主工作区列表（GET /api/paoding/workspaces；失败降级为空数组，pill 由配置文件键兜底）
       var _wslt = useState(false), wsListTried = _wslt[0], setWsListTried = _wslt[1]; // 列表请求尘埃落定标记（成败均置位）：pendingOpenWs 消费条件用
+      var _wsle = useState(""), wsListErr = _wsle[0], setWsListErr = _wsle[1]; // 列表拉取失败的降级提示（"" = 正常零占位）：标签条只剩配置文件兜底的工作区时，给用户一句交代
       var _wsao = useState(false), wsAddOpen = _wsao[0], setWsAddOpen = _wsao[1]; // 「添加工作区」弹窗开合态（旧版是 tab 条下方的内联展开行）
       var _wsap = useState(""), wsAddPath = _wsap[0], setWsAddPath = _wsap[1];
       var _wsae = useState(""), wsAddErr = _wsae[0], setWsAddErr = _wsae[1];
@@ -120,6 +121,7 @@
       var _ran = useState(""), roleAddName = _ran[0], setRoleAddName = _ran[1];
       var _radn = useState(""), roleAddDispName = _radn[0], setRoleAddDispName = _radn[1]; // 弹窗第二字段「显示名」（可选；残值语义同 roleAddName，成功提交才清）
       var _rabm = useState("one-shot"), roleAddBgMode = _rabm[0], setRoleAddBgMode = _rabm[1]; // 弹窗第三字段「会话模式」：'one-shot' | 'continuable'（残值语义同上，成功提交才复位）
+      var _rasm = useState("fresh"), roleAddStartMode = _rasm[0], setRoleAddStartMode = _rasm[1]; // 弹窗第四字段「启动方式」：'fresh' | 'fork'（残值语义同上，成功提交才复位）
       var _rae = useState(""), roleAddErr = _rae[0], setRoleAddErr = _rae[1];
       // 「重命名自定义角色」弹窗三件套（原原生 prompt 改模态框）：For 为
       // null = 关闭，非空 = 待改名的旧 toolName（身份键，提交时迁移 skills 引用）。
@@ -204,6 +206,9 @@
             // 会话模式透传：仅 'continuable' 认可，其余归 'one-shot'（字面量，
             // 与 config 层 normalizeBackgroundMode 的序列化形状一致）
             background_mode: roleBgModeOf(base.roles, name),
+            // 启动方式透传：仅 'fork' 认可，其余归 'fresh'（与 config 层
+            // normalizeStartMode 的序列化形状一致；决定委派块块级 provider 行）
+            start_mode: roleStartModeOf(base.roles, name),
             tools: (base.roles && base.roles[name] && base.roles[name].tools) ||
               (d.blocks && d.blocks[name]) || [],
           };
@@ -218,6 +223,8 @@
             provider: roleStringRef(base.roles, name, "provider"),
             // 会话模式与内置同款收法：'one-shot' = 缺省一次性，'continuable' = 可续
             background_mode: roleBgModeOf(base.roles, name),
+            // 启动方式与内置同款收法：'fresh' = 缺省全新启动，'fork' = 继承对话
+            start_mode: roleStartModeOf(base.roles, name),
             tools: base.roles[name].tools || [],
           };
         });
@@ -248,15 +255,22 @@
 
       // 工作区列表：面板加载时拉一次宿主注册表（与 state 并行）。失败降级为
       // 空列表——workspaceRowsOf 会用 state.existing.workspaces 的键兜底出 pill，
-      // 绝不阻塞面板。
+      // 绝不阻塞面板。降级不再无声：宿主侧故障（如插件实例已 disposed 的僵尸
+      // 场景）会让接口 500，标签条只剩配置文件兜底的 tab，用户容易误判成
+      // 「功能坏了」，故留一行可见提示；err.message 截短后括注原文，便于对照
+      // 日志定位。请求错误 / 响应格式异常都汇入同一个 catch，提示口径一致。
       var loadWorkspaces = useCallback(function () {
         api("workspaces").then(function (d) {
           if (!d || d.ok !== true || !Array.isArray(d.items)) throw new Error("工作区列表响应格式异常");
           setWsList(d.items);
           setWsListTried(true);
-        }).catch(function () {
+          setWsListErr("");
+        }).catch(function (err) {
           setWsList([]); // 静默降级：只用配置文件里已有的工作区键
           setWsListTried(true);
+          var msg = err && err.message ? String(err.message) : "";
+          setWsListErr("宿主工作区列表拉取失败，仅显示配置文件中的工作区；重启 DSH 后通常可恢复"
+            + (msg ? "（" + (msg.length > 80 ? msg.slice(0, 80) + "…" : msg) + "）" : ""));
         });
       }, [api]);
 
@@ -642,13 +656,15 @@
           var next = JSON.parse(JSON.stringify(prev));
           // 新角色全字段出厂形状：与 buildAssignments / restoreBuiltinRole 条目一致
           //（model/provider 置 null = 跟随主 agent 当前模型；background_mode
-          // 用弹窗单选值，字面量 'one-shot' | 'continuable'）。name 是可选
-          // 显示名（null = 用 toolName 当标题），不再恒 null。
+          // 用弹窗单选值，字面量 'one-shot' | 'continuable'；start_mode 用弹窗
+          // 单选值，字面量 'fresh' | 'fork'，决定委派块块级 provider 行）。name
+          // 是可选显示名（null = 用 toolName 当标题），不再恒 null。
           next.roles[name] = {
             persona: null,
             name: disp,
             model: null,
             provider: null,
+            start_mode: roleAddStartMode,
             background_mode: roleAddBgMode,
             // 出厂 tools 默认全选 = 核心工具面（customCoreToolsOf：restrictBase
             // 去四个委派名与 mcp__ 工具）+ host 检测库存。两集合不相交，无需去重
@@ -661,6 +677,7 @@
         setRoleAddName("");
         setRoleAddDispName("");
         setRoleAddBgMode("one-shot"); // 成功提交即复位出厂默认（取消重开才保留残值）
+        setRoleAddStartMode("fresh"); // 成功提交即复位出厂默认（取消重开才保留残值）
         setRoleAddErr("");
         toast.ok('已新建角色 "' + name + '"，记得「保存并应用」');
       }
@@ -769,13 +786,14 @@
       // （data.blocks[name]），不沿用删前自定义配置——恢复即出厂默认，简化处理。
       // 显示名同样置 null（出厂默认），重建条目与 buildAssignments 形状一致。
       // 专用模型 / provider 同理置 null：恢复 = 回到「跟随主 agent 当前模型」，
-      // 不保留删前的模型固定配置。background_mode 置 'one-shot'（出厂缺省）。
+      // 不保留删前的模型固定配置。start_mode 置 'fresh'、background_mode 置
+      // 'one-shot'（出厂缺省）。
       function restoreBuiltinRole(name) {
         setAssign(function (prev) {
           var next = JSON.parse(JSON.stringify(prev));
           next.roles_remove = (next.roles_remove || []).filter(function (r) { return r !== name; });
           var defTools = (data && data.blocks && data.blocks[name]) || [];
-          next.roles[name] = { persona: null, name: null, model: null, provider: null, background_mode: "one-shot", tools: defTools.slice() };
+          next.roles[name] = { persona: null, name: null, model: null, provider: null, start_mode: "fresh", background_mode: "one-shot", tools: defTools.slice() };
           return next;
         });
       }

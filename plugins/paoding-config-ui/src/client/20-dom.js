@@ -5,8 +5,11 @@
       return Icon ? h(Icon, { size: size }) : null;
     }
 
-    function statusRow(cls, iconNode, text) {
-      return h("div", { className: cls, role: cls === "omd-statusError" ? "alert" : undefined },
+    // 降级 / 报错提示行。role 可选：缺省时沿用旧口径（error 行 alert 强提醒，
+    // warn 行不带 role 走低调展示）；调用方显式传 "status" 则礼貌播报一次，
+    // 供「拉取失败但仍可用」这类降级提示用（不抢屏，读屏不打断）。
+    function statusRow(cls, iconNode, text, role) {
+      return h("div", { className: cls, role: role || (cls === "omd-statusError" ? "alert" : undefined) },
         iconNode ? h("span", { className: "omd-statusIcon" }, iconNode) : null,
         h("span", { className: "omd-statusText" }, text));
     }
@@ -84,6 +87,27 @@
       "PERSISTENCE_UNAVAILABLE：需在 ~/.dsh/cordis.patch.yml 挂 " +
       "@deepseek-ai/dsh-session-persistence-jsonl（host 层、机器级改动，详见 docs/orchestration.md）。";
 
+    // ── 启动方式（roles.<toolName>.start_mode）─────────────────────────────
+    // 定稿键名 'fresh' | 'fork'，缺省 fresh。与后端序列化形状一致：config 层
+    // normalizeStartMode 恒收成这两个字面量（缺省/非法回落 'fresh'，落盘恒写出），
+    // assignments 与回填照搬同款取值。注意与 roles.<toolName>.provider（LLM 路由）
+    // 无关 —— 本键只决定委派块的块级 provider 行（spawn / fork）。
+    var ROLE_SM_FORK = "fork";
+    var ROLE_SM_FRESH = "fresh";
+
+    // 角色条目 start_mode 透传归一：恰好等于 'fork' 才认，其余（缺省 / null /
+    // 手编误值）一律 'fresh'（与 normalizeStartMode 同口径）。
+    function roleStartModeOf(baseRoles, n) {
+      var r = (baseRoles || {})[n];
+      return r && r.start_mode === ROLE_SM_FORK ? ROLE_SM_FORK : ROLE_SM_FRESH;
+    }
+
+    // 「继承对话（fork）」选中且该角色配了专用模型时的行内提示（定稿文案）：
+    // fork 子代理继承主 agent 的提供方与模型，专用模型不生效。
+    var ROLE_SM_FORK_MODEL_HINT =
+      "继承对话的子代理随主 agent 的当前模型启动，上方专用模型不会生效；" +
+      "应用时会忽略该项模型配置。";
+
 
     // mcp__ 前缀判定（归「MCP 工具」组的依据，供角色工具网格分组与
     // customCoreToolsOf 使用；只做展示分组，不影响识别/分配）。非 mcp__ 名字
@@ -126,7 +150,8 @@
 
     // 版本提示（渲染在页头标题旁，由 PageShell 持有）：常态版本号不进正文；
     // updateAvailable 时这里渲染醒目提示卡：releaseUrl 新标签页打开 release 页、
-    // 「升级」按钮走 onUpgrade（一键 dsh plugin update 自升级），并保留当前版本号。
+    // 「升级」按钮走 onUpgrade（一键插件通道自升级，通道按 profile 由服务端
+    // 分流），并保留当前版本号。
     // latest 为 null 一律不显示新版部分；检测失败（error 非空）改渲染弱化失败行
     // （⚠ 版本检测失败 · 重试，完整原因在 title 悬浮提示），不再整行静默。
     // opts（可省）：busy/busyOp 复用面板级互斥（任何操作进行中都禁用升级，

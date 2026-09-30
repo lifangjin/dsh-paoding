@@ -2,10 +2,12 @@
  * dsh-paoding.config.yml 键规范化与读写：main_agent_display_name /
  * roles.<toolName>.name /
  * roles.<toolName>.model / roles.<toolName>.provider（角色专用模型，生成层映射到
- * dsh-tool-subagent 的 agentOptions）/ roles.<toolName>.background_mode（可续模式，
+ * dsh-tool-subagent 的 agentOptions）/ roles.<toolName>.start_mode（角色启动方式，
+ * 生成层把内置委派块的块级 provider 行改写为 fork，'fresh' | 'fork'）/
+ * roles.<toolName>.background_mode（可续模式，
  * 生成层映射到 dsh-tool-subagent 的 backgroundMode，'one-shot' | 'continuable'）/
  * roles_remove 解析（normalizeRoleName /
- * normalizeModelRef / normalizeBackgroundMode / parseRolesRemove / yamlScalar）、
+ * normalizeModelRef / normalizeBackgroundMode / normalizeStartMode / parseRolesRemove / yamlScalar）、
  * 目标字段集合的规范化与写出（normalizeTargetFields / writeTargetFields —— 顶层与
  * workspaces.<path> 条目共用同一套）、按工作区条目段（normalizeWorkspaces）、
  * 文件加载与规范化（loadConfig / normalizeConfig）、序列化与落盘（serializeConfig /
@@ -87,6 +89,27 @@ export function normalizeBackgroundMode(value, label = 'background_mode') {
 }
 
 /**
+ * 校验并规范化 roles.<toolName>.start_mode（角色启动方式，映射到 dsh-tool-subagent
+ * 委派块的块级 provider 行：'fresh' = spawn 全新启动，'fork' = 以主 agent 已完成的
+ * 对话轮次为初始内容启动）。合法值仅 'fresh' | 'fork'：缺省/null → 缺省值
+ * 'fresh'（静默，与 name/model/provider 的 null 口径一致）；非字符串或字符串但
+ * 不在合法值集 → warn 后回落 'fresh'（与 normalizeBackgroundMode 的非法值处理
+ * 同款：类型/取值不对降级提醒而非中断加载）。返回恒为合法值之一，生成层
+ * （compose）据此决定是否把块级 provider 行改写为 fork。
+ * 注意：本键与 roles.<toolName>.provider（LLM 路由，与 model 配对映射到
+ * agentOptions 子行）毫无关系 —— 子 agent 的启动提供方只有委派块里那行块级
+ * provider，本键是它的配置面。
+ */
+export function normalizeStartMode(value, label = 'start_mode') {
+  if (value === null || value === undefined) return 'fresh'
+  if (typeof value !== 'string' || (value !== 'fresh' && value !== 'fork')) {
+    warn(`${label}: 非法值已忽略（${JSON.stringify(value)}），回落 'fresh'（可选: 'fresh' / 'fork'）`)
+    return 'fresh'
+  }
+  return value
+}
+
+/**
  * 解析配置键 roles_remove：string[]，只收 ROLES 内置角色名（search_external /
  * design / implement）；含其他名字 warn 并忽略；去重保序。非数组 → []。
  * 删除语义由生成层承担（委派行、主 persona 引用、restrict allow 三处）。
@@ -138,7 +161,7 @@ function yamlFlowScalar(value) {
 /**
  * Load the config file when present.  Returns null when the file does not
  * exist; throws when it exists but cannot be parsed.  Shape:
- *   { profile, roles: { <toolName>: { name?, model?, provider?, background_mode?, persona?, tools[] } },
+ *   { profile, roles: { <toolName>: { name?, model?, provider?, start_mode?, background_mode?, persona?, tools[] } },
  *     roles_remove[] (内置角色删除), main_agent_extra[], main_agent_remove[],
  *     main_agent_skills[], main_agent_skills_inline[],
  *     main_agent_persona_extra? (string|null),
@@ -220,7 +243,7 @@ function normalizeWorkspaces(raw) {
 
 /**
  * 目标字段集合规范化：顶层（除 profile 外）与 workspaces.<path> 条目共用的
- * 同一套键 —— roles（条目含 background_mode）/ roles_remove / main_agent_extra（含 has_main_agent_extra
+ * 同一套键 —— roles（条目含 start_mode / background_mode）/ roles_remove / main_agent_extra（含 has_main_agent_extra
  * 内部标记）/ main_agent_remove / main_agent_skills / main_agent_skills_inline /
  * main_agent_persona_extra / main_agent_display_name / skills。
  * 语义与抽取前逐字一致；
@@ -243,18 +266,21 @@ export function normalizeTargetFields(raw) {
         warn(`roles.${toolName}.${key}: 非字符串值已忽略（${JSON.stringify(v)}）`)
       }
     }
-    // 角色条目字段顺序 { name?, model?, provider?, background_mode?, persona?, tools? }：
+    // 角色条目字段顺序 { name?, model?, provider?, start_mode?, background_mode?, persona?, tools? }：
     // name（roles.<toolName>.name，内置角色可选显示名）与主 agent 显示名同约束，
     // 仅字符串收（trim 后空/违规由 normalizeRoleName 处理）；缺省/null → null
     // （= 保持该角色默认身份句）。model / provider（roles.<toolName>.model /
     // .provider，角色专用模型）镜像同款收法，违规由 normalizeModelRef 处理；
     // 缺省/null → null（= 不注入 agentOptions，子 agent 继承主 agent 当前模型）。
-    // background_mode（roles.<toolName>.background_mode，角色可续模式）仅收
+    // start_mode（roles.<toolName>.start_mode，角色启动方式）仅收 'fresh' | 'fork'，
+    // 其余 warn 回落 'fresh'（normalizeStartMode）。background_mode
+    // （roles.<toolName>.background_mode，角色可续模式）仅收
     // 'one-shot' | 'continuable'，其余 warn 回落 'one-shot'（normalizeBackgroundMode）。
     roles[toolName] = {
       name: typeof raw.name === 'string' ? normalizeRoleName(raw.name, `roles.${toolName}.name`) : null,
       model: typeof raw.model === 'string' ? normalizeModelRef(raw.model, `roles.${toolName}.model`) : null,
       provider: typeof raw.provider === 'string' ? normalizeModelRef(raw.provider, `roles.${toolName}.provider`) : null,
+      start_mode: normalizeStartMode(raw.start_mode, `roles.${toolName}.start_mode`),
       background_mode: normalizeBackgroundMode(raw.background_mode, `roles.${toolName}.background_mode`),
       persona: typeof raw.persona === 'string' && raw.persona.trim() !== '' ? raw.persona : null,
       tools,
@@ -359,7 +385,7 @@ function writeTargetFields(lines, pad, target) {
     // roles.<toolName>.model / .provider：仅非 null 写出（null/缺省 = 不注入
     // agentOptions，子 agent 继承主 agent 当前模型）；写前过一次 normalizeModelRef
     // （与上方 name 写法一致，防手工构造的 config 绕过规范化），字段序 name →
-    // model → provider → background_mode → persona → tools 固定。
+    // model → provider → start_mode → background_mode → persona → tools 固定。
     if (role.model !== null && role.model !== undefined) {
       const model = normalizeModelRef(role.model, `roles.${toolName}.model`)
       if (model !== null) lines.push(`${pad}    model: ${yamlScalar(model)}`)
@@ -368,6 +394,10 @@ function writeTargetFields(lines, pad, target) {
       const provider = normalizeModelRef(role.provider, `roles.${toolName}.provider`)
       if (provider !== null) lines.push(`${pad}    provider: ${yamlScalar(provider)}`)
     }
+    // roles.<toolName>.start_mode：恒写出（含缺省 fresh）—— 与 background_mode 同
+    // 款「旋钮可见、读写往返幂等」口径（loadConfig 也恒收此键）。写前过一次判定
+    // （防手工构造的 config 绕过规范化）：非 'fork' 一律按 'fresh' 落盘。
+    lines.push(`${pad}    start_mode: ${role.start_mode === 'fork' ? 'fork' : 'fresh'}`)
     // roles.<toolName>.background_mode：恒写出（含缺省 one-shot）—— 配置文件里
     // 旋钮对用户可见、读写往返幂等（loadConfig 也恒收此键）。写前过一次判定
     // （防手工构造的 config 绕过规范化）：非 'continuable' 一律按 'one-shot' 落盘。

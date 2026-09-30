@@ -209,7 +209,9 @@
 
     # ── 角色委派工具 ─────────────────────────────────────────────
     # 每个实例把一个 spawn provider 绑定到一个 toolName；主 agent 调哪个工具，
-    # 即选择该子 agent 的工具面。子 agent 创建时 tools.restrict(toolFilter)
+    # 即选择该子 agent 的工具面。块级 provider 也可写 fork —— 子 agent 以主 agent
+    # 已完成的对话轮次为初始内容启动（庖丁经 roles.<toolName>.start_mode 配置），
+    # 其余生成期行为不变。子 agent 创建时 tools.restrict(toolFilter)
     # 校验 allow 名字必须存在于其可见注册面 —— 本组合（standard 全量 + host
     # patch 的 mcp/memory）就是这些名字的来源，缺一行都会报 unknown tools。
 

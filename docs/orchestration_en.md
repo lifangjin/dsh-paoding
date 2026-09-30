@@ -126,7 +126,7 @@ Design note: the SOP is persona text, not code, so it is tunable: edit the perso
 
 ### Default: one-shot (run-and-discard)
 
-The four role delegation instances (`delegation-search-external` / `delegation-design` / `delegation-implement` / `delegation-search-internal-deep`) all run in `one-shot` mode — the base template writes it out explicitly for the four built-ins (a `backgroundMode: one-shot` row in each delegation block, purely for visibility so you never have to guess the default), which matches `dsh-tool-subagent`'s config default. The session mode is per-role configurable: any role (custom roles included) can be switched to `continuable` via `roles.<toolName>.background_mode` (see [Configuration](configuration_en.md) 2.6). Any role can additionally be pinned to a dedicated model via `roles.<toolName>.model` / `.provider` — once configured, the role runs on its own model and no longer follows the main agent's session model switches (see [Configuration](configuration_en.md) 2.5). Meaning:
+The four role delegation instances (`delegation-search-external` / `delegation-design` / `delegation-implement` / `delegation-search-internal-deep`) all run in `one-shot` mode — the base template writes it out explicitly for the four built-ins (a `backgroundMode: one-shot` row in each delegation block, purely for visibility so you never have to guess the default), which matches `dsh-tool-subagent`'s config default. The session mode is per-role configurable: any role (custom roles included) can be switched to `continuable` via `roles.<toolName>.background_mode` (see [Configuration](configuration_en.md) 2.6). Any role can additionally be pinned to a dedicated model via `roles.<toolName>.model` / `.provider` — once configured, the role runs on its own model and no longer follows the main agent's session model switches (see [Configuration](configuration_en.md) 2.5). How a child starts can also be switched per role — `roles.<toolName>.start_mode` makes the helper start from the main agent's completed conversation (see the last section of this chapter and [Configuration](configuration_en.md) 2.7). Meaning:
 
 - One delegation = one run-and-discard child session. The call waits for the child to finish and hands the result back to the main agent by default (or becomes a background job via the tool's `run_in_background` parameter, collected with `job_output` and stopped with `job_kill`).
 - The child session is discarded when the task settles; its tool surface and context are paid for only for that one run (**pay-per-use + context isolation** — the preset's core design).
@@ -155,6 +155,19 @@ Quick comparison:
 | Persistence required | none | host-layer `sessionPersistence` backend (machine-level) |
 | Long-term cost | each turn pays only the new task | each turn carries the accumulated context, cost grows |
 | Fit | every delegation (default) | multi-round polishing delegations, per role (see [Configuration](configuration_en.md) 2.6) |
+
+### Start mode: fresh (spawn) vs inherit-the-conversation (fork)
+
+The session mode decides "how the child ends"; the start mode (`roles.<toolName>.start_mode`, see [Configuration](configuration_en.md) 2.7) decides "how it begins". The two are orthogonal — a forked helper can stay run-and-discard, and the same role can also pair fork with continuable for cross-turn resumption. At the generation layer the role delegation block's block-level `provider` row becomes `spawn` (default, brand-new start) or `fork` (inherit the conversation); the preset's `subagent_fork` generic delegation tool rides the same fork provider, but the main-agent allow list deliberately hides it — fork reaches the model only through the per-role config key.
+
+Fork semantics (stated plainly):
+
+- **Initial content = the main agent's completed turns.** At delegation time the child receives the main agent's conversation as finished up to that moment (instructions and outputs included); the turn currently in progress does not count. If the main agent has completed no turns yet, fork is indistinguishable from a fresh spawn.
+- **A one-shot snapshot; the two sides advance independently.** After the fork, new main-agent progress never flows into the child session, and the child's output is not written back into the main session; the only meeting point is the child's returned result. For a helper that should keep following the main agent, use continuable + `send_message` (previous section) — the two combine fine.
+- **Conversation only, never tools or permissions.** A forked helper's tool surface is still narrowed to its role's `toolFilter.allow`, and DSH's permission semantics (a denied operation is never retried) apply unchanged.
+- **The model follows the main agent.** A forked child inherits the main agent's current provider route and model (a hard KV-cache reuse constraint); a dedicated model configured for the role has no effect in that case (the installer warns and ignores it, see [Configuration](configuration_en.md) 2.5).
+
+When fork is worth it: the main agent has already produced something substantial (research conclusions, an outline, a plan), and the next job needs to "know all that" but should not have it restated inside the delegation prompt — turning a finished outline into a deck, or implementing code changes against an agreed plan. Fork lets the helper start straight from the completed context. Conversely, when the task has nothing to do with the main agent's context, there is no need to fork — a fresh start keeps the child context cleaner.
 
 ## Advanced: hand-editing implement_cont (no panel)
 

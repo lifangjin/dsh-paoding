@@ -54,11 +54,11 @@ test('getVersionInfo: npm registry 命中时不碰镜像与 GitHub', async () =>
 })
 
 test('getVersionInfo: registry 失败 → npmmirror 兜底命中，source 标记 mirror', async () => {
-  const fetchImpl = makeFetch({ registry: { throw: 'TimeoutError' }, mirror: { body: { version: '0.4.0' } } })
+  const fetchImpl = makeFetch({ registry: { throw: 'TimeoutError' }, mirror: { body: { version: '0.4.1' } } })
   const info = await getVersionInfo({ fetchImpl, now: T_MIRROR })
   assert.equal(info.source, 'mirror')
-  assert.equal(info.latest, 'v0.4.0')
-  assert.equal(info.updateAvailable, true, '0.3.5 < 0.4.0 应提示升级')
+  assert.equal(info.latest, 'v0.4.1')
+  assert.equal(info.updateAvailable, true, '0.4.0 < 0.4.1 应提示升级')
   assert.equal(fetchImpl.visited.length, 2)
   assert.match(fetchImpl.visited[1], /registry\.npmmirror\.com/)
 })

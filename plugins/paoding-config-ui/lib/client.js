@@ -114,8 +114,11 @@ window.__ModuleLoader__.load({
       return Icon ? h(Icon, { size: size }) : null;
     }
 
-    function statusRow(cls, iconNode, text) {
-      return h("div", { className: cls, role: cls === "omd-statusError" ? "alert" : undefined },
+    // 降级 / 报错提示行。role 可选：缺省时沿用旧口径（error 行 alert 强提醒，
+    // warn 行不带 role 走低调展示）；调用方显式传 "status" 则礼貌播报一次，
+    // 供「拉取失败但仍可用」这类降级提示用（不抢屏，读屏不打断）。
+    function statusRow(cls, iconNode, text, role) {
+      return h("div", { className: cls, role: role || (cls === "omd-statusError" ? "alert" : undefined) },
         iconNode ? h("span", { className: "omd-statusIcon" }, iconNode) : null,
         h("span", { className: "omd-statusText" }, text));
     }
@@ -193,6 +196,27 @@ window.__ModuleLoader__.load({
       "PERSISTENCE_UNAVAILABLE：需在 ~/.dsh/cordis.patch.yml 挂 " +
       "@deepseek-ai/dsh-session-persistence-jsonl（host 层、机器级改动，详见 docs/orchestration.md）。";
 
+    // ── 启动方式（roles.<toolName>.start_mode）─────────────────────────────
+    // 定稿键名 'fresh' | 'fork'，缺省 fresh。与后端序列化形状一致：config 层
+    // normalizeStartMode 恒收成这两个字面量（缺省/非法回落 'fresh'，落盘恒写出），
+    // assignments 与回填照搬同款取值。注意与 roles.<toolName>.provider（LLM 路由）
+    // 无关 —— 本键只决定委派块的块级 provider 行（spawn / fork）。
+    var ROLE_SM_FORK = "fork";
+    var ROLE_SM_FRESH = "fresh";
+
+    // 角色条目 start_mode 透传归一：恰好等于 'fork' 才认，其余（缺省 / null /
+    // 手编误值）一律 'fresh'（与 normalizeStartMode 同口径）。
+    function roleStartModeOf(baseRoles, n) {
+      var r = (baseRoles || {})[n];
+      return r && r.start_mode === ROLE_SM_FORK ? ROLE_SM_FORK : ROLE_SM_FRESH;
+    }
+
+    // 「继承对话（fork）」选中且该角色配了专用模型时的行内提示（定稿文案）：
+    // fork 子代理继承主 agent 的提供方与模型，专用模型不生效。
+    var ROLE_SM_FORK_MODEL_HINT =
+      "继承对话的子代理随主 agent 的当前模型启动，上方专用模型不会生效；" +
+      "应用时会忽略该项模型配置。";
+
 
     // mcp__ 前缀判定（归「MCP 工具」组的依据，供角色工具网格分组与
     // customCoreToolsOf 使用；只做展示分组，不影响识别/分配）。非 mcp__ 名字
@@ -235,7 +259,8 @@ window.__ModuleLoader__.load({
 
     // 版本提示（渲染在页头标题旁，由 PageShell 持有）：常态版本号不进正文；
     // updateAvailable 时这里渲染醒目提示卡：releaseUrl 新标签页打开 release 页、
-    // 「升级」按钮走 onUpgrade（一键 dsh plugin update 自升级），并保留当前版本号。
+    // 「升级」按钮走 onUpgrade（一键插件通道自升级，通道按 profile 由服务端
+    // 分流），并保留当前版本号。
     // latest 为 null 一律不显示新版部分；检测失败（error 非空）改渲染弱化失败行
     // （⚠ 版本检测失败 · 重试，完整原因在 title 悬浮提示），不再整行静默。
     // opts（可省）：busy/busyOp 复用面板级互斥（任何操作进行中都禁用升级，
@@ -717,6 +742,7 @@ window.__ModuleLoader__.load({
       var _swr = useState(0), switchRev = _swr[0], setSwitchRev = _swr[1];
       var _wsl = useState([]), wsList = _wsl[0], setWsList = _wsl[1]; // 宿主工作区列表（GET /api/paoding/workspaces；失败降级为空数组，pill 由配置文件键兜底）
       var _wslt = useState(false), wsListTried = _wslt[0], setWsListTried = _wslt[1]; // 列表请求尘埃落定标记（成败均置位）：pendingOpenWs 消费条件用
+      var _wsle = useState(""), wsListErr = _wsle[0], setWsListErr = _wsle[1]; // 列表拉取失败的降级提示（"" = 正常零占位）：标签条只剩配置文件兜底的工作区时，给用户一句交代
       var _wsao = useState(false), wsAddOpen = _wsao[0], setWsAddOpen = _wsao[1]; // 「添加工作区」弹窗开合态（旧版是 tab 条下方的内联展开行）
       var _wsap = useState(""), wsAddPath = _wsap[0], setWsAddPath = _wsap[1];
       var _wsae = useState(""), wsAddErr = _wsae[0], setWsAddErr = _wsae[1];
@@ -724,6 +750,7 @@ window.__ModuleLoader__.load({
       var _ran = useState(""), roleAddName = _ran[0], setRoleAddName = _ran[1];
       var _radn = useState(""), roleAddDispName = _radn[0], setRoleAddDispName = _radn[1]; // 弹窗第二字段「显示名」（可选；残值语义同 roleAddName，成功提交才清）
       var _rabm = useState("one-shot"), roleAddBgMode = _rabm[0], setRoleAddBgMode = _rabm[1]; // 弹窗第三字段「会话模式」：'one-shot' | 'continuable'（残值语义同上，成功提交才复位）
+      var _rasm = useState("fresh"), roleAddStartMode = _rasm[0], setRoleAddStartMode = _rasm[1]; // 弹窗第四字段「启动方式」：'fresh' | 'fork'（残值语义同上，成功提交才复位）
       var _rae = useState(""), roleAddErr = _rae[0], setRoleAddErr = _rae[1];
       // 「重命名自定义角色」弹窗三件套（原原生 prompt 改模态框）：For 为
       // null = 关闭，非空 = 待改名的旧 toolName（身份键，提交时迁移 skills 引用）。
@@ -808,6 +835,9 @@ window.__ModuleLoader__.load({
             // 会话模式透传：仅 'continuable' 认可，其余归 'one-shot'（字面量，
             // 与 config 层 normalizeBackgroundMode 的序列化形状一致）
             background_mode: roleBgModeOf(base.roles, name),
+            // 启动方式透传：仅 'fork' 认可，其余归 'fresh'（与 config 层
+            // normalizeStartMode 的序列化形状一致；决定委派块块级 provider 行）
+            start_mode: roleStartModeOf(base.roles, name),
             tools: (base.roles && base.roles[name] && base.roles[name].tools) ||
               (d.blocks && d.blocks[name]) || [],
           };
@@ -822,6 +852,8 @@ window.__ModuleLoader__.load({
             provider: roleStringRef(base.roles, name, "provider"),
             // 会话模式与内置同款收法：'one-shot' = 缺省一次性，'continuable' = 可续
             background_mode: roleBgModeOf(base.roles, name),
+            // 启动方式与内置同款收法：'fresh' = 缺省全新启动，'fork' = 继承对话
+            start_mode: roleStartModeOf(base.roles, name),
             tools: base.roles[name].tools || [],
           };
         });
@@ -852,15 +884,22 @@ window.__ModuleLoader__.load({
 
       // 工作区列表：面板加载时拉一次宿主注册表（与 state 并行）。失败降级为
       // 空列表——workspaceRowsOf 会用 state.existing.workspaces 的键兜底出 pill，
-      // 绝不阻塞面板。
+      // 绝不阻塞面板。降级不再无声：宿主侧故障（如插件实例已 disposed 的僵尸
+      // 场景）会让接口 500，标签条只剩配置文件兜底的 tab，用户容易误判成
+      // 「功能坏了」，故留一行可见提示；err.message 截短后括注原文，便于对照
+      // 日志定位。请求错误 / 响应格式异常都汇入同一个 catch，提示口径一致。
       var loadWorkspaces = useCallback(function () {
         api("workspaces").then(function (d) {
           if (!d || d.ok !== true || !Array.isArray(d.items)) throw new Error("工作区列表响应格式异常");
           setWsList(d.items);
           setWsListTried(true);
-        }).catch(function () {
+          setWsListErr("");
+        }).catch(function (err) {
           setWsList([]); // 静默降级：只用配置文件里已有的工作区键
           setWsListTried(true);
+          var msg = err && err.message ? String(err.message) : "";
+          setWsListErr("宿主工作区列表拉取失败，仅显示配置文件中的工作区；重启 DSH 后通常可恢复"
+            + (msg ? "（" + (msg.length > 80 ? msg.slice(0, 80) + "…" : msg) + "）" : ""));
         });
       }, [api]);
 
@@ -1246,13 +1285,15 @@ window.__ModuleLoader__.load({
           var next = JSON.parse(JSON.stringify(prev));
           // 新角色全字段出厂形状：与 buildAssignments / restoreBuiltinRole 条目一致
           //（model/provider 置 null = 跟随主 agent 当前模型；background_mode
-          // 用弹窗单选值，字面量 'one-shot' | 'continuable'）。name 是可选
-          // 显示名（null = 用 toolName 当标题），不再恒 null。
+          // 用弹窗单选值，字面量 'one-shot' | 'continuable'；start_mode 用弹窗
+          // 单选值，字面量 'fresh' | 'fork'，决定委派块块级 provider 行）。name
+          // 是可选显示名（null = 用 toolName 当标题），不再恒 null。
           next.roles[name] = {
             persona: null,
             name: disp,
             model: null,
             provider: null,
+            start_mode: roleAddStartMode,
             background_mode: roleAddBgMode,
             // 出厂 tools 默认全选 = 核心工具面（customCoreToolsOf：restrictBase
             // 去四个委派名与 mcp__ 工具）+ host 检测库存。两集合不相交，无需去重
@@ -1265,6 +1306,7 @@ window.__ModuleLoader__.load({
         setRoleAddName("");
         setRoleAddDispName("");
         setRoleAddBgMode("one-shot"); // 成功提交即复位出厂默认（取消重开才保留残值）
+        setRoleAddStartMode("fresh"); // 成功提交即复位出厂默认（取消重开才保留残值）
         setRoleAddErr("");
         toast.ok('已新建角色 "' + name + '"，记得「保存并应用」');
       }
@@ -1373,13 +1415,14 @@ window.__ModuleLoader__.load({
       // （data.blocks[name]），不沿用删前自定义配置——恢复即出厂默认，简化处理。
       // 显示名同样置 null（出厂默认），重建条目与 buildAssignments 形状一致。
       // 专用模型 / provider 同理置 null：恢复 = 回到「跟随主 agent 当前模型」，
-      // 不保留删前的模型固定配置。background_mode 置 'one-shot'（出厂缺省）。
+      // 不保留删前的模型固定配置。start_mode 置 'fresh'、background_mode 置
+      // 'one-shot'（出厂缺省）。
       function restoreBuiltinRole(name) {
         setAssign(function (prev) {
           var next = JSON.parse(JSON.stringify(prev));
           next.roles_remove = (next.roles_remove || []).filter(function (r) { return r !== name; });
           var defTools = (data && data.blocks && data.blocks[name]) || [];
-          next.roles[name] = { persona: null, name: null, model: null, provider: null, background_mode: "one-shot", tools: defTools.slice() };
+          next.roles[name] = { persona: null, name: null, model: null, provider: null, start_mode: "fresh", background_mode: "one-shot", tools: defTools.slice() };
           return next;
         });
       }
@@ -1775,9 +1818,35 @@ window.__ModuleLoader__.load({
               roleAddBgMode === "continuable" && data && data.persistenceAvailable === false
                 ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_BG_PERSISTENCE_WARN)
                 : null,
+              // 「启动方式」单选（与角色卡 roleStartModeBlock 同款语义）：缺省全新，
+              // 选「继承对话」才写 start_mode: 'fork'（委派块块级 provider 行）。
+              h("label", { className: "pd-modalLabel" }, "启动方式"),
+              h("div", { className: "omd-nameRow" },
+                h("label", { className: "omd-toolItem" },
+                  h("input", {
+                    type: "radio",
+                    className: "omd-check",
+                    name: "pd-sm-roleadd",
+                    checked: roleAddStartMode !== "fork",
+                    onChange: function () { setRoleAddStartMode("fresh"); },
+                  }),
+                  h("span", { className: "omd-toolName" }, "全新（fresh）")),
+                h("label", { className: "omd-toolItem" },
+                  h("input", {
+                    type: "radio",
+                    className: "omd-check",
+                    name: "pd-sm-roleadd",
+                    checked: roleAddStartMode === "fork",
+                    onChange: function () { setRoleAddStartMode("fork"); },
+                  }),
+                  h("span", { className: "omd-toolName" }, "继承对话（fork）"))),
+              roleAddStartMode === "fork"
+                ? h("div", { className: "omd-hint" },
+                    "继承对话的子代理以主 agent 已完成的对话轮次为初始内容启动（一次性快照，之后两边各自推进）；工具面仍以本角色配置为准。")
+                : null,
               roleAddErr ? statusRow("omd-statusError", ic(P.IconWarningOutline16, 16), roleAddErr) : null,
               h("div", { className: "omd-hint" },
-                "角色名须为 2-32 位小写字母/数字/下划线/连字符，小写字母开头；内置名不可新建。显示名可选，不能换行，trim 后最多 60 字符，留空用 toolName 当标题。新角色工具面默认放开全部检测到的工具，可在卡片里再收窄。会话模式缺省一次性（one-shot），选「可续」后仍可在角色卡里改。")),
+                "角色名须为 2-32 位小写字母/数字/下划线/连字符，小写字母开头；内置名不可新建。显示名可选，不能换行，trim 后最多 60 字符，留空用 toolName 当标题。新角色工具面默认放开全部检测到的工具，可在卡片里再收窄。会话模式缺省一次性（one-shot），选「可续」后仍可在角色卡里改。启动方式缺省全新（fresh），选「继承对话」后仍可在角色卡里改。")),
             h("div", { className: "pd-modalFooter" },
               h(P.Button, { variant: "outline", size: "md", onClick: closeRoleAddModal }, "取消"),
               h(P.Button, {
@@ -2231,6 +2300,50 @@ window.__ModuleLoader__.load({
             : null);
       }
 
+      // 角色「启动方式」行（内置与自定义角色通用，同 roleBgModeBlock 的定位）：
+      // 单选 roles.<toolName>.start_mode ——「全新（fresh）」为缺省（字面量
+      // 'fresh'，与 config 层 normalizeStartMode 恒收两个合法值的序列化形状
+      // 一致），「继承对话（fork）」写 'fork'（委派块的块级 provider 行改落
+      // fork）。选中继承对话且该角色配了专用模型时行内提示互斥：fork 子代理
+      // 继承主 agent 的提供方与模型，专用模型不生效（应用时后端 warn 并忽略）。
+      // 注意与「专用模型」行的 provider 字段（LLM 路由）无关。
+      function roleStartModeBlock(name) {
+        var role = assign.roles[name] || {};
+        var fork = role.start_mode === "fork";
+        var hasModel = typeof role.model === "string" && role.model !== "";
+        function commitStartMode(toFork) {
+          setAssign(function (prev) {
+            var next = JSON.parse(JSON.stringify(prev));
+            next.roles[name].start_mode = toFork ? "fork" : "fresh";
+            return next;
+          });
+        }
+        function smOption(key, label, checked, on) {
+          return h("label", { key: key, className: "omd-toolItem" },
+            h("input", {
+              type: "radio",
+              className: "omd-check",
+              name: "pd-sm-" + name, // 每角色独立单选组；name 含 toolName 不串台
+              checked: checked,
+              disabled: busy,
+              onChange: function () { commitStartMode(on); },
+            }),
+            h("span", { className: "omd-toolName" }, label));
+        }
+        return h("div", { className: "omd-mainName" },
+          h("div", { className: "omd-glabel" }, "启动方式"),
+          h("div", { className: "omd-nameRow" },
+            smOption("fresh", "全新（fresh）", !fork, false),
+            smOption("fork", "继承对话（fork）", fork, true)),
+          fork
+            ? h("div", { className: "omd-hint" },
+                "继承对话的子代理以主 agent 已完成的对话轮次为初始内容启动（一次性快照，之后两边各自推进）；工具面仍以本角色配置为准。")
+            : null,
+          fork && hasModel
+            ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_SM_FORK_MODEL_HINT)
+            : null);
+      }
+
       function roleCard(name) {
         var isMain = name === "__main__";
         var display = isMain ? "主 agent" : name;
@@ -2336,9 +2449,12 @@ window.__ModuleLoader__.load({
           // warn 并忽略）。留空 = 跟随主 agent 当前模型。
           // 「会话模式」单选紧随模型行（内置 / 自定义通用）：缺省一次性，
           // 选可续时行内给成本提示 + persistence 缺失警告（如有）。
+          // 「启动方式」单选紧随会话模式行（内置 / 自定义通用）：缺省全新，
+          // 选继承对话时行内给快照语义提示；配了专用模型再叠加互斥警告。
           body.push(roleTitleBlock(name, isCustom));
           body.push(roleModelBlock(name));
           body.push(roleBgModeBlock(name));
+          body.push(roleStartModeBlock(name));
           // 三组网格（同 roleCandidateTools 注释的分组口径）：「基础工具」=
           // 非 mcp__ 且不在检测库存（blocks ∪ customCoreToolsOf 减 inventory）；
           // 「MCP 工具」= mcp__ 前缀（含 SRC 自带行，如 tavily）；「插件工具」
@@ -2456,6 +2572,15 @@ window.__ModuleLoader__.load({
 
         // 配置对象（全局默认 / 各工作区，标签页）
         workspaceBarOf(),
+
+        // 宿主工作区列表拉取失败的可见降级提示：此时标签条只剩配置文件兜底的
+        // tab，一声不吭的话用户会误以为「注册过的工作区不见了」是功能缺陷。
+        // 仅请求失败 / 响应异常时出现（wsListErr 非空，成功路径零占位）；贴在
+        // 标签条容器下方另起一行，不动标签行自身的收纳 / 下拉锚点布局，
+        // role=status 礼貌播报即可（持久化警告同款 statusRow，错误行才用 alert）。
+        wsListErr
+          ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), wsListErr, "status")
+          : null,
 
         // 「添加工作区」弹窗：fixed 全屏遮罩不占布局流，挂在根数组末尾即可；
         // 未打开时返回 null，零开销
@@ -2977,8 +3102,9 @@ window.__ModuleLoader__.load({
     // Esc（只收菜单 / 建议下拉 / 弹窗，不关页）；确认弹窗开着时由 ConfirmLayer
     // 的捕获级监听截停（只关确认框）；事件都到不了这里。其余位置 Esc 一律关页。
     // 一键升级（页头更新卡「升级」按钮，统一入口）：
-    // POST /api/paoding/upgrade，服务端 spawn `dsh plugin --profile <profile>
-    // update dsh-paoding` 原地换版本，分钟级操作。确认弹窗（原原生 confirm
+    // POST /api/paoding/upgrade，服务端经插件通道原地换版本（常规 profile 走
+    // dsh 插件转发器；desktop profile 被 dsh CLI 的 Electron 专属守卫硬拒，
+    // 服务端直跑 pnpm add），分钟级操作。确认弹窗（原原生 confirm
     // 改通用确认弹窗，confirmCtrl 单例见 70 片段）文案按挂载形态分流：
     // dev link 直连形态（layout 由服务端 version 路由按包根 .git 判定）无法
     // 就地升级，把手动切换命令说在前头；installed（registry 版）原地换版本，
@@ -2990,7 +3116,7 @@ window.__ModuleLoader__.load({
       var isDev = verInfo.layout === "dev";
       var msg = isDev
         ? "当前为开发 link 直连形态：无法就地升级，请手动执行 dsh plugin add dsh-paoding@latest 切换到 registry 版本。仍要继续尝试吗？"
-        : "确定升级到 " + versionTagOf(verInfo.latest) + "？升级将通过 dsh plugin update 原地换版本，完成后需重启 DSH 生效。";
+        : "确定升级到 " + versionTagOf(verInfo.latest) + "？升级将通过插件通道原地换版本，完成后需重启 DSH 生效。";
       confirmCtrl.ask({
         title: "升级 dsh-paoding",
         body: msg,

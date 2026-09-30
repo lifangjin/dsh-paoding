@@ -33,7 +33,7 @@ dsh-paoding 把「按角色分工的编排 preset」做成**配置驱动**：你
 | 顶层键 | 类型 | 语义 |
 |---|---|---|
 | `profile` | string | 检测时纳入哪个 profile 的 patch 层（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`）；缺省 `web` |
-| `roles` | map | `toolName` → `{ persona?, name?, tools[], model?, provider?, background_mode? }`。对内置三角色（`search_external` / `design` / `implement`）：覆盖 persona 与 allow 意图，并可配 `name` 显示名（只替换该角色默认 persona 首行身份句的主语，见 2.4）、专用模型（`model` / `provider`，见 2.5）与会话模式（`background_mode`，见 2.6）；其它键名 = **自定义角色**：生成全新 `delegation-<toolName>` 块并把 toolName 注入主 agent 的 `config.allow`（详见第 2、6 节） |
+| `roles` | map | `toolName` → `{ persona?, name?, tools[], model?, provider?, start_mode?, background_mode? }`。对内置三角色（`search_external` / `design` / `implement`）：覆盖 persona 与 allow 意图，并可配 `name` 显示名（只替换该角色默认 persona 首行身份句的主语，见 2.4）、专用模型（`model` / `provider`，见 2.5）、会话模式（`background_mode`，见 2.6）与启动方式（`start_mode`，见 2.7）；其它键名 = **自定义角色**：生成全新 `delegation-<toolName>` 块并把 toolName 注入主 agent 的 `config.allow`（详见第 2、6 节） |
 | `roles_remove` | string[] | 整条删除的内置角色 toolName 列表（只认 `search_external` / `design` / `implement`，其它名字忽略并告警；缺省 = `[]`）。删除 = 委派行 / 工具面 / 角色 persona / 主 agent 侧委派指引全部不再生成（详见 2.3） |
 | `skills` | map | `skill` → 分配给该技能的角色 toolName 列表；安装时把 `Available skills: …` 引导句写进这些角色 persona 的尾部（详见第 7 节） |
 | `main_agent_extra` | string[] | 追加到主 agent 白名单的工具（host 工具，如 `mcp__codegraph__codegraph_explore`、`memory_search`、`mnemon_*`）；按「preset 自带工具面 ∪ 检测库存」对账，两头都不占的名字不注入 |
@@ -52,6 +52,7 @@ dsh-paoding 把「按角色分工的编排 preset」做成**配置驱动**：你
 - `roles.<toolName>.model`：该角色的专用模型 id（可选 `string`）。配置后，该角色派出的每个子 agent 都固定用这个模型，不再随主 agent 会话当前模型走；缺省 = 不注入 `agentOptions`，子 agent 继承主 agent 的模型（详见 2.5）。
 - `roles.<toolName>.provider`：该角色模型所在的 provider 路由（可选 `string`）。须与 `model` 成对配置才生效，只配 `provider` 会被安装器告警并忽略；只配 `model` 时沿用主 agent 的 provider 路由（详见 2.5）。
 - `roles.<toolName>.background_mode`：该角色的会话模式（可选 `'one-shot' | 'continuable'`，缺省 `one-shot`）——一次性用完即弃，或可续：子会话跨轮保留，主 agent 用 `send_message` 就地续修。内置角色与自定义角色同语义；continuable 的前置、代价与面板路径见 2.6。
+- `roles.<toolName>.start_mode`：该角色的启动方式（可选 `'fresh' | 'fork'`，缺省 `fresh`）——全新启动，或以主 agent 已完成的对话轮次为初始内容启动（继承对话）。内置角色与自定义角色同语义；fork 的语义、与专用模型的互斥及面板路径见 2.7。
 - `roles` 下键名不在三角色内 = 自定义角色（见第 6 节）；请勿把静态角色 `search_internal_deep` 写进 `roles`（见 2.2）。
 - 内置角色可**整体删除**：`roles_remove` 键只认三角色名，删除效果、与 `roles` 键的一致性及恢复路径见 2.3。
 
@@ -242,6 +243,7 @@ roles:
 规则与边界：
 
 - **provider 须与 model 成对**：只写 `provider` 不生效——安装器告警并忽略；只写 `model` 合法，此时沿用主 agent 的 provider 路由。
+- **与 fork 启动方式互斥**：该角色配了 `start_mode: fork`（见 2.7）时，专用模型不生效——fork 的子 agent 继承主 agent 的 provider 路由与模型（KV cache 复用的硬约束），安装器告警并忽略 `model`（连同 `agentOptions` 不注入）。
 - **路由与模型 id 必须真实存在**：可选路由取决于你的 DSH 部署注册了哪些 LLM 适配器——官方安装默认 `deepseek-official`（模型 `deepseek-v4-flash` / `deepseek-v4-pro` / `deepseek-v4-flash-vision-exp`）；`pi-ai` 网关可在 DSH 设置里配 anthropic / openai / google 等 profile（需先备好对应凭据）。`model` 必须属于所选路由，否则该角色**每次委派**都会在运行时报错。
 - **被删除的角色不涉及**：`roles_remove` 整条删除的角色，条目里残留的 `model` / `provider` 被忽略并告警（见 2.3）。
 - **静态角色不在列**：`search_internal_deep` 无这两个子键（见 2.2）。
@@ -276,6 +278,38 @@ continuable 的前置与代价（如实说明）：
 - **静态角色不在列**：`search_internal_deep` 不经 `roles` 键（见 2.2）。它的委派块在基础模板里同样显式标了 `backgroundMode: one-shot`；要把它改成可续，直接改静态源那一行再「保存并应用」重新生成（生成器不重写该行，原样保留）。
 - **被删除的角色不涉及**：`roles_remove` 整条删除的角色，条目里残留的 `background_mode` 被忽略并告警（见 2.3）。
 - **主 persona 已有对应分支**：可续角色失败或产出不满时，主 agent 的委派失败 SOP 先 `send_message` 同会话续修，重委派退为续修无效后的退路（见[编排](orchestration.md)）。
+
+生效方式与其他配置键相同：改完在「庖丁配置」点「保存并应用」，再重启 DSH / 新会话。
+
+### 2.7 角色启动方式：roles.\<toolName>.start_mode
+
+角色条目的可选子键 `start_mode`，决定该角色派出的子 agent 怎么开局：`'fresh'`（全新启动，独立上下文）或 `'fork'`（继承对话，以主 agent 已完成的对话轮次为初始内容启动）。缺省 `fresh`；内置角色与自定义角色条目同语义，没有角色差异。
+
+```yaml
+roles:
+  implement:
+    start_mode: fork   # 帮手以主 agent 已完成的对话为底子开工；其余配置（persona / tools 等）照常生效
+```
+
+fork 的语义（如实说明）：
+
+- **初始内容 = 主 agent 已完成的轮次**：截至发起委派时已收尾的对话（含主 agent 的指令与产出）；进行中的那一轮不在其中。主 agent 还没有已完成轮次时，fork 出来的子 agent 与全新启动没有区别。
+- **一次性快照，不是实时共享**：fork 发生在委派那一刻，之后主 agent 的新进展不会自动流进子会话，子 agent 的产出也不回写主会话——两边各自推进，靠返回结果交汇。要「持续跟着主 agent 走」的帮手，那是 `background_mode: continuable`（见 2.6）加 `send_message` 续修的用法；两者正交，可同时配置。
+- **工具面照常收敛**：fork 只继承对话内容，不继承主 agent 的工具权限；子 agent 仍按该角色的 `toolFilter.allow` 收敛工具面（`tools` 配置照常生效）。
+- **与专用模型互斥**：fork 的子 agent 继承主 agent 的 provider 路由与模型（KV cache 复用的硬约束），角色配了 `model` 时安装器告警并忽略、不注入 `agentOptions`（见 2.5）。
+
+典型用例：主 agent 已经做完调研、写完大纲，把「把这份大纲做成 PPT」这类活交给帮手时，fork 让帮手直接带着结论与大纲开工，省去把上下文复述一遍的成本。
+
+生成语义：基础模板在四个内置角色的委派块里各预置一行块级 `provider: spawn`（委派块 config 的首行）；配成 `fork` 的角色，生成器把该行**原位改写**为 `provider: fork`，`fresh` / 缺省原样保留（全默认配置的生成产物与源模板逐字节一致）。自定义角色块同样按启动方式落 `provider: fork` / `provider: spawn`。fork 帮手对编排流程的影响见[编排](orchestration.md)。
+
+面板操作路径：左侧栏「庖丁配置」→ 角色卡「启动方式」单选（「全新（fresh）」/「继承对话（fork）」）；选中继承对话且该角色配了专用模型时，面板就地提示互斥（不拦截保存）。
+
+边界：
+
+- **与 `roles.<toolName>.provider` 无关**：那个 provider 是 LLM 路由（与 `model` 配对，见 2.5），落在委派块的 `agentOptions` 子行里；本键决定的是委派块的块级 `provider` 行（spawn / fork），两者分属两处、互不相干。
+- **非法值告警回落**：`start_mode` 只认 `'fresh'` / `'fork'`，其他值安装器告警并按 `fresh` 处理。
+- **被删除的角色不涉及**：`roles_remove` 整条删除的角色，条目里残留的 `start_mode` 被忽略并告警（见 2.3）。
+- **静态角色不在列**：`search_internal_deep` 不经 `roles` 键（见 2.2）；要改它的启动方式，直接改静态源里那个委派块的 `provider` 行再重新生成（生成器不重写该行，原样保留）。
 
 生效方式与其他配置键相同：改完在「庖丁配置」点「保存并应用」，再重启 DSH / 新会话。
 
@@ -600,7 +634,7 @@ skills:
 
 DSH 用工作区（workspace，即项目目录）组织会话。顶层 `workspaces` 键让每个工作区有自己的主/子 agent 配置：全局条目照旧生成共享的 `orchestrator` 预设；工作区条目各自生成 `orchestrator-<slug>` 专属预设，预设列表里并存、互不覆盖。
 
-每个工作区条目是**完整一套配置**，不是增量差异：字段与顶层同构（`profile` 除外，检测层全局共享）。角色子键照搬——`background_mode`（见 2.6）同样按工作区生效：某个项目想让 implement 可续、别的项目保持一次性，各配各的。在面板里第一次配置某个工作区时，以当前全局配置为起点，改完点「保存并应用」即生成该工作区的预设。
+每个工作区条目是**完整一套配置**，不是增量差异：字段与顶层同构（`profile` 除外，检测层全局共享）。角色子键照搬——`background_mode`（见 2.6）、`start_mode`（见 2.7）同样按工作区生效：某个项目想让 implement 可续或继承对话、别的项目保持一次性全新开局，各配各的。在面板里第一次配置某个工作区时，以当前全局配置为起点，改完点「保存并应用」即生成该工作区的预设。
 
 ```yaml
 workspaces:

@@ -6,7 +6,11 @@
  * （renderCustomRoleBlocks / firstLine / insertCustomRoles）、roles_remove 委派行
  * span 删除（delegationRowSpan / composeMainPersonaEdit）、角色专用模型注入
  * （injectRoleAgentOptions，roles.<toolName>.model / .provider → 内置角色委派块
- * 的 agentOptions 子块）、角色可续模式改写/兜底注入（injectRoleBackgroundMode，
+ * 的 agentOptions 子块）、角色启动方式改写（injectRoleStartMode，
+ * roles.<toolName>.start_mode = 'fork' → 内置角色委派块的块级 provider 行原位
+ * 改写为 fork；'fresh' 不动源行 —— 源模板四块各预置 `provider: spawn`，全默认
+ * 产物与源零 diff；块内无该行时不兜底注入，与 backgroundMode 的兜底口径不同，
+ * 见函数注释）、角色可续模式改写/兜底注入（injectRoleBackgroundMode，
  * roles.<toolName>.background_mode = 'continuable' → 内置角色委派块的
  * backgroundMode 行：源模板已预置该行时原位改写其值，块内无该行时在 toolName
  * 行行尾兜底注入；'one-shot' 不动源行 —— 源模板四块各预置
@@ -116,6 +120,35 @@ function normalizeRoleModel(toolName, rawModel, rawProvider) {
   return { model, provider }
 }
 
+/** 角色启动方式兜底（自定义块渲染与内置角色注入两处共用）：assignments 可能绕过
+ * config 规范化（UI 手工构造 / 测试直传），compose 层按「恰好 'fork' 才认」口径
+ * 兜底 —— 与 background_mode 的「非 'continuable' 即 one-shot」同款；其余一律
+ * 'fresh'（零 diff 不动源行）。 */
+function roleStartModeOf(role) {
+  return role?.start_mode === 'fork' ? 'fork' : 'fresh'
+}
+
+/**
+ * 角色专用模型解析（fork 互斥判定版，normalizeRoleModel 的调用方统一走这里）：
+ * 先归一 model / provider（含 provider-alone warn），再判 fork 互斥 ——
+ * start_mode: 'fork' 的子 agent 以主 agent（父级）的提供方与模型启动（DSH fork
+ * 后端为 KV cache 复用的硬约束），专用模型不生效：warn 说明后按缺省处理（不注入
+ * agentOptions），与 provider-alone 的「warn 后忽略」同款。fork + provider-alone
+ * 不叠加 fork warn（provider-alone 已在 normalizeRoleModel 里 warn 过）。'fresh'
+ * 行为与 normalizeRoleModel 完全一致。
+ */
+function resolveRoleModel(toolName, rawModel, rawProvider, startMode) {
+  const { model, provider } = normalizeRoleModel(toolName, rawModel, rawProvider)
+  if (startMode === 'fork' && model !== null) {
+    warn(
+      `roles.${toolName}: start_mode: 'fork' 的子 agent 继承主 agent 的模型，` +
+        `专用模型 '${model}' 不生效，已忽略（agentOptions 不注入）`,
+    )
+    return { model: null, provider: null }
+  }
+  return { model, provider }
+}
+
 /**
  * 自定义角色 toolName 保留名校验：与内置角色（ROLES）、restrict.mjs 主 agent
  * allow 白名单（restrictBase）、顶层 subagent / subagent_fork 撞名的 toolName
@@ -203,14 +236,19 @@ export function renderCustomRoleBlocks(roles, skillsMap, restrictBase = []) {
       toolName,
       skillsMap,
     )
-    // 角色专用模型与可续模式（roles.<toolName>.model / .provider / .background_mode）：
-    // 自定义角色与内置角色同形状（provider: spawn / toolName / agentOptions? /
-    // backgroundMode / persona / toolFilter）。先归一再判 provider-alone（防 UI /
-    // 手工构造的 assignments 绕过规范化）；仅 model 非 null 才插 agentOptions 子块，
-    // provider-alone 仅 warn 忽略。backgroundMode 行恒写（与内置块源模板预置口径
-    // 一致：行始终可见），continuable → continuable，one-shot/缺省/异常值 →
-    // one-shot（与 config 解析回落口径一致）。
-    const { model, provider } = normalizeRoleModel(toolName, role.model ?? null, role.provider ?? null)
+    // 角色专用模型、启动方式与可续模式（roles.<toolName>.model / .provider /
+    // .start_mode / .background_mode）：自定义角色与内置角色同形状（provider /
+    // toolName / agentOptions? / backgroundMode / persona / toolFilter）。启动方式
+    // 恰好 'fork' 才认（其余一律 fresh，见 roleStartModeOf）：fork 时块级
+    // provider 行落 fork（子 agent 以主 agent 已完成的对话轮次为初始内容启动），
+    // 否则恒 spawn。先归一再判 provider-alone（防 UI / 手工构造的 assignments 绕过
+    // 规范化）；fork 与专用模型互斥（fork 子 agent 继承主 agent 的提供方与模型），
+    // 经 resolveRoleModel 判定 —— 命中 warn 后按缺省处理，仅 model 非 null 才插
+    // agentOptions 子块，provider-alone 仅 warn 忽略。backgroundMode 行恒写（与
+    // 内置块源模板预置口径一致：行始终可见），continuable → continuable，
+    // one-shot/缺省/异常值 → one-shot（与 config 解析回落口径一致）。
+    const startMode = roleStartModeOf(role)
+    const { model, provider } = resolveRoleModel(toolName, role.model ?? null, role.provider ?? null, startMode)
     // agentOptions 子行（键序固定 provider 在前、model 在后，与 dsh-tool-subagent
     // Config 字段序一致）；model 缺省时整块不出现。
     const agentOptionsLines = []
@@ -228,7 +266,9 @@ export function renderCustomRoleBlocks(roles, skillsMap, restrictBase = []) {
         `    - id: delegation-${toolName}`,
         `      name: '@deepseek-ai/dsh-tool-subagent'`,
         '      config:',
-        '        provider: spawn',
+        // 块级 provider = 启动方式（spawn 全新启动 / fork 继承主 agent 已完成
+        // 轮次），与 10 空格缩进的 agentOptions.provider（LLM 路由）分属两处。
+        `        provider: ${startMode === 'fork' ? 'fork' : 'spawn'}`,
         // toolName / 工具条目过 yamlScalar：纯数字、YAML 字面量形态等歧义名
         // 必须带引号落盘，否则委派行会被解析成数字/布尔/null。
         `        toolName: ${yamlScalar(toolName)}`,
@@ -397,11 +437,12 @@ export function delegationRowSpan(srcText, role) {
 }
 
 /**
- * 内置角色委派块边界定位（roleToolNameLineEnd / injectRoleBackgroundMode 共用）：
+ * 内置角色委派块边界定位（roleToolNameLineEnd / injectRoleStartMode /
+ * injectRoleBackgroundMode 共用）：
  * 块定位 `- id: delegation-<rowId>`（rowId = 角色名 `_` 换 `-`，找不到 throw）；
  * 块结束 = min(其后首个 `\n    - id: delegation-` 下标, '# ── remaining
  * model-facing rows' 注释下标, srcText.length)，保证块内行搜索不越界命中
- * 别的块。errorKey 用于把报错归因到具体配置键（model / background_mode）。
+ * 别的块。errorKey 用于把报错归因到具体配置键（model / start_mode / background_mode）。
  */
 function roleDelegationBlockBounds(srcText, role, errorKey) {
   const rowId = role.replace(/_/g, '-') // 委派行 id 用连字符（toolName 用下划线）
@@ -501,6 +542,37 @@ export function injectRoleBackgroundMode(srcText, role) {
   // 兜底：块内无该行（手工删掉的老配置 / 异常源）→ 沿用 toolName 行行尾注入。
   const lineEnd = roleToolNameLineEnd(srcText, role, 'background_mode')
   return { start: lineEnd, end: lineEnd, text: '\n        backgroundMode: continuable' }
+}
+
+/**
+ * 角色启动方式改写（roles.<toolName>.start_mode = 'fork' 生效路径）：把该内置
+ * 角色委派块内 8 空格缩进的块级 `provider: spawn` 行原位改写为
+ * `provider: fork`，子 agent 以主 agent（父级）已完成的对话轮次为初始内容启动。
+ * 锚点定位复用 roleDelegationBlockBounds，行搜索限定块内（不越界命中别的块）；
+ * 行首带 \n 且恰 8 空格，10 空格缩进的 agentOptions.provider 子行（LLM 路由）
+ * 形态不匹配，天然区分 —— 块级 provider（启动提供方）与 agentOptions 子行
+ * （模型路由）分属两处，互不相干。
+ * 返回 span edit { start, end, text }（整行原位改写，坐标为源文本原坐标，与
+ * allow/persona/删除 edits 一起按 start 降序应用）。无任何改动时返回 null：
+ *  - 'fresh'（含缺省）：不动源行 —— 源模板四块各预置 `provider: spawn`，全默认
+ *    配置的生成产物与源逐字节一致（零 diff 不变量）；
+ *  - 行已是 fork：幂等返回 null；
+ *  - 块内无 provider 行：不兜底注入，静默保留原样 —— 与 injectRoleBackgroundMode
+ *    的「缺行兜底注入」口径刻意不同：backgroundMode 是产品旋钮（源模板为可见性
+ *    预置），而块级 provider 行是委派块的骨架配置，缺失即模板损坏；半截注入
+ *    救不了坏模板，静默保留比产出难排查的配置更稳妥，模板漂移由恒等性金测兜底。
+ * 调用方（composeGenerated）仅对 'fork' 调本函数。
+ */
+export function injectRoleStartMode(srcText, role) {
+  const { idx, blockEnd } = roleDelegationBlockBounds(srcText, role, 'start_mode')
+  // 块内 span 查块级 provider 行：8 空格缩进（config 键层），行首带 \n 保证不误
+  // 匹配块首部分行或 persona 内容行；锚点含 'spawn' 值，10 空格的
+  // agentOptions.provider（其缩进多两格，前缀不命中）天然被排除。
+  const providerMarker = '\n        provider: spawn'
+  const providerIdx = srcText.indexOf(providerMarker, idx)
+  if (providerIdx === -1 || providerIdx >= blockEnd) return null
+  const lineStart = providerIdx + 1 // 跳过行首 \n，定位到行首
+  return { start: lineStart, end: lineStart + providerMarker.length - 1, text: '        provider: fork' }
 }
 
 /**
@@ -709,28 +781,40 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
   const personaEdit = composeMainPersonaEdit(srcText, removedRoles, customBullets)
   if (personaEdit !== null) edits.push(personaEdit)
 
-  // 角色专用模型 / 可续模式注入（roles.<toolName>.model / .provider → 委派块
-  // agentOptions；roles.<toolName>.background_mode = 'continuable' → 委派块
-  // backgroundMode 行改写/兜底注入）：与 roles_remove 委派行删除 edits 同段收集。
-  // 被删角色不注入（委派行已整条删除，模型 / background_mode 配置 warn 忽略）；
-  // 仅 model 非 null 才注入 agentOptions，provider-alone 仅 warn 忽略（先 normalize
-  // 再判断，防手工构造的 assignments 绕过规范化）；background_mode 仅 'continuable'
+  // 角色专用模型 / 启动方式 / 可续模式注入（roles.<toolName>.model / .provider →
+  // 委派块 agentOptions；roles.<toolName>.start_mode = 'fork' → 委派块块级
+  // provider 行原位改写 fork；roles.<toolName>.background_mode = 'continuable' →
+  // 委派块 backgroundMode 行改写/兜底注入）：与 roles_remove 委派行删除 edits 同段
+  // 收集。被删角色不注入（委派行已整条删除，模型 / start_mode / background_mode
+  // 配置 warn 忽略）；fork 与专用模型互斥（fork 子 agent 继承主 agent 的提供方与
+  // 模型，KV cache 复用硬约束），经 resolveRoleModel 判定 —— 命中 warn 后按缺省
+  // 处理（不注入 agentOptions），provider-alone 仅 warn 忽略（先 normalize 再判断，
+  // 防手工构造的 assignments 绕过规范化）；start_mode 仅 'fork' 才调
+  // injectRoleStartMode（'fresh'/缺省不调 —— 源模板四块各预置的 `provider: spawn`
+  // 原样保留，全默认配置生成产物与源逐字节一致），background_mode 仅 'continuable'
   // 才调 injectRoleBackgroundMode（'one-shot'/缺省不调 —— 源模板四块各预置的
   // `backgroundMode: one-shot` 原样保留，全默认配置生成产物与源逐字节一致）。
   // 键序与收集序：源块已有该行时走改写路径（edit start = 既有行行首，位于
   // toolName 行行尾之后 → 降序应用先改写该行，agentOptions 随后插在更前的
   // toolName 行行尾，键序 toolName → agentOptions? → backgroundMode 自然成立）；
-  // 源块无该行时走兜底注入路径，与 agentOptions 同锚点（start 相等）→ backgroundMode
+  // startMode 改写的 provider 行在 toolName 行之前（块内键序 provider → toolName），
+  // edit start 更小 → 降序应用最后生效，与上述键序互不干扰；源块无该行时走兜底
+  // 注入路径，与 agentOptions 同锚点（start 相等）→ backgroundMode
   // edit 必须先于 agentOptions edit 收集（先收集者居后），与自定义块键序一致。
   for (const role of ROLES) {
     const rawModel = assignments.roles[role]?.model ?? null
     const rawProvider = assignments.roles[role]?.provider ?? null
+    // compose 层兜底：恰好 'fork' 才认，其余（缺省/异常值）一律 fresh（见 roleStartModeOf）。
+    const startMode = roleStartModeOf(assignments.roles[role])
     const rawBackgroundMode = assignments.roles[role]?.background_mode ?? null
     if (removedRoles.includes(role)) {
       const model = normalizeModelRef(rawModel, `roles.${role}.model`)
       const provider = normalizeModelRef(rawProvider, `roles.${role}.provider`)
       if (model !== null || provider !== null) {
         warn(`roles.${role}.model: 该角色已在 roles_remove 中删除，模型配置被忽略`)
+      }
+      if (startMode === 'fork') {
+        warn(`roles.${role}.start_mode: 该角色已在 roles_remove 中删除，start_mode 配置被忽略`)
       }
       if (rawBackgroundMode === 'continuable') {
         warn(`roles.${role}.background_mode: 该角色已在 roles_remove 中删除，background_mode 配置被忽略`)
@@ -741,8 +825,12 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
       const backgroundModeEdit = injectRoleBackgroundMode(srcText, role)
       if (backgroundModeEdit !== null) edits.push(backgroundModeEdit)
     }
-    const { model, provider } = normalizeRoleModel(role, rawModel, rawProvider)
+    const { model, provider } = resolveRoleModel(role, rawModel, rawProvider, startMode)
     if (model !== null) edits.push(injectRoleAgentOptions(srcText, role, model, provider))
+    if (startMode === 'fork') {
+      const startModeEdit = injectRoleStartMode(srcText, role)
+      if (startModeEdit !== null) edits.push(startModeEdit)
+    }
   }
   // 注入 edit（零宽，位于 toolName 行行尾）与该块的 allow edit / persona edit
   // 区间天然不相交：委派块内 toolName 行先于 persona / toolFilter 出现，插入点
