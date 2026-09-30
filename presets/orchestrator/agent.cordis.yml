@@ -48,6 +48,10 @@
         and fix in place — resuming keeps the child's accumulated context, while
         re-delegating starts a cold task and repeats finished work. Only re-delegate
         when the child session is gone or the task needs a different role.
+      - A send_message that returned a delivery confirmation has been stored by the child
+        session — never resend it while awaiting the reply; collect the result via the
+        completion notification or job_output instead. Resend only when the send itself
+        failed (nothing was stored) or the child session is confirmed gone.
       - If the same task fails twice, stop retrying: report to the user what failed, why,
         and what you already tried. Never loop a failing delegation.
       - When re-delegating (fresh task or continuation), always include your integration

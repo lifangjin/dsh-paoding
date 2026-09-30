@@ -99,6 +99,10 @@ Delegation failure handling (SOP):
   and fix in place — resuming keeps the child's accumulated context, while
   re-delegating starts a cold task and repeats finished work. Only re-delegate
   when the child session is gone or the task needs a different role.
+- A send_message that returned a delivery confirmation has been stored by the child
+  session — never resend it while awaiting the reply; collect the result via the
+  completion notification or job_output instead. Resend only when the send itself
+  failed (nothing was stored) or the child session is confirmed gone.
 - If the same task fails twice, stop retrying: report to the user what failed, why,
   and what you already tried. Never loop a failing delegation.
 - When re-delegating (fresh task or continuation), always include your integration
@@ -119,6 +123,8 @@ Behavior by stop reason (complete coverage, one-to-one with the persona):
 | Any re-delegation | **Always carry the previous integration summary** — what was done, what failed, what to pick up from — so the child never re-derives it from a cold context |
 
 The continuable branch: when a run fails or the output disappoints **and the role is configured continuable**, first resume the same child conversation with `send_message` — the child remembers where it left off and finishes in place; re-delegate only when the child session is gone or the task needs a different role (the same wording as the Continuable roles entry in the persona SOP); otherwise fall back to the table above (re-delegation drops from first choice to fallback).
+
+The "never resend a delivered message" rule: a `send_message` result is a **delivery confirmation, not the child's answer**. Once a send is confirmed, the message is stored in the child session — never resend it while awaiting the reply (a resend delivers the same instruction twice, and the child does the work twice); collect the result via the completion notice or `job_output`. Send again only when the send itself failed (nothing was stored) or the child session is confirmed gone (`list_agents` no longer lists it). When unsure, check status first — don't probe with resends.
 
 Design note: the SOP is persona text, not code, so it is tunable: edit the persona block in `presets/orchestrator/agent.cordis.yml` (YAML block scalar; content lines are indented 6 spaces — keep the indentation), then hit Save & Apply in 庖丁配置 to regenerate. For example, you can make failures bounce back to the main agent more often, or give a specific role a different retry ceiling.
 

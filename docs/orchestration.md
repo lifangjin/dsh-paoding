@@ -99,6 +99,10 @@ Delegation failure handling (SOP):
   and fix in place — resuming keeps the child's accumulated context, while
   re-delegating starts a cold task and repeats finished work. Only re-delegate
   when the child session is gone or the task needs a different role.
+- A send_message that returned a delivery confirmation has been stored by the child
+  session — never resend it while awaiting the reply; collect the result via the
+  completion notification or job_output instead. Resend only when the send itself
+  failed (nothing was stored) or the child session is confirmed gone.
 - If the same task fails twice, stop retrying: report to the user what failed, why,
   and what you already tried. Never loop a failing delegation.
 - When re-delegating (fresh task or continuation), always include your integration
@@ -119,6 +123,8 @@ Delegation failure handling (SOP):
 | 任何重委派 | **必须携带上次的集成摘要**：做了什么 / 败在哪 / 从哪接续——子 agent 无需从冷上下文重新推导 |
 
 continuable 分支：失败或产出不满、**且该角色已配成 continuable** 时，先 `send_message` 在同一子会话续修——子 agent 记得自己做到哪，就地补完；子会话已不在、或任务需要换角色时才重委派（即 persona SOP 中 Continuable roles 条目的口径）；续修无效再回到上表按停止原因重委派（重委派从首选退为退路）。
+
+「排队消息不重发」：`send_message` 的工具结果是**送达确认，不是子 agent 的回答**。已返回确认的后续消息就进了子会话，等回音期间**绝不重发**——重发等于同一指令投两遍，子 agent 会把一份活当两份干；结果由完成通知或 `job_output` 收取。只有两种情况才再发：发送本身失败（消息从未入队），或子会话确认已不在（`list_agents` 查无此人）。拿不准时先查状态，别拿重发当探针。
 
 设计要点：SOP 是 persona 文本而非代码逻辑，因此可以按需编辑——直接改 `presets/orchestrator/agent.cordis.yml` 中 persona 段落（YAML 块标量，内容行缩进 6 空格，注意保持缩进），再到「庖丁配置」点「保存并应用」重新生成。例如想让失败任务更频繁地退回主 agent 自己做、或对某个角色采用不同的重试上限，都可在此调整。
 
