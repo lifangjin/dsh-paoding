@@ -254,7 +254,30 @@ async function stateWithRuntimeFacts(ctx, { force = false } = {}) {
 // apply in-flight 闸（模块级）：apply 落盘期间再来的 apply 直接 409，防并发写配置。
 let applyInFlight = false
 
-export function apply(ctx) {
+// —— 宿主热切换竞态兜底 ————————————————————————————————————————————
+// dsh 0.1.7-rc.2 / 0.2.0-rc.x 插件列表「禁用→启用」会重建条目纤维：新 apply()
+// 先执行，旧 incarnation 的路由注销走异步结算，注册瞬间旧路由常仍在表里，
+// webServer.register 对同 (kind, path) 一律抛 duplicate（组合层契约）。
+// 兜底：只对 duplicate prefix route 这一种错误短重试，等旧注销落地；其余
+// 错误原样抛出，真组合冲突不掩盖。宿主修复后此段可整体移除。
+const DUPLICATE_PREFIX_ROUTE_RE = /^webserver: duplicate prefix route "/
+
+/** 带兜底重试的路由注册：仅对 duplicate prefix route 错误重试，其余立即抛出。 */
+export async function registerPrefixRouteWithRetry (webServer, route, { attempts = 8, delayMs = 30 } = {}) {
+  let lastError
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return webServer.register(route)
+    } catch (err) {
+      if (!DUPLICATE_PREFIX_ROUTE_RE.test(String(err?.message ?? ''))) throw err
+      lastError = err
+      if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, delayMs))
+    }
+  }
+  throw lastError
+}
+
+export async function apply(ctx) {
   const { webServer } = ctx
   // dispose 探针：插件卸载后，在途异步任务（preset 自愈）不得再写盘。
   let disposed = false
@@ -265,7 +288,7 @@ export function apply(ctx) {
     try { return ctx.get('webRuntime')?.trustedHosts ?? [] } catch { return [] }
   }
 
-  const disposer = webServer.register({
+  const disposer = await registerPrefixRouteWithRetry(webServer, {
     kind: 'prefix',
     path: '/api/paoding',
     handler: async (req, res) => {
