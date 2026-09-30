@@ -540,3 +540,36 @@ test('allow 白名单: presetUniverse 核心名（read/grep）不依赖 inventor
   assert.ok(kept.every((n) => !n.startsWith('mcp__')), 'SRC 自带 mcp__ 行在空库存下被保留')
   assert.ok(kept.length > 0, '核心名在空库存下被误删')
 })
+
+// ── j) workflow worker 行宿主版本适配 ───────────────────────────────────────
+
+// 源模板里的 worker-thread 条目（4 空格条目缩进）与 0.1.6+ 的 workflow-ptc 替换块。
+const WORKER_THREAD_BLOCK = [
+  '    - id: workflow-worker-thread',
+  "      name: '@deepseek-ai/dsh-workflow-worker-thread'",
+  '      config:',
+  '        provider: spawn',
+].join('\n')
+const WORKER_PTC_BLOCK = [
+  '    - id: workflow-ptc',
+  "      name: '@deepseek-ai/dsh-workflow-ptc'",
+  '      config:',
+  '        provider: spawn',
+].join('\n')
+
+test('workflow worker 行: ≥0.1.6 宿主整块换 workflow-ptc（字节级只动这 4 行），0.1.5/未知保留源行', () => {
+  const blocks = locateAllowBlocks(SRC, yamlMod)
+  const personaBlocks = locatePersonaBlocks(SRC, yamlMod)
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  const run = (triple) =>
+    composeGenerated(SRC, blocks, personaBlocks, emptyAssignments(), fullInventory(), restrictBase, {}, triple).text
+
+  // 0.1.6 / 0.1.7 / 0.2.0：产物 = SRC 原文做一次块替换，其余逐字节一致
+  for (const triple of [[0, 1, 6], [0, 1, 7], [0, 2, 0], [1, 0, 0]]) {
+    assert.equal(run(triple), SRC.replace(WORKER_THREAD_BLOCK, WORKER_PTC_BLOCK), `triple=${triple}`)
+  }
+  // 0.1.5 / 未知（null / 非法形状）：保守保留源行（恒等性金测口径）
+  for (const triple of [[0, 1, 5], null, [0, 1], ['0', '1', '6']]) {
+    assert.equal(run(triple), SRC, `triple=${JSON.stringify(triple)}`)
+  }
+})

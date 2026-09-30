@@ -12,7 +12,7 @@ Check the following before installing:
 
 - **Node.js ≥ 18**. The DSH host and the plugin chain both run on Node; with an older version `dsh` won't start in the first place. Check with `node --version`.
 - **pnpm available**. `dsh plugin` is a transparent pass-through to pnpm: installing a plugin package into a profile is done by pnpm. If pnpm is missing the install command fails with a pnpm error — install pnpm (`npm i -g pnpm` or `corepack enable`) and retry.
-- **A working DSH host** (the `dsh` command, including its Web/agent runtime; **@deepseek-ai/dsh 0.1.5 – 0.1.7-rc.2**, all supported — the installer adapts to the two preset mechanisms automatically; see §2 "Version support and the dual preset landing"). This plugin does not modify DSH source code; it only writes the orchestrator preset into DSH's preset roster and mounts the Paoding Config page into the Web sidebar, so a usable DSH home directory must exist first.
+- **A working DSH host** (the `dsh` command, including its Web/agent runtime; **@deepseek-ai/dsh 0.1.5 – 0.2.0-rc.2**, all supported — the installer adapts to the two preset mechanisms automatically; see §2 "Version support and the dual preset landing"). This plugin does not modify DSH source code; it only writes the orchestrator preset into DSH's preset roster and mounts the Paoding Config page into the Web sidebar, so a usable DSH home directory must exist first.
 - **Path facts** (constants built into the generation pipeline; know them before customizing):
 
 | Item | Default | Description |
@@ -50,9 +50,9 @@ The orchestrator preset needs no separate install — the plugin fills it in aut
 
 `--profile web` decides which profile the plugin is installed into: the Paoding Config page appears only in a DSH Web launched with that profile. `web` is the default profile of `dsh web`, so most machines need no change; multi-profile users run `dsh plugin add` once per profile they want it in. The orchestrator preset itself lives under `$DSH_HOME/.agent-presets/` and is shared machine-wide, independent of profiles — under DSH ≥ 0.1.7 the declaration rows go into the home-layer `$DSH_HOME/cordis.patch.yml`, equally profile-independent — Save & Apply from any profile's panel writes the same preset.
 
-### Version support and the dual preset landing (DSH 0.1.5 – 0.1.7-rc.2)
+### Version support and the dual preset landing (DSH 0.1.5 – 0.2.0-rc.2)
 
-The plugin supports two host generations: **DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 / 0.1.7-rc.2 are all supported**, with an identical install and usage flow. As of plugin 0.3.4, package.json declares `peerDependencies: @deepseek-ai/dsh >= 0.1.5` explicitly — from 0.1.7 the host runs a plugin-compatibility precheck before installing: no declaration meant a default pass, an explicit one gets checked against the real compatibility surface; 0.1.5 / 0.1.6 never read the field, where the declaration is pure metadata and changes nothing about the install.
+The plugin supports two host generations: **DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.1 / 0.2.0-rc.2 are all supported**, with an identical install and usage flow. As of plugin 0.3.4, package.json declares `peerDependencies: @deepseek-ai/dsh >= 0.1.5` explicitly — from 0.1.7 the host runs a plugin-compatibility precheck before installing: no declaration meant a default pass, an explicit one gets checked against the real compatibility surface; 0.1.5 / 0.1.6 never read the field, where the declaration is pure metadata and changes nothing about the install.
 
 The two generations discover "local authored presets" differently, so the installer maintains a dual landing, detecting the host automatically — nothing for the user to do:
 
@@ -84,9 +84,10 @@ So **`dsh plugin add` + restart = a complete install**: preset generated, config
 
 ### The version marker and auto-regeneration
 
-The `.generator-version` marker is written by the plugin's startup self-heal after it generates the preset. Its content is two lines: **the generator version and the preset system track** (older releases wrote only the version; such markers read back as "track unknown", which is exactly the migration trigger after a host upgrade). Three triggers:
+The `.generator-version` marker is written by the plugin's startup self-heal after it generates the preset. Its content is three lines: **the generator version, the preset system track, and the workflow worker flavor** (0.3.7 onward; v2 markers carried only the first two lines and earlier ones only the version — missing lines read back as "unknown", which is exactly the migration trigger after a host upgrade). Four triggers:
 
 - **Marker missing or version-mismatched** (first install, plugin upgrade) → full regeneration. The panel's Save & Apply (and the fallback CLI) do a full-directory rebuild and write no marker — the rebuild removes the old marker, so the next DSH start's self-heal finds it missing, runs one extra generation, and rewrites the marker (same output, just one extra round). After a plugin upgrade the marker no longer matches the package version, so the next DSH start regenerates the preset against the new version — the "upgraded the plugin but the preset is stale" drift is eliminated.
+- **Version matching but the worker flavor diverged** (the host crossed the 0.1.5/0.1.6 worker boundary: 0.1.5 uses `workflow-worker-thread`, 0.1.6+ swaps to `workflow-ptc`; an old marker without the third line on a host that now needs ptc counts as diverged too) → full regeneration: the row lives in the artifact body, out of reach of the lightweight backfill.
 - **Version matching but the track flipped** (dsh upgraded, plugin untouched — the most common upgrade path) → lightweight migration with no content regeneration: on the declarative track, missing declaration rows are backfilled from the on-disk artifacts (per-workspace presets included); on the directory track, any leftover declaration rows force a full regeneration that strips them (leftovers would break 0.1.6 profile startup).
 - **Version and track both matching** → declaration-row reconciliation: missing rows are backfilled, orphan rows whose directories are gone are removed; if everything lines up, nothing is touched.
 

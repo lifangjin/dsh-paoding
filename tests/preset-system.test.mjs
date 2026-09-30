@@ -28,6 +28,7 @@ import {
   buildPresetRowText,
   detectPresetSystem,
   formatGeneratorMarker,
+  isPtcWorkerHost,
   listOrchestratorPresetIds,
   parseGeneratorMarker,
   parseVersionTriple,
@@ -400,17 +401,34 @@ test('generateAndInstall: directory 轨撤残留托管块自愈，用户内容�
 
 // ── 轨道迁移对账（标记 v2 / 目录清单 / 补行 / 撤行）─────────────────────────
 
-test('parseGeneratorMarker/formatGeneratorMarker: v2 往返、旧格式 track=null、空文本 null', () => {
-  assert.deepEqual(parseGeneratorMarker(formatGeneratorMarker('0.3.5', 'declarative')), { version: '0.3.5', track: 'declarative' })
-  assert.deepEqual(parseGeneratorMarker(formatGeneratorMarker('0.3.5', 'directory')), { version: '0.3.5', track: 'directory' })
+test('parseGeneratorMarker/formatGeneratorMarker: v3 往返、旧格式 track/worker=null、空文本 null', () => {
+  assert.deepEqual(parseGeneratorMarker(formatGeneratorMarker('0.3.7', 'declarative', 'ptc')), { version: '0.3.7', track: 'declarative', worker: 'ptc' })
+  assert.deepEqual(parseGeneratorMarker(formatGeneratorMarker('0.3.7', 'directory', 'worker-thread')), { version: '0.3.7', track: 'directory', worker: 'worker-thread' })
+  // v2（0.3.6 及以前：版本 + 轨道两行）——worker 形态换代事故的迁移触发态
+  assert.deepEqual(parseGeneratorMarker('0.3.6\ndeclarative\n'), { version: '0.3.6', track: 'declarative', worker: null })
   // 旧格式（0.3.4 及以前：单行版本）——轨道翻转事故的迁移触发态
-  assert.deepEqual(parseGeneratorMarker('0.3.4\n'), { version: '0.3.4', track: null })
-  assert.deepEqual(parseGeneratorMarker('0.3.4'), { version: '0.3.4', track: null })
-  // 次行不是合法轨道值 → track null（宽容：不至于把整个标记作废）
-  assert.deepEqual(parseGeneratorMarker('0.3.5\nbogus\n'), { version: '0.3.5', track: null })
+  assert.deepEqual(parseGeneratorMarker('0.3.4\n'), { version: '0.3.4', track: null, worker: null })
+  assert.deepEqual(parseGeneratorMarker('0.3.4'), { version: '0.3.4', track: null, worker: null })
+  // 次行不是合法轨道值 → track null（宽容：不至于把整个标记作废）；第三行同理
+  assert.deepEqual(parseGeneratorMarker('0.3.5\nbogus\n'), { version: '0.3.5', track: null, worker: null })
+  assert.deepEqual(parseGeneratorMarker('0.3.7\ndeclarative\nbogus\n'), { version: '0.3.7', track: 'declarative', worker: null })
   assert.equal(parseGeneratorMarker(''), null)
   assert.equal(parseGeneratorMarker(null), null)
   assert.equal(parseGeneratorMarker('   \n  \n'), null)
+})
+
+test('isPtcWorkerHost: 0.1.5 边界（prerelease 剥离后逐段比较），null/非法保守保留源行', () => {
+  assert.equal(isPtcWorkerHost([0, 1, 5]), false)
+  assert.equal(isPtcWorkerHost([0, 1, 5, 99]), false) // 形状不符按未知处理
+  assert.equal(isPtcWorkerHost([0, 1, 6]), true)
+  assert.equal(isPtcWorkerHost([0, 1, 7]), true)
+  assert.equal(isPtcWorkerHost([0, 2, 0]), true)
+  assert.equal(isPtcWorkerHost([0, 2, 1]), true)
+  assert.equal(isPtcWorkerHost([1, 0, 0]), true)
+  assert.equal(isPtcWorkerHost(null), false)
+  assert.equal(isPtcWorkerHost(undefined), false)
+  assert.equal(isPtcWorkerHost([0, 1]), false)
+  assert.equal(isPtcWorkerHost(['0', '1', '6']), false)
 })
 
 test('listOrchestratorPresetIds: 只认编排类目录名；目录缺失返回空', () => {

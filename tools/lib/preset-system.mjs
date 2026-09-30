@@ -20,8 +20,10 @@
  *      写盘并明确报错，与仓库「配置不可信时拒绝落盘」口径一致。
  *   4) 轨道迁移对账 backfillHomePatchRows / listOrchestratorPresetIds /
  *      parseGeneratorMarker / formatGeneratorMarker：宿主只升 dsh 不动插件时
- *      （标记版本一致、轨道翻转——升级最常见路径），按磁盘产物补写缺失声明行
- *      而不整盘重生成；生成器标记记「版本 + 轨道」两行，任一不符即触发自愈。
+ *      （标记版本一致、轨道翻转或 workflow worker 形态换代——升级最常见路径），
+ *      按磁盘产物补写缺失声明行而不整盘重生成；生成器标记记「版本 + 轨道 +
+ *      worker 形态」三行，任一不符即触发自愈（worker 形态换代必须整盘重生成，
+ *      见 detectHostVersionTriple / isPtcWorkerHost）。
  * 零运行时依赖（node:child_process / node:fs / node:path / node:url）；被 state 引用。
  */
 import { spawnSync } from 'node:child_process'
@@ -55,14 +57,18 @@ export function parseVersionTriple(text) {
   return [Number(m[1]), Number(m[2]), Number(m[3])]
 }
 
-/** 三元组是否达到声明行轨（0.1.7+）：逐段数值比较，prerelease 已在上游剥掉。 */
-export function isDeclarativeTriple(triple) {
-  if (!Array.isArray(triple) || triple.length !== 3 || triple.some((n) => !Number.isInteger(n))) return false
-  const base = [0, 1, 7]
+/** 三元组逐段与基准比较：≥ 基准返回 true（prerelease 已在上游剥掉）。 */
+function atOrAfterTriple(triple, base) {
   for (let i = 0; i < 3; i++) {
     if (triple[i] !== base[i]) return triple[i] > base[i]
   }
   return true
+}
+
+/** 三元组是否达到声明行轨（0.1.7+）：逐段数值比较，prerelease 已在上游剥掉。 */
+export function isDeclarativeTriple(triple) {
+  if (!Array.isArray(triple) || triple.length !== 3 || triple.some((n) => !Number.isInteger(n))) return false
+  return atOrAfterTriple(triple, [0, 1, 7])
 }
 
 /**
@@ -536,10 +542,12 @@ export function backfillHomePatchRows(dshHome, presetIds) {
 }
 
 /**
- * 解析 .generator-version 标记文本为 { version, track }。v2 格式两行：首行
- * 生成器版本、次行预设安装轨道（declarative / directory）；旧格式（单行版本，
- * 0.3.4 及以前）解析出 track: null —— 恰是「宿主轨道已翻转但产物版本未动」的
- * 迁移触发态。空文本 / 全空白返回 null（按未生成处理）。
+ * 解析 .generator-version 标记文本为 { version, track, worker }。v3 格式三行：
+ * 首行生成器版本、次行预设安装轨道（declarative / directory）、三行 workflow
+ * worker 形态（ptc / worker-thread）；旧格式（v2 两行 = 0.3.6 及以前、单行 =
+ * 0.3.4 及以前）解析出 track / worker 为 null —— 恰是「宿主已换代但产物版本
+ * 未动」的迁移触发态（轨道翻转、worker 换代都靠它触发自愈）。空文本 / 全空白
+ * 返回 null（按未生成处理）。
  */
 export function parseGeneratorMarker(text) {
   const lines = String(text ?? '')
@@ -548,10 +556,49 @@ export function parseGeneratorMarker(text) {
     .filter((l) => l !== '')
   if (lines.length === 0) return null
   const track = lines[1] === 'declarative' || lines[1] === 'directory' ? lines[1] : null
-  return { version: lines[0], track }
+  const worker = lines[2] === 'ptc' || lines[2] === 'worker-thread' ? lines[2] : null
+  return { version: lines[0], track, worker }
 }
 
-/** 生成 .generator-version 标记文本（版本 + 轨道两行，v2 格式）。 */
-export function formatGeneratorMarker(version, presetSystem) {
-  return `${version}\n${presetSystem}\n`
+/**
+ * 生成 .generator-version 标记文本（版本 + 轨道 + worker 形态三行，v3 格式）。
+ * worker 取 WORKER_PTC / WORKER_WORKER_THREAD（允许调用方先探测再传入）。
+ */
+export function formatGeneratorMarker(version, presetSystem, worker) {
+  return `${version}\n${presetSystem}\n${worker}\n`
+}
+
+// ── workflow worker 形态（宿主版本 → 生成期换行）────────────────────────────
+
+/** 生成产物里 workflow worker 行的两种形态（标记第三行的合法取值）。 */
+export const WORKER_PTC = 'ptc'
+export const WORKER_WORKER_THREAD = 'worker-thread'
+
+/**
+ * 探测正在运行的宿主版本三元组：进程 argv 宿主版本（插件与宿主同进程时零开销
+ * 且反映正在运行的宿主）> PATH 上的 `dsh --version` > null。与
+ * detectPresetSystem 的前两级同源复用，但不再往下走文件探测——0.1.5 与 0.1.6
+ * 的磁盘形态没有可区分的单数包，探测不到就返回 null 由调用方按未知处理。
+ */
+export function detectHostVersionTriple() {
+  const argvVersion = hostVersionFromArgv()
+  if (argvVersion !== null) return parseVersionTriple(argvVersion)
+  const versionText = dshVersionText()
+  if (versionText !== null) return parseVersionTriple(versionText)
+  return null
+}
+
+/**
+ * 该宿主版本的 workflow worker 行形态：≥0.1.6 用 @deepseek-ai/dsh-workflow-ptc
+ * （0.1.6-alpha.1 起 workflow-worker-thread 包已删除，残留行会让 preset 的
+ * delegation 组报 never started，0.2.0 Plugin Manager 显示为「加载失败」）；
+ * 0.1.5 只认 @deepseek-ai/dsh-workflow-worker-thread。版本探测不到时返回 false
+ *（保守侧：保留源模板原行）——「探测不到」走不出插件运行时（argv 必命中），
+ * 多见于无 dsh 在 PATH 的原始环境；保守默认让 0.1.5 全场景可用，也与
+ * detectPresetSystem 的安全侧兜底哲学一致（产物零 diff 的 golden 性质随之保留：
+ * 显式 null 不改源文）。
+ */
+export function isPtcWorkerHost(triple) {
+  if (!Array.isArray(triple) || triple.length !== 3 || triple.some((n) => !Number.isInteger(n))) return false
+  return atOrAfterTriple(triple, [0, 1, 6])
 }

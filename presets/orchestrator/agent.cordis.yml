@@ -175,7 +175,10 @@
     - id: tool-subagent-list-agents
       name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
 
-    # subagent / subagent_fork / workflow-worker-thread / workflow / ralph 仅当用户经 main_agent_extra 显式开启时对主 agent 可达；保留以对齐 standard 全量组合。
+    # subagent / subagent_fork / workflow worker / workflow / ralph 仅当用户经 main_agent_extra
+    # 显式开启时对主 agent 可达；保留以对齐 standard 全量组合。workflow worker 行
+    # 由生成器按宿主版本适配（0.1.5 = workflow-worker-thread；0.1.6+ 换成
+    # workflow-ptc——旧包 0.1.6 起已删除，残留会让预设报 never started）。
     - id: tool-subagent
       name: '@deepseek-ai/dsh-tool-subagent'
       config:

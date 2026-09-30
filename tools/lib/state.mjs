@@ -48,6 +48,7 @@ import { composeGenerated, extractMainAgentAllow } from './compose.mjs'
 import { smartDefaults } from './alloc.mjs'
 import {
   buildPresetRowText,
+  detectHostVersionTriple,
   detectPresetSystem,
   listOrchestratorPresetIds,
   presetRowId,
@@ -232,6 +233,10 @@ export async function collectState({ dshHome, configFile, profile = null, patche
   //（见 preset-system.detectPresetSystem 的降级链）。
   const presetSystem = await detectPresetSystem({ dshHome, runtimeSystem: runtimeFacts?.presetSystem ?? null })
 
+  // 宿主版本三元组（argv 宿主版本 > dsh --version > null，探测不到按未知处理）：
+  // workflow worker 行的生成期形态判定（isPtcWorkerHost）与标记 worker 行都从这里取。
+  const hostVersionTriple = detectHostVersionTriple()
+
   // 已落盘 preset 目录扫描（编排类）：.agent-presets 下的 orchestrator 基础
   // preset 与 orchestrator-<slug> 工作区专属 preset。扫描失败（目录尚不存在、
   // 无读权限等）一律降级为空列表，绝不影响检测结果本体；generateAndInstall
@@ -265,6 +270,8 @@ export async function collectState({ dshHome, configFile, profile = null, patche
     installedPresets,
     // 预设安装轨道（generateAndInstall 据此双轨收尾；serializeState 透传给面板）
     presetSystem,
+    // 宿主版本三元组（null = 探测不到）：workflow worker 行生成期形态判定用
+    hostVersionTriple,
     // 主 persona 尾部追加的默认常量（配置键 main_agent_persona_extra 缺省值）：
     // 供 UI state（serializeState → /api/paoding/state）展示与「恢复默认」用。
     mainPersonaExtraDefault: DEFAULT_MAIN_AGENT_PERSONA_EXTRA,
@@ -366,8 +373,9 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
   }
 
   // Compose the generated config; a composition error is a hard error.
-  //（这层包装无增值，让 composeGenerated 的原始错误直接上抛。）
-  const composed = composeGenerated(srcText, blocks, personaBlocks, assignments, inventory, restrictBase, mainAgentSkillMetas)
+  //（这层包装无增值，让 composeGenerated 的原始错误直接上抛。）宿主版本三元组
+  // 驱动 workflow worker 行的生成期换行（≥0.1.6 → workflow-ptc，null 按现代宿主）。
+  const composed = composeGenerated(srcText, blocks, personaBlocks, assignments, inventory, restrictBase, mainAgentSkillMetas, state?.hostVersionTriple ?? null)
   const generatedText = composed.text
   const roleResults = composed.roleResults
 

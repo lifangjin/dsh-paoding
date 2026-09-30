@@ -61,7 +61,7 @@ test('首装（无标记）：directory 宿主整盘重生成，标记记版本+
     const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
     assert.equal(r.installed, true)
     assert.ok(existsSync(agentFileOf(dshHome)), 'preset 三件套应落盘')
-    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\n`)
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\nworker-thread\n`)
     assert.deepEqual(readHomePatchRows(dshHome), [], 'directory 轨不得写声明行')
     assert.ok(existsSync(configFile), 'fresh 安装应落基础模板配置')
   })
@@ -73,7 +73,7 @@ test('首装（无标记）：declarative 宿主重生成 + 写声明行；再�
   await withEnv(configFile, async () => {
     const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
     assert.equal(r.installed, true)
-    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\n`)
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nworker-thread\n`)
     assert.deepEqual(readHomePatchRows(dshHome), [{ rowId: 'preset-orchestrator', presetId: 'orchestrator' }])
 
     // 幂等：版本轨道一致 + 行齐 → 跳过，marker 与 patch 字节级不动
@@ -112,7 +112,7 @@ test('事故主路径：只升 dsh 不动插件（旧格式标记 + 轨道翻转
     assert.deepEqual([...(r.backfilled ?? [])].sort(), ['orchestrator', 'orchestrator-ws1'])
     assert.equal(readFileSync(agentFileOf(dshHome), 'utf8'), agentBefore, 'preset 内容字节不动')
     assert.equal(readFileSync(agentFileOf(dshHome, 'orchestrator-ws1'), 'utf8'), wsAgentBefore)
-    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\n`, '标记升级为带轨道格式')
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nworker-thread\n`, '标记升级为带轨道格式')
     assert.deepEqual(readHomePatchRows(dshHome).map((x) => x.presetId).sort(), ['orchestrator', 'orchestrator-ws1'])
   })
 })
@@ -141,7 +141,7 @@ test('宿主降级（declarative→directory、声明行残留）→ 整盘重�
     const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
     assert.equal(r.installed, true, '残留声明行会让 0.1.6 profile 启动失败，必须走重生成撤块')
     assert.deepEqual(readHomePatchRows(dshHome), [])
-    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\n`)
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\nworker-thread\n`)
   })
 })
 
@@ -171,4 +171,67 @@ test('shouldAbort：插件已卸载 → 中止且不写盘', async () => {
     assert.equal(r.reason, '插件已卸载（dispose），本次 preset 生成中止')
     assert.ok(!existsSync(path.join(dshHome, '.agent-presets')), '中止后不得有任何落盘')
   })
+})
+
+// ── workflow worker 形态换代（宿主版本探测 → 生成期换行 → 标记 v3 第三行）────
+
+// 假宿主包 + 子进程驱动：把 driver 脚本放进形如 dsh/lib/ 的假宿主包内，argv[1]
+// 向上一级命中假 package.json → detectHostVersionTriple 的 argv rung 精确命中
+// 伪造宿主版本（父进程无法改自身 argv，只能 spawn）。PATH 一律中和，禁真 dsh。
+const HOST_VERSION_PTC = '0.2.0-rc.2' // ≥0.1.6：workflow-ptc
+const HOST_VERSION_WORKER_THREAD = '0.1.5-rc.3' // 0.1.5：workflow-worker-thread
+
+async function runEnsureInFakeHost(hostVersion, dshHome, configFile) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'dsh-paoding-fakehost-'))
+  const fake = path.join(root, `dsh-${hostVersion}`)
+  mkdirSync(path.join(fake, 'lib'), { recursive: true })
+  writeFileSync(path.join(fake, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: hostVersion }))
+  const modUrl = new URL('../plugins/paoding-config-ui/api-core.mjs', import.meta.url).href
+  const driver = path.join(fake, 'lib', 'driver.mjs')
+  writeFileSync(driver, [
+    `import { ensurePresetInstalled } from ${JSON.stringify(modUrl)}`,
+    `const r = await ensurePresetInstalled({ dshHome: ${JSON.stringify(dshHome)}, generatorVersion: ${JSON.stringify(GEN)} })`,
+    'process.stdout.write(JSON.stringify(r))',
+    '',
+  ].join('\n'))
+  const { spawnSync } = await import('node:child_process')
+  const res = spawnSync(process.execPath, [driver], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: '/nonexistent-dsh-paoding-test', DSH_PAODING_CONFIG: configFile },
+  })
+  assert.equal(res.status, 0, `driver 应正常退出（stderr: ${res.stderr}）`)
+  return JSON.parse(res.stdout)
+}
+
+test('worker 形态: 0.2.0 宿主首装 → 产物含 workflow-ptc、无旧包行，标记第三行记 ptc；再跑幂等', async () => {
+  const { dshHome, configFile } = freshEnv('worker-ptc')
+  const r = await runEnsureInFakeHost(HOST_VERSION_PTC, dshHome, configFile)
+  assert.equal(r.installed, true)
+  const agentText = readFileSync(agentFileOf(dshHome), 'utf8')
+  assert.ok(agentText.includes('- id: workflow-ptc'), '0.2.0 宿主产物缺 workflow-ptc 行')
+  assert.ok(!agentText.includes("'@deepseek-ai/dsh-workflow-worker-thread'"), '0.2.0 宿主产物残留旧包行')
+  assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\n`)
+  // 幂等：worker 形态一致 → 轻量路径，字节不动
+  const agentBefore = agentText
+  const r2 = await runEnsureInFakeHost(HOST_VERSION_PTC, dshHome, configFile)
+  assert.equal(r2.installed, false)
+  assert.equal(readFileSync(agentFileOf(dshHome), 'utf8'), agentBefore)
+})
+
+test('worker 形态: 0.1.5 宿主保留 worker-thread 行；v2 旧标记 + 0.2.0 宿主 → 整盘重生成换代', async () => {
+  const { dshHome, configFile } = freshEnv('worker-migrate')
+  // 0.1.5 时代：产物保留源模板 worker-thread 行，标记第三行记 worker-thread
+  const r = await runEnsureInFakeHost(HOST_VERSION_WORKER_THREAD, dshHome, configFile)
+  assert.equal(r.installed, true)
+  assert.ok(readFileSync(agentFileOf(dshHome), 'utf8').includes("'@deepseek-ai/dsh-workflow-worker-thread'"))
+  assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\nworker-thread\n`)
+  // 模拟旧版插件写的 v2 标记（无第三行）
+  writeFileSync(markerFileOf(dshHome), `${GEN}\ndirectory\n`)
+  // 宿主升 0.2.0：worker 形态分叉 → 整盘重生成，产物换代 + 标记升 v3
+  const r2 = await runEnsureInFakeHost(HOST_VERSION_PTC, dshHome, configFile)
+  assert.equal(r2.installed, true, 'worker 形态分叉必须整盘重生成')
+  const agentText = readFileSync(agentFileOf(dshHome), 'utf8')
+  assert.ok(agentText.includes('- id: workflow-ptc'), '重生成后仍缺 workflow-ptc 行')
+  assert.ok(!agentText.includes("'@deepseek-ai/dsh-workflow-worker-thread'"), '重生成后残留旧包行')
+  assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\n`)
 })

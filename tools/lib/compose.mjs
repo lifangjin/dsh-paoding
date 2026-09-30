@@ -16,6 +16,9 @@
  * allow 过滤走白名单语义（usableWith / presetUniverse ∪ inventory，见
  * filterUsableTools 上方说明）：手写进配置、既不在 preset 自带工具面也不在
  * 检测库存的名字一律从 allow 丢弃，不再「非 host 依赖名直通」。
+ * workflow worker 行按宿主版本生成期适配（adaptWorkflowWorkerRow：≥0.1.6 把
+ * 0.1.5-only 的 workflow-worker-thread 条目换成 workflow-ptc；探测不到版本
+ * 保守保留源行，产物零 diff 性质随之保留）。
  * 自定义角色另有三道防护/自动化：toolName 保留名校验（assertCustomToolName，
  * 内置角色 / restrictBase / subagent* / mcp__ 前缀 / YAML 字面量一律 throw）；
  * tools 为空时拒绝安装零工具角色（renderCustomRoleBlocks 直接 throw，防
@@ -29,6 +32,43 @@
 import { DEFAULT_MAIN_AGENT_PERSONA_EXTRA, ROLES, warn } from './util.mjs'
 import { normalizeModelRef, yamlScalar } from './config.mjs'
 import { isHostDependent } from './host.mjs'
+import { isPtcWorkerHost } from './preset-system.mjs'
+
+// ── workflow worker 行的宿主版本适配 ─────────────────────────────────────────
+
+// 源模板里 workflow worker 行的原样块（delegation 组 config 内，4 空格条目缩进）。
+// 宿主 ≥0.1.6 时整块换成 workflow-ptc（0.1.6-alpha.1 起
+// @deepseek-ai/dsh-workflow-worker-thread 包已删除，残留行让 preset 的
+// delegation 组报 never started，0.2.0 Plugin Manager 显示「加载失败」；
+// workflow-ptc 是 0.1.6–0.2.0 各版 standard 组合的统一形态，ptcRuntime 服务由
+// base bundle 提供，preset 内不需要再列 ptc-runtime 行）。行不在任何 span 定位
+// 区间内，调用点在全部 edits 应用之后，与偏移量零交互。
+const WORKER_THREAD_BLOCK = [
+  '    - id: workflow-worker-thread',
+  "      name: '@deepseek-ai/dsh-workflow-worker-thread'",
+  '      config:',
+  '        provider: spawn',
+].join('\n')
+const WORKER_PTC_BLOCK = [
+  '    - id: workflow-ptc',
+  "      name: '@deepseek-ai/dsh-workflow-ptc'",
+  '      config:',
+  '        provider: spawn',
+].join('\n')
+
+/**
+ * Host-version adaptation of the delegation group's workflow worker row:
+ * ≥0.1.6 swaps the 0.1.5-only workflow-worker-thread entry for workflow-ptc
+ * (see isPtcWorkerHost). A missing source block means template drift — a hard
+ * error, mirroring how missing role blocks abort generation.
+ */
+export function adaptWorkflowWorkerRow(text, hostVersionTriple) {
+  if (!isPtcWorkerHost(hostVersionTriple)) return text
+  if (!text.includes(WORKER_THREAD_BLOCK)) {
+    throw new Error('workflow-worker-thread block not found in source agent.cordis.yml')
+  }
+  return text.replace(WORKER_THREAD_BLOCK, WORKER_PTC_BLOCK)
+}
 
 // ── restrict.mjs main-agent allow base ──────────────────────────────────────
 
@@ -559,7 +599,7 @@ export function filterUsableTools(tools, presetUniverse, inventory) {
  * block / restrict config.allow injection) plus the per-role diff info for
  * the report.
  */
-export function composeGenerated(srcText, blocks, personaBlocks, assignments, inventory, restrictBase, mainAgentSkillMetas = {}) {
+export function composeGenerated(srcText, blocks, personaBlocks, assignments, inventory, restrictBase, mainAgentSkillMetas = {}, hostVersionTriple = null) {
   const skillsMap = assignments.skills ?? {}
   const customToolNames = Object.keys(assignments.roles).filter((n) => !ROLES.includes(n))
   // roles_remove：被删除的内置角色不产 allow/persona edits（委派行整条删除时避免重叠），
@@ -712,6 +752,9 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
   let out = srcText
   edits.sort((a, b) => b.start - a.start)
   for (const edit of edits) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end)
+
+  // workflow worker 行宿主版本适配（≥0.1.6 换 workflow-ptc；见 adaptWorkflowWorkerRow）。
+  out = adaptWorkflowWorkerRow(out, hostVersionTriple)
 
   const customBlock = renderCustomRoleBlocks(assignments.roles, skillsMap, restrictBase)
   if (customBlock !== '') out = insertCustomRoles(out, customBlock)
