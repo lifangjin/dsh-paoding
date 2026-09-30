@@ -1,27 +1,40 @@
 /**
- * 面板一键升级执行器 —— spawn `dsh plugin --profile <profile> update dsh-paoding`
- * 原地换版本（Web 面板「升级」按钮专用；CLI 不走这里）。
+ * 面板一键升级执行器 —— 按 profile 分流的原地换版本（Web 面板「升级」按钮
+ * 专用；CLI 不走这里）。
  *
  * 唯一官方安装通道是 DSH 插件通道：包由 pnpm 装进 profile
- * （$DSH_HOME/profiles/<name>/node_modules/dsh-paoding），升级 = 让 dsh 的插件
- * 转发器对该包做 pnpm update + bundle reconcile。本模块只负责「拿目标版本 →
- * 探测自身 profile → 跑子进程」这一段编排；profile 名从本文件运行时真实路径
- * 反推（registry 安装形态必然位于 <...>/profiles/<name>/node_modules/ 之下），
- * 开发 link: 直连形态的真实路径在仓库里、匹配不到，如实报「无法就地升级」。
+ * （$DSH_HOME/profiles/<name>/node_modules/dsh-paoding）。升级子进程按
+ * profile 分流：
+ *   - 常规 profile：spawn `dsh plugin --profile <profile> update dsh-paoding`，
+ *     让 dsh 的插件转发器对该包做 pnpm update + bundle reconcile；
+ *   - desktop profile：dsh CLI 在启动器里硬拒 desktop profile（报
+ *     `profile "desktop" is managed exclusively by the Electron application`，
+ *     只有桌面 Electron App 内部 CLI 豁免），转发器这条路必炸——改为在
+ *     profile 目录里直跑 `pnpm add dsh-paoding@<目标版本>`：本包已在 profile
+ *     package.json 的 dsh.profile.bundles 清单里，无需 bundle reconcile；用
+ *     精确版本而非 update，避开 pnpm 新鲜度防护 / 镜像 packument 滞后造成的
+ *     静默空转。
+ *
+ * 本模块只负责「拿目标版本 → 探测自身 profile → 跑子进程」这一段编排；
+ * profile 名从本文件运行时真实路径反推（registry 安装形态必然位于
+ * <...>/profiles/<name>/node_modules/ 之下），开发 link: 直连形态的真实路径
+ * 在仓库里、匹配不到，如实报「无法就地升级」。
  *
  * 零依赖纯 Node（>=18）：目标版本复用 version.mjs 的 fetchLatestFromRegistry
  * / fetchLatestFromMirror（官方源失败再走 npmmirror 镜像——点「升级」的用户
  * 网络本来就在出状况，多一路快路能实打实救回一次升级），子进程、时钟全部
  * 可注入便于单测。升级后不做磁盘后验
- * ——本进程代码不随升级变化，无从对账；成功与否以 dsh 子进程退出码为准，
+ * ——本进程代码不随升级变化，无从对账；成功与否以升级子进程退出码为准，
  * 新版本在重启 DSH 后生效（preset 由新包的启动自愈钩子自动重生成）。
  *
- * 失败路径全部诚实暴露（不静默）：拿不到版本、开发形态、超时、退出码非 0，
- * 都原样带回 error + 子进程输出尾部，调用方（面板路由）转成 500 醒目展示
- * ——升级是用户主动点的高级操作，失败被吞掉比失败本身更糟。
+ * 失败路径全部诚实暴露（不静默）：拿不到版本、开发形态、profile 未初始化、
+ * 超时、退出码非 0，都原样带回 error + 子进程输出尾部，调用方（面板路由）
+ * 转成 500 醒目展示——升级是用户主动点的高级操作，失败被吞掉比失败本身更糟。
  */
 import os from 'node:os'
+import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { currentVersion, compareVersions, fetchLatestFromMirror, fetchLatestFromRegistry } from './version.mjs'
@@ -44,8 +57,10 @@ function tailOutput(text) {
  * 缺省子进程执行器（可被 spawnImpl 注入替换，测试用）：spawn 任意命令，合并
  * 收集 stdout+stderr，timeoutMs 到点 kill 并按超时收敛。永不 reject，统一收敛
  * 为 { code, output, error? }（error 仅 spawn 本身失败（如 ENOENT）时存在）。
+ * timeoutLabel 只用于超时文案标明哪条通道超时（dsh 转发器 / pnpm 直装），
+ * 不参与子进程本身。
  */
-function defaultSpawn(command, args, options, timeoutMs) {
+function defaultSpawn(command, args, options, timeoutMs, timeoutLabel) {
   return new Promise((resolve) => {
     const child = spawn(command, args, options)
     let output = ''
@@ -67,7 +82,7 @@ function defaultSpawn(command, args, options, timeoutMs) {
     child.on('close', (code) => {
       clearTimeout(timer)
       resolve(timedOut
-        ? { code, output: tailOutput(output), error: `dsh plugin update 升级超时（${Math.round(timeoutMs / 1000)}s）` }
+        ? { code, output: tailOutput(output), error: `${timeoutLabel} 升级超时（${Math.round(timeoutMs / 1000)}s）` }
         : { code, output: tailOutput(output) })
     })
   })
@@ -92,6 +107,18 @@ export async function detectProfileName() {
 }
 
 /**
+ * desktop profile 目录：$DSH_HOME（空串视为未设）否则 ~/.dsh，再拼
+ * profiles/desktop，与 dsh 启动器的 profile 落位规则一致。desktop 分支的
+ * pnpm 子进程以此为 cwd——pnpm 的操作对象就是这份 profile，脱离目录跑不
+ * 到点子上。
+ * @returns {string}
+ */
+function desktopProfileDir() {
+  const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
+  return path.join(home, 'profiles', 'desktop')
+}
+
+/**
  * 执行一键升级。
  * @param {{profile?: string, fetchImpl?: Function, spawnImpl?: Function,
  *           timeoutMs?: number, now?: Function|number}} opts
@@ -99,9 +126,10 @@ export async function detectProfileName() {
  *     缺省经 detectProfileName() 从运行时真实路径反推。
  *   - fetchImpl / spawnImpl / now 可注入（单测用）；缺省用 globalThis.fetch、
  *     node:child_process 的 spawn、Date.now()。
- *   - timeoutMs：dsh 子进程超时（含 pnpm 下载安装），默认 120s。
- *   - spawnImpl 契约：(command, args, options, timeoutMs) → Promise resolving
- *     { code, output, error? }（同 defaultSpawn 的收敛形状）。
+ *   - timeoutMs：升级子进程超时（含 pnpm 下载安装），默认 120s。
+ *   - spawnImpl 契约：(command, args, options, timeoutMs, timeoutLabel) →
+ *     Promise resolving { code, output, error? }（同 defaultSpawn 的收敛形状；
+ *     timeoutLabel 仅缺省实现用于超时文案，注入桩可忽略）。
  * @returns {Promise<object>} 恒不抛错，收敛为：
  *   - { ok: true, upToDate: true, current }                    本地已不落后 registry
  *   - { ok: true, version, profile, output, elapsedMs }        升级成功（退出码 0）
@@ -149,20 +177,33 @@ async function doRunUpgrade({ profile, fetchImpl, spawnImpl, timeoutMs, now }) {
     }
   }
 
-  // ③ spawn dsh 插件转发器：update = pnpm update + bundle reconcile。cwd 用
-  //    系统临时目录：子进程不该在仓库或 $DSH_HOME 里跑；DSH_HOME 经环境继承，
-  //    由子进程的 dsh 自行解析。win32 的 dsh 是 .cmd shim，必须借 shell 拉起
-  //    （Node 直接 spawn .cmd 会 EINVAL，见 CVE-2024-27980 加固），与
-  //    bin/dsh-paoding.mjs 同一方案；参数保持数组形式，转义交给 Node。
+  // ③ spawn 升级子进程，按 profile 分流（守卫背景见头注）：
+  //    - desktop：dsh CLI 硬拒 desktop profile（Electron 专属管理），直跑
+  //      pnpm add 精确版本。cwd 必须是 profile 目录（pnpm 的操作对象就是它）；
+  //      目录没有 package.json 说明 profile 未初始化，诚实失败、不硬跑。
+  //    - 其余 profile：照走 dsh 插件转发器（update = pnpm update + bundle
+  //      reconcile），cwd 用系统临时目录——子进程不该在仓库或 $DSH_HOME 里跑；
+  //      DSH_HOME 经环境继承，由子进程的 dsh 自行解析。
+  //    win32 的 dsh / pnpm 都是 .cmd shim，必须借 shell 拉起（Node 直接 spawn
+  //    .cmd 会 EINVAL，见 CVE-2024-27980 加固），与 bin/dsh-paoding.mjs 同一
+  //    方案；参数保持数组形式，转义交给 Node。
+  const isDesktop = resolved.toLowerCase() === 'desktop'
+  const desktopDir = isDesktop ? desktopProfileDir() : null
+  if (isDesktop && !existsSync(path.join(desktopDir, 'package.json'))) {
+    return { ok: false, error: `desktop profile 目录不存在或未初始化: ${desktopDir}` }
+  }
   const useShell = process.platform === 'win32'
-  const command = useShell ? 'dsh.cmd' : 'dsh'
+  const command = isDesktop ? (useShell ? 'pnpm.cmd' : 'pnpm') : useShell ? 'dsh.cmd' : 'dsh'
+  const args = isDesktop
+    ? ['add', `dsh-paoding@${targetVersion}`]
+    : ['plugin', '--profile', resolved, 'update', 'dsh-paoding']
   const run = typeof spawnImpl === 'function' ? spawnImpl : defaultSpawn
-  const proc = await run(command, ['plugin', '--profile', resolved, 'update', 'dsh-paoding'], {
-    cwd: os.tmpdir(),
+  const proc = await run(command, args, {
+    cwd: isDesktop ? desktopDir : os.tmpdir(),
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: useShell,
-  }, timeoutMs)
+  }, timeoutMs, isDesktop ? 'pnpm add' : 'dsh plugin update')
   const output = tailOutput(proc?.output)
 
   // ④ 无磁盘后验（旧 npx 时代读 $DSH_HOME/dsh-paoding 对账的方案已随该目录
@@ -170,7 +211,13 @@ async function doRunUpgrade({ profile, fetchImpl, spawnImpl, timeoutMs, now }) {
   //    新版本重启 DSH 后生效（preset 由新版启动钩子自动重生成）。
   if (proc?.error) return { ok: false, error: proc.error, output, elapsedMs: elapsedMs() }
   if (proc?.code !== 0) {
-    return { ok: false, error: `dsh plugin update 退出码 ${proc?.code}`, output, elapsedMs: elapsedMs() }
+    // 报错文案点明实际通道：desktop 是 pnpm 直装，其余是 dsh 插件转发器。
+    return {
+      ok: false,
+      error: isDesktop ? `pnpm add 退出码 ${proc?.code}` : `dsh plugin update 退出码 ${proc?.code}`,
+      output,
+      elapsedMs: elapsedMs(),
+    }
   }
   return { ok: true, version: targetVersion, profile: resolved, output, elapsedMs: elapsedMs() }
 }

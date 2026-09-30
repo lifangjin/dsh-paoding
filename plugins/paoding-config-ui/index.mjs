@@ -7,9 +7,10 @@
  *     ./api-core.mjs 复用 tools/install.mjs 的检测与生成管线；workspaces 直连
  *     宿主 workspaceRegistry 服务（list / create，幂等）；version
  *     复用 tools/lib/version.mjs 的版本检测（npm registry 优先，npmmirror
- *     镜像、GitHub release 依次兜底）；upgrade 经 tools/lib/upgrade.mjs
- *     spawn `dsh plugin update` 完成
- *     一键升级。首装 / 升级后 preset 自动重生成（ensurePresetInstalled，等价
+ *     镜像、GitHub release 依次兜底）；upgrade 经 tools/lib/upgrade.mjs 完成
+ *     一键升级（常规 profile spawn dsh 插件转发器；desktop profile 被 dsh CLI
+ *     的 Electron 专属守卫硬拒，改在 profile 目录直跑 pnpm add 精确版本）。
+ *     首装 / 升级后 preset 自动重生成（ensurePresetInstalled，等价
  *     install --auto 语义）在路由注册完成后异步触发，不阻塞启动。
  *   - Client 侧：lib/client.js 经宿主 sidebar.footer.action 键控槽在左侧栏
  *     底部（设置行上方）注册「庖丁配置」入口，点击后在会话中栏打开全页配置

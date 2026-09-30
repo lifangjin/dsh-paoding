@@ -17,8 +17,9 @@
     // Esc（只收菜单 / 建议下拉 / 弹窗，不关页）；确认弹窗开着时由 ConfirmLayer
     // 的捕获级监听截停（只关确认框）；事件都到不了这里。其余位置 Esc 一律关页。
     // 一键升级（页头更新卡「升级」按钮，统一入口）：
-    // POST /api/paoding/upgrade，服务端 spawn `dsh plugin --profile <profile>
-    // update dsh-paoding` 原地换版本，分钟级操作。确认弹窗（原原生 confirm
+    // POST /api/paoding/upgrade，服务端经插件通道原地换版本（常规 profile 走
+    // dsh 插件转发器；desktop profile 被 dsh CLI 的 Electron 专属守卫硬拒，
+    // 服务端直跑 pnpm add），分钟级操作。确认弹窗（原原生 confirm
     // 改通用确认弹窗，confirmCtrl 单例见 70 片段）文案按挂载形态分流：
     // dev link 直连形态（layout 由服务端 version 路由按包根 .git 判定）无法
     // 就地升级，把手动切换命令说在前头；installed（registry 版）原地换版本，
@@ -30,7 +31,7 @@
       var isDev = verInfo.layout === "dev";
       var msg = isDev
         ? "当前为开发 link 直连形态：无法就地升级，请手动执行 dsh plugin add dsh-paoding@latest 切换到 registry 版本。仍要继续尝试吗？"
-        : "确定升级到 " + versionTagOf(verInfo.latest) + "？升级将通过 dsh plugin update 原地换版本，完成后需重启 DSH 生效。";
+        : "确定升级到 " + versionTagOf(verInfo.latest) + "？升级将通过插件通道原地换版本，完成后需重启 DSH 生效。";
       confirmCtrl.ask({
         title: "升级 dsh-paoding",
         body: msg,

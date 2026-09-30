@@ -117,7 +117,7 @@ dsh plugin --profile <name> update dsh-paoding
 
 （profile 自动探测，通常无需手填。）升级只换 profile 里的插件包本体，当前进程的代码不变；成功后提示**重启 DSH**，重启时 preset 按 `.generator-version` 标记自动按新版重生成。只升级 dsh 本体（不动插件）同理：重启即触发轨道迁移自愈，无需重装或重新应用。
 
-手动升级等价：直接在终端跑上面这条 `dsh plugin update` 命令，同样重启生效。
+手动升级等价：普通 profile 直接在终端跑上面这条 `dsh plugin update` 命令；desktop profile 被 dsh CLI 独占守卫挡住，等价命令是 `cd ~/.dsh/profiles/desktop && pnpm add dsh-paoding@latest`，同样重启生效。
 
 **开发 link 形态**（见第 4 节）版本比较照常（更新卡有新版照常提示），但无法就地升级——升级器要求包真实装在某个 profile 的 node_modules 下，link 直连仓库匹配不到；点「升级」会如实报这一点，并提示手动跑 `dsh plugin add dsh-paoding@latest` 切回 registry 版。
 
@@ -190,7 +190,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 
 ### 数据接口与安全
 
-面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地 `dsh plugin update`）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
+面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地升级：普通 profile 走 `dsh plugin update`，desktop profile 直跑 `pnpm add`）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
 
 ### 面板能力
 
