@@ -8,7 +8,7 @@
  * 自带的 Web 配置器（侧栏底部「庖丁配置」入口）。
  *
  * 依赖 util（ROLES / SRC_DIR / PROFILE_NAME_RE）、config（normalizeRoleName）、
- * host（removedReason）、state（collectState /
+ * host（removedReason）、state（PRESET_ASIS_FILES / collectState /
  * generateAndInstall）、alloc（autoAssignments，--auto 语义与插件首装共享）、
  * version（getVersionInfo，main 收尾的新版提示）以及 node:os / node:path。
  */
@@ -17,7 +17,7 @@ import path from 'node:path'
 import { PROFILE_NAME_RE, ROLES, SRC_DIR } from './util.mjs'
 import { normalizeRoleName } from './config.mjs'
 import { removedReason } from './host.mjs'
-import { collectState, generateAndInstall } from './state.mjs'
+import { PRESET_ASIS_FILES, collectState, generateAndInstall } from './state.mjs'
 import { autoAssignments } from './alloc.mjs'
 import { getVersionInfo } from './version.mjs'
 
@@ -196,7 +196,7 @@ export function printReport({ scanned, mcpReports, pluginReports, roleResults, d
     `${dryRun ? '[dry-run] would write' : 'wrote'} ${path.join(dstDir, 'agent.cordis.yml')}` +
       (dryRun ? '' : ' (allow lists rewritten)'),
   )
-  console.log(`${dryRun ? '[dry-run] would copy' : 'copied'} preset.yml, restrict.mjs as-is`)
+  console.log(`${dryRun ? '[dry-run] would copy' : 'copied'} ${PRESET_ASIS_FILES.join(', ')} as-is`)
   if (!dryRun) {
     console.log()
     console.log('next steps:')

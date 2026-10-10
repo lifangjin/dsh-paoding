@@ -12,8 +12,9 @@
  *      directory（安全侧：声明行误落 0.1.6 会炸 profile 启动，目录轨误落
  *      0.1.7 只是预设不显示）；
  *   2) 声明行构造 buildPresetRowText：把生成的 agent.cordis.yml 全文内联成
- *      一条声明行的 config.plugins（restrict 行 name 换成 restrict.mjs 的绝对
- *      file: URL——声明轨没有「相对 preset 目录」语义，必须绝对化）；
+ *      一条声明行的 config.plugins（restrict 行与 delegation-labels 行的本地
+ *      name 换成对应 .mjs 的绝对 file: URL——声明轨没有「相对 preset 目录」
+ *      语义，必须绝对化）；
  *   3) home patch 托管块手术 upsertHomePatchRows / stripHomePatchRows /
  *      readHomePatchRows：对 $DSH_HOME/cordis.patch.yml 的 MANAGED 标记块做
  *      行级增删查，块外用户内容一字节不动；托管块损坏（缺结束标记）时拒绝
@@ -155,11 +156,15 @@ function dshVersionText() {
  * 缩进基准：4 空格起排（`- insert:` 列表项层级由 upsertHomePatchRows 拼），
  * plugins: 落 8 空格、插件条目行落 10 空格。name/description 用 JSON.stringify
  * 落值——JSON 字符串即合法 YAML 双引号标量，换行/引号自动转义。agentYmlText
- * 先把 restrict 行的 `name: ./restrict.mjs` 替换为 restrictFileUrl（绝对 file:
- * URL），再整体 +10 缩进；空行保持空行（块标量相对缩进不变），`!!js` 表达式
- * 行原样保留（宿主 patch schema 支持，求值仍由 cordis 装载时完成）。
+ * 先把 restrict 行的 `name: ./restrict.mjs` 与 delegation-labels 行的
+ * `name: ./delegation-labels.mjs` 替换为对应绝对 file: URL（两个本地插件文件
+ * 均无「相对 preset 目录」语义），再整体 +10 缩进；空行保持空行（块标量相对
+ * 缩进不变），`!!js` 表达式行原样保留（宿主 patch schema 支持，求值仍由
+ * cordis 装载时完成）。文本里出现 delegation-labels 行而未提供
+ * delegationLabelsFileUrl 时硬错误——漏传会让相对名字静默进 patch，宿主
+ * 解析不了、preset 直接挂掉。
  */
-export function buildPresetRowText({ presetId, name = null, description = null, order = null, agentYmlText, restrictFileUrl }) {
+export function buildPresetRowText({ presetId, name = null, description = null, order = null, agentYmlText, restrictFileUrl, delegationLabelsFileUrl = null }) {
   if (typeof presetId !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(presetId)) {
     throw new Error(`buildPresetRowText: 非法 presetId: ${presetId}`)
   }
@@ -168,6 +173,12 @@ export function buildPresetRowText({ presetId, name = null, description = null, 
   }
   if (typeof restrictFileUrl !== 'string' || restrictFileUrl === '') {
     throw new Error('buildPresetRowText: restrictFileUrl 不能为空')
+  }
+  const referencesLabelsRow = String(agentYmlText)
+    .split(/\r?\n/)
+    .some((line) => line.trim() === 'name: ./delegation-labels.mjs')
+  if (referencesLabelsRow && (typeof delegationLabelsFileUrl !== 'string' || delegationLabelsFileUrl === '')) {
+    throw new Error('buildPresetRowText: agentYmlText 引用了 ./delegation-labels.mjs，但未提供 delegationLabelsFileUrl')
   }
   const lines = [
     `    - id: ${presetRowId(presetId)}`,
@@ -184,10 +195,13 @@ export function buildPresetRowText({ presetId, name = null, description = null, 
       lines.push('')
       continue
     }
-    // restrict 行换绝对 file: URL（按行精确内容匹配，缩进原样保留）
-    const replaced = line.trim() === 'name: ./restrict.mjs'
-      ? `${line.match(/^[ \t]*/)[0]}name: ${restrictFileUrl}`
-      : line
+    // 本地插件行换绝对 file: URL（按行精确内容匹配，缩进原样保留）
+    const trimmed = line.trim()
+    const fileUrl =
+      trimmed === 'name: ./restrict.mjs' ? restrictFileUrl
+      : trimmed === 'name: ./delegation-labels.mjs' ? delegationLabelsFileUrl
+      : null
+    const replaced = fileUrl !== null ? `${line.match(/^[ \t]*/)[0]}name: ${fileUrl}` : line
     lines.push(`          ${replaced}`)
   }
   while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop() // 去尾部空行，段拼接才紧凑
@@ -503,7 +517,8 @@ export function readPresetDirMeta(dir) {
 /**
  * 把磁盘上已有的编排类 preset 目录补写进 home patch 托管块（缺行才补，已有行
  * 原样不动）；行在、目录没了的撤行——目录与行同生同灭。产物不全（缺
- * agent.cordis.yml / restrict.mjs）的目录跳过并 warn，不拖垮其余补写。
+ * agent.cordis.yml / restrict.mjs / delegation-labels.mjs）的目录跳过并 warn，
+ * 不拖垮其余补写（整盘重生成可修复）。
  * 返回实际补写成功的 presetId 列表（既没补也没撤时为空数组）。
  */
 export function backfillHomePatchRows(dshHome, presetIds) {
@@ -518,6 +533,8 @@ export function backfillHomePatchRows(dshHome, presetIds) {
       const agentYmlText = readFileSync(path.join(dir, 'agent.cordis.yml'), 'utf8')
       const restrictFile = path.join(dir, 'restrict.mjs')
       if (!existsSync(restrictFile)) throw new Error('restrict.mjs 缺失')
+      const labelsFile = path.join(dir, 'delegation-labels.mjs')
+      if (!existsSync(labelsFile)) throw new Error('delegation-labels.mjs 缺失')
       const meta = readPresetDirMeta(dir)
       rows.push(
         buildPresetRowText({
@@ -527,6 +544,7 @@ export function backfillHomePatchRows(dshHome, presetIds) {
           order: meta.order,
           agentYmlText,
           restrictFileUrl: pathToFileURL(restrictFile).href,
+          delegationLabelsFileUrl: pathToFileURL(labelsFile).href,
         }),
       )
       backfilled.push(presetId)

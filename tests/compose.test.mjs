@@ -26,6 +26,7 @@ import {
   computeRestrictAllow,
   extractMainAgentAllow,
   filterUsableTools,
+  injectDelegationLabelRoles,
   injectRestrictAllow,
   renderCustomRoleBlocks,
 } from '../tools/lib/compose.mjs'
@@ -807,4 +808,71 @@ test('workflow worker 行: ≥0.1.6 宿主整块换 workflow-ptc（字节级只�
   for (const triple of [[0, 1, 5], null, [0, 1], ['0', '1', '6']]) {
     assert.equal(run(triple), SRC, `triple=${JSON.stringify(triple)}`)
   }
+})
+
+// ── k) delegation-labels 委派标签角色名映射 ─────────────────────────────────
+
+/** composeGenerated 快捷入口：SRC + 全量 inventory + 给定 assignments。 */
+function runCompose(assignments) {
+  const blocks = locateAllowBlocks(SRC, yamlMod)
+  const personaBlocks = locatePersonaBlocks(SRC, yamlMod)
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  return composeGenerated(SRC, blocks, personaBlocks, assignments, fullInventory(), restrictBase, {}).text
+}
+
+/** 取生成文本里 delegation-labels 行块（行首到下一个顶层区块头）。 */
+function labelSegment(text) {
+  const idx = text.indexOf('- id: delegation-labels')
+  assert.ok(idx !== -1, 'delegation-labels row not found')
+  return text.slice(idx, text.indexOf('# ── shell', idx))
+}
+
+test('delegation-labels: 配了名字的角色写入 config.roles（内置+自定义），键按字典序', () => {
+  const text = runCompose({
+    ...emptyAssignments(),
+    roles: {
+      implement: { name: '民工码农' },
+      'skill-finder': { name: '技能专家', tools: ['read', 'grep'] },
+      search_external: { name: '   ' }, // 纯空白 = 无名字
+    },
+  })
+  const seg = labelSegment(text)
+  assert.ok(seg.includes('    roles:\n'), '占位应改写为块映射')
+  assert.ok(seg.includes('      implement: 民工码农\n'))
+  assert.ok(seg.includes('      skill-finder: 技能专家\n'))
+  assert.ok(!seg.includes('search_external'), '没配名字的角色不进映射')
+  // 键字典序：implement < skill-finder（反复生成产物稳定）
+  const order = ['implement:', 'skill-finder:'].map((k) => seg.indexOf(k))
+  assert.ok(order[0] < order[1], 'roles 键应按字典序落盘')
+  // 显示名带引号场景：含冒号的名字过 yamlScalar 安全落盘
+  const quoted = labelSegment(
+    runCompose({ ...emptyAssignments(), roles: { design: { name: '设计: 首页' } } }),
+  )
+  assert.ok(quoted.includes("'设计: 首页'"), '含歧义字符的显示名应带引号')
+})
+
+test('delegation-labels: 全空名字 → 占位原样保留（全默认零 diff 的组成部分）', () => {
+  assert.ok(runCompose(emptyAssignments()).includes('    roles: {}          # 生成器按 roles.<toolName>.name 填充'))
+})
+
+test('delegation-labels: roles_remove 删除的角色不进映射', () => {
+  const text = runCompose({
+    ...emptyAssignments(),
+    roles: { implement: { name: '民工码农' }, design: { name: '设计师' } },
+    roles_remove: ['implement'],
+  })
+  const seg = labelSegment(text)
+  assert.ok(!seg.includes('民工码农'), '被删角色不得进映射')
+  assert.ok(seg.includes('      design: 设计师\n'))
+})
+
+test('injectDelegationLabelRoles: 空映射原样返回；模板漂移（无行/无占位）硬错误', () => {
+  assert.equal(injectDelegationLabelRoles(SRC, {}), SRC)
+  assert.equal(injectDelegationLabelRoles(SRC, undefined), SRC)
+  assert.equal(injectDelegationLabelRoles(SRC, { implement: '  ' }), SRC, '全空白名 = 无名字，原样返回')
+  assert.throws(() => injectDelegationLabelRoles('- id: persona', { implement: 'X' }), /delegation-labels row not found/)
+  assert.throws(
+    () => injectDelegationLabelRoles('- id: delegation-labels\n  name: ./delegation-labels.mjs', { implement: 'X' }),
+    /placeholder not found/,
+  )
 })

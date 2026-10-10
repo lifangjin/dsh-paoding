@@ -26,6 +26,10 @@ dsh-paoding 把 DSH 从「单体 agent 全量加载工具」改造成「主 agen
 
 每请求工具开销（估算，随注册面浮动）：主 agent 全量 ~16.2k tokens → 白名单后 ~5.5k；`search_external` ~3.0k / `design` ~3.3k / `implement` ~3.8k，仅在真正委派时发生（数值来源：`agent.cordis.yml` 头部注释）。
 
+### 子代理标签带角色名
+
+委派时主 agent 写下的任务短语（委派工具的 `description` 参数）会随子会话持久化，成为三处展示面的标签：侧栏任务管理页、会话头的子代理目录树、后台任务列表。给角色配了显示名（`roles.<toolName>.name`，见[配置](configuration.md) 2.4）后，安装器在预设里带上 `delegation-labels` 插件行：该角色派出的每个子会话，标签统一为 `角色名 · 原任务短语`（如「民工码农 · 修复标签显示」）——多角色并行时扫一眼就知道谁在干活，不用点进会话核对。改写在工具执行的瀑布上原地完成，主 agent 与子 agent 都无感知；只对配置后新发起的委派生效，已有子会话不追溯。
+
 ### 主 agent persona（编排人设）原文摘录
 
 来自 `presets/orchestrator/agent.cordis.yml` 的 `- id: persona` 行（YAML `prefix: |-` 块标量，内容行缩进 6 空格；v0.3.0 起 persona 配置键为 `prefix`，`text` 是生成器兼容的旧名）。编排与委派的总指引（persona 原文为英文，照录如下）：

@@ -26,6 +26,10 @@ The main agent's model-facing surface is narrowed by `restrict.mjs` on the `syst
 
 Per-request tool tax (estimates; they float with the registered surface): full monolithic main agent ~16.2k tokens → ~5.5k after the allow list; `search_external` ~3.0k / `design` ~3.3k / `implement` ~3.8k, incurred only when actually delegated (figures from the header comment of `agent.cordis.yml`).
 
+### Sub-agent labels carry the role name
+
+The task phrase the main agent writes when delegating (the delegation tool's `description` argument) persists with the sub-session and becomes the label shown in three places: the sidebar task-management page, the sub-agent tree in the session header, and the background-job list. Once a role has a display name configured (`roles.<toolName>.name`, see [Configuration](configuration_en.md) 2.4), the installer ships a `delegation-labels` plugin row with the preset: every sub-session that role spawns gets a uniform label of `role name · original task phrase` (e.g.「民工码农 · 修复标签显示」) — with several roles in flight, one glance tells you who is doing what, no session-digging required. The rewrite happens in-place on the tools waterfall; neither the main agent nor the sub-agent needs to cooperate or even know. It applies only to delegations spawned after the configuration change — existing sub-sessions are not relabeled.
+
 ### Main-agent persona (excerpt, verbatim)
 
 Taken from the `- id: persona` row of `presets/orchestrator/agent.cordis.yml` (a YAML `prefix: |-` block scalar whose content lines are indented 6 spaces; as of v0.3.0 the persona config key is `prefix`, with `text` kept as a legacy alias the generator still accepts). The overall orchestration-and-delegation guidance:

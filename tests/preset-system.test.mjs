@@ -166,6 +166,37 @@ test('buildPresetRowText: 缺省 name/description/order 时行省略；非法入
   assert.throws(() => buildPresetRowText({ presetId: 'orchestrator', agentYmlText: 'x', restrictFileUrl: '' }))
 })
 
+test('buildPresetRowText: delegation-labels 行同款换绝对 file: URL；引用该行而缺 URL 时硬错误', () => {
+  const agentYmlText = [
+    '- id: orchestrator-restrict',
+    '  name: ./restrict.mjs',
+    '',
+    '- id: delegation-labels',
+    '  name: ./delegation-labels.mjs',
+    '  config:',
+    '    roles: {}',
+  ].join('\n')
+  const row = buildPresetRowText({
+    presetId: 'orchestrator',
+    agentYmlText,
+    restrictFileUrl: 'file:///tmp/r.mjs',
+    delegationLabelsFileUrl: 'file:///tmp/dl.mjs',
+  })
+  assert.ok(row.includes('          name: file:///tmp/dl.mjs'), 'delegation-labels 行应 +10 缩进换 URL')
+  assert.equal(row.includes('./delegation-labels.mjs'), false, '不得残留相对路径')
+  assert.ok(row.includes('          name: file:///tmp/r.mjs'), 'restrict 行照旧换 URL')
+
+  // 文本里引用了该行但未提供 URL → 硬错误（相对名静默进 patch 会让 preset 挂掉）
+  assert.throws(
+    () => buildPresetRowText({ presetId: 'orchestrator', agentYmlText, restrictFileUrl: 'file:///tmp/r.mjs' }),
+    /delegationLabelsFileUrl/,
+  )
+  // 文本不含该行 → 不要求提供（兼容旧行为/合成样例文本）
+  assert.doesNotThrow(() =>
+    buildPresetRowText({ presetId: 'orchestrator', agentYmlText: '- id: persona\n  name: x', restrictFileUrl: 'file:///tmp/r.mjs' }),
+  )
+})
+
 // ── home patch 托管块手术 ───────────────────────────────────────────────────
 
 test('upsertHomePatchRows: 空文件建块，整文件可被仓库 YAML 解析器还原出声明行', () => {
@@ -333,7 +364,7 @@ test('generateAndInstall: declarative 轨落盘三件套 + home patch 托管块�
 
   // 目录轨产物照旧齐全（两轨同目录同名，宿主侧机制差异而已）
   const dstDir = path.join(dshHome, '.agent-presets', 'orchestrator')
-  for (const f of ['agent.cordis.yml', 'preset.yml', 'restrict.mjs']) {
+  for (const f of ['agent.cordis.yml', 'preset.yml', 'restrict.mjs', 'delegation-labels.mjs']) {
     assert.ok(existsSync(path.join(dstDir, f)), `产物缺失: ${f}`)
   }
 
@@ -343,6 +374,11 @@ test('generateAndInstall: declarative 轨落盘三件套 + home patch 托管块�
   assert.deepEqual(readHomePatchRows(dshHome), [{ rowId: 'preset-orchestrator', presetId: 'orchestrator' }])
   assert.ok(text.includes(`name: ${pathToFileURL(path.join(dstDir, 'restrict.mjs')).href}`), 'restrict 行必须绝对 file: URL')
   assert.ok(!text.includes('./restrict.mjs'), '不得残留相对 restrict 路径')
+  assert.ok(
+    text.includes(`name: ${pathToFileURL(path.join(dstDir, 'delegation-labels.mjs')).href}`),
+    'delegation-labels 行必须绝对 file: URL',
+  )
+  assert.ok(!text.includes('./delegation-labels.mjs'), '不得残留相对 delegation-labels 路径')
   assert.ok(text.includes('maxTokens: 8192'), 'config.plugins 应内联生成的 agent.cordis.yml 全文')
   const decl = flattenEntries(parseYamlSubset(text)).find((e) => e && e.name === PRESET_ROW_NAME)
   assert.ok(decl, '声明行应可解析')
@@ -472,6 +508,7 @@ test('backfillHomePatchRows: 按磁盘产物补行（元数据取自 preset.yml�
   const text = readFileSync(patchFile, 'utf8')
   assert.ok(text.includes('name: "编排模式·ws1"'), '行元数据应取自目录内 preset.yml')
   assert.ok(text.includes(`name: ${pathToFileURL(path.join(ws, 'restrict.mjs')).href}`), 'restrict 行必须绝对 file: URL')
+  assert.ok(text.includes(`name: ${pathToFileURL(path.join(ws, 'delegation-labels.mjs')).href}`), 'delegation-labels 行必须绝对 file: URL')
 
   // 幂等：行已在 → 不写盘（字节不变）
   const before = readFileSync(patchFile, 'utf8')
@@ -492,7 +529,22 @@ test('backfillHomePatchRows: 按磁盘产物补行（元数据取自 preset.yml�
   cpSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'agent.cordis.yml'), path.join(d3, '.agent-presets', 'orchestrator-ws2', 'agent.cordis.yml'))
   cpSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'preset.yml'), path.join(d3, '.agent-presets', 'orchestrator-ws2', 'preset.yml'))
   cpSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'restrict.mjs'), path.join(d3, '.agent-presets', 'orchestrator-ws2', 'restrict.mjs'))
+  cpSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'delegation-labels.mjs'), path.join(d3, '.agent-presets', 'orchestrator-ws2', 'delegation-labels.mjs'))
   assert.deepEqual(backfillHomePatchRows(d3, listOrchestratorPresetIds(d3)), ['orchestrator-ws2'])
+
+  // 产物只缺 delegation-labels.mjs（老版生成器留下的目录）→ 与缺 restrict.mjs
+  // 同款：跳过并 warn，不拖垮其余补写、不落半残声明行
+  const d4 = freshEnv('backfill-nolabels').dshHome
+  mkdirSync(path.join(d4, '.agent-presets', 'orchestrator-ws3'), { recursive: true })
+  cpSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'agent.cordis.yml'), path.join(d4, '.agent-presets', 'orchestrator-ws3', 'agent.cordis.yml'))
+  cpSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'preset.yml'), path.join(d4, '.agent-presets', 'orchestrator-ws3', 'preset.yml'))
+  cpSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'restrict.mjs'), path.join(d4, '.agent-presets', 'orchestrator-ws3', 'restrict.mjs'))
+  assert.deepEqual(backfillHomePatchRows(d4, listOrchestratorPresetIds(d4)), [], '缺 delegation-labels.mjs 不得补写')
+  assert.ok(
+    !existsSync(path.join(d4, 'cordis.patch.yml')) ||
+      !readFileSync(path.join(d4, 'cordis.patch.yml'), 'utf8').includes('orchestrator-ws3'),
+    '不落半残声明行',
+  )
 })
 
 // ── detectPresetSystem：进程 argv 宿主版本 rung ─────────────────────────────

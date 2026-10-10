@@ -16,7 +16,10 @@
  * 行行尾兜底注入；'one-shot' 不动源行 —— 源模板四块各预置
  * `backgroundMode: one-shot`（可见性），全默认产物与源零 diff）、
  * restrict config.allow 注入（computeRestrictAllow /
- * injectRestrictAllow / filterUsableTools）与整文 compose（composeGenerated）。
+ * injectRestrictAllow / filterUsableTools）、委派标签角色名映射注入
+ * （injectDelegationLabelRoles：roles.<toolName>.name → delegation-labels 行的
+ * config.roles，运行期给委派调用的 description 加「角色名 · 」前缀）与整文
+ * compose（composeGenerated）。
  * allow 过滤走白名单语义（usableWith / presetUniverse ∪ inventory，见
  * filterUsableTools 上方说明）：手写进配置、既不在 preset 自带工具面也不在
  * 检测库存的名字一律从 allow 丢弃，不再「非 host 依赖名直通」。
@@ -326,6 +329,45 @@ export function injectRestrictAllow(srcText, allowList) {
   const insertAt = idx + marker.length
   const block = `\n  config:\n    allow:\n${allowList.map((n) => `      - ${n}`).join('\n')}`
   return srcText.slice(0, insertAt) + block + srcText.slice(insertAt)
+}
+
+/**
+ * 委派标签角色名映射注入（delegation-labels 行的 config.roles）：把
+ * delegation-labels.mjs 模板行的 `roles: {}` 占位改写为实际映射
+ * （toolName → 显示名，键值均过 yamlScalar 落安全标量）。运行期
+ * delegation-labels.mjs 据此在 tools/pre-execute 瀑布上给委派调用的
+ * description 加「角色名 · 」前缀（子会话 label / job label 的持久展示名）。
+ * 无任何名字时直接返回原文（产物与源零 diff，插件侧拿到空映射也不注册
+ * 处理器）；找不到 delegation-labels 行或 `roles: {}` 占位属模板漂移，硬
+ * 错误（与 injectRestrictAllow 的失败口径一致）。键按字典序落盘，同一配置
+ * 反复生成产物稳定。
+ */
+export function injectDelegationLabelRoles(srcText, roleNames) {
+  const entries = Object.entries(roleNames ?? {})
+    .filter(
+      ([toolName, displayName]) =>
+        typeof toolName === 'string' && toolName !== '' && typeof displayName === 'string' && displayName.trim() !== '',
+    )
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  if (entries.length === 0) return srcText
+  const marker = '- id: delegation-labels'
+  const idx = srcText.indexOf(marker)
+  if (idx === -1) throw new Error('delegation-labels row not found')
+  // 行块边界 = 下一条顶层 `- id: ` 行（本块只有 id / name / config.roles 三件），
+  // 占位匹配限定在块内，防误吞后续行的同名键。
+  const nextRow = srcText.indexOf('\n- id: ', idx + marker.length)
+  const blockEnd = nextRow === -1 ? srcText.length : nextRow
+  const rolesIdx = srcText.indexOf('roles: {}', idx)
+  if (rolesIdx === -1 || rolesIdx >= blockEnd) {
+    throw new Error('delegation-labels row: `roles: {}` placeholder not found')
+  }
+  const lineStart = srcText.lastIndexOf('\n', rolesIdx - 1) + 1
+  const lineEnd = srcText.indexOf('\n', rolesIdx)
+  const rendered = entries
+    .map(([toolName, displayName]) => `      ${yamlScalar(toolName)}: ${yamlScalar(displayName.trim())}`)
+    .join('\n')
+  const end = lineEnd === -1 ? srcText.length : lineEnd
+  return srcText.slice(0, lineStart) + `    roles:\n${rendered}` + srcText.slice(end)
 }
 
 /**
@@ -873,6 +915,18 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
     throw new Error('main_agent_remove 把主 agent 的工具清空了——至少保留一个工具（或清掉多余的移除项）')
   }
   if (restrictAllow !== null) out = injectRestrictAllow(out, restrictAllow)
+
+  // 委派标签角色名映射（delegation-labels 行的 config.roles）：roles.<toolName>.name
+  // 的第二处生效点——内置与自定义角色一律收（配了名字才进映射，标签才带前缀）；
+  // roles_remove 删除的角色委派行已整条不存在，跳过；全空则产物与源零 diff，
+  // 插件侧对空映射也不注册任何处理器。
+  const delegationLabelRoles = {}
+  for (const [toolName, role] of Object.entries(assignments.roles)) {
+    if (removedRoles.includes(toolName)) continue
+    const name = typeof role?.name === 'string' && role.name.trim() !== '' ? role.name.trim() : null
+    if (name !== null) delegationLabelRoles[toolName] = name
+  }
+  out = injectDelegationLabelRoles(out, delegationLabelRoles)
 
   // Main-agent skills (dual mode, mirrors the roles' skill soft guidance):
   //   - main_agent_skills (soft): one compact "# skill: <name> — <description>"

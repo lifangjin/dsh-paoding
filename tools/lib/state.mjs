@@ -59,6 +59,25 @@ import {
 } from './preset-system.mjs'
 
 /**
+ * 预设源文件清单（generateAndInstall 原样复制件；agent.cordis.yml 走重写，
+ * 不在此列）。collectState 的存在性检查与物化复制共用同一份，加源文件只改
+ * 这一处。delegation-labels.mjs 与 restrict.mjs 同生命周期：都是本地 cordis
+ * 插件，声明行轨内联时按绝对 file: URL 引用。
+ */
+export const PRESET_ASIS_FILES = ['preset.yml', 'restrict.mjs', 'delegation-labels.mjs']
+
+/**
+ * 预设源文件存在性检查（collectState 第一步）：全部源文件缺任一件即硬错误，
+ * 报错点名缺的文件——delegation-labels.mjs 与 restrict.mjs 同口径。
+ */
+export function assertPresetSourceFiles(srcDir = SRC_DIR) {
+  for (const name of ['agent.cordis.yml', ...PRESET_ASIS_FILES]) {
+    const file = path.join(srcDir, name)
+    if (!existsSync(file)) throw new Error(`missing preset source file: ${file}`)
+  }
+}
+
+/**
  * Reusable state collection for the CLI and the visual config UI.
  * Runs the whole detection pipeline (patch scan, MCP handshakes, plugin and
  * skill detection, smart defaults) and returns everything the generator needs,
@@ -78,10 +97,7 @@ export async function collectState({ dshHome, configFile, profile = null, patche
   const dstAgentFile = path.join(dstDir, 'agent.cordis.yml')
 
   // Source preset files must exist before anything else.
-  const sourceFiles = ['agent.cordis.yml', 'preset.yml', 'restrict.mjs'].map((f) => path.join(SRC_DIR, f))
-  for (const file of sourceFiles) {
-    if (!existsSync(file)) throw new Error(`missing preset source file: ${file}`)
-  }
+  assertPresetSourceFiles()
 
   const yamlMod = loadYaml(dshHome)
   const srcText = readFileSync(path.join(SRC_DIR, 'agent.cordis.yml'), 'utf8')
@@ -437,7 +453,7 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
     mkdirSync(path.join(dshHome, '.agent-presets'), { recursive: true })
     rmSync(dstDir, { recursive: true, force: true })
     mkdirSync(dstDir, { recursive: true })
-    for (const name of ['preset.yml', 'restrict.mjs']) {
+    for (const name of PRESET_ASIS_FILES) {
       const src = path.join(SRC_DIR, name)
       const dst = path.join(dstDir, name)
       if (name === 'preset.yml' && displayName !== null) {
@@ -517,7 +533,8 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
   // declarative（0.1.7+）：目录扫描机制已删，必须把本 preset 以一条 `- insert:`
   // 声明行写进 home patch 托管块才算安装完成（preset 元信息与写 preset.yml 同
   // 源：显示名取 displayName ?? SRC preset.yml 的 name，description / order 取
-  // SRC；restrict.mjs 用绝对 file: URL——声明行没有「相对 preset 目录」语义）。
+  // SRC；restrict.mjs / delegation-labels.mjs 用绝对 file: URL——声明行没有
+  // 「相对 preset 目录」语义）。
   // directory（≤0.1.6）：上面落盘即完成；home patch 里若有残留托管声明块
   //（宿主刚从 0.1.7 降级等场景）整块撤下自愈——残留声明行会让 profile 启动失败。
   if (wrote) {
@@ -531,6 +548,7 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
           order: meta.order,
           agentYmlText: generatedText,
           restrictFileUrl: pathToFileURL(path.join(dstDir, 'restrict.mjs')).href,
+          delegationLabelsFileUrl: pathToFileURL(path.join(dstDir, 'delegation-labels.mjs')).href,
         }),
       ])
     } else if (readHomePatchRows(dshHome).length > 0) {

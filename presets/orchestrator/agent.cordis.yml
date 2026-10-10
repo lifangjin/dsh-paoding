@@ -7,6 +7,9 @@
 #   · orchestrator-restrict → restrict.mjs 在 system-prompt/assemble 瀑布上把
 #     主 agent 的工具面裁剪为「编排 + 内部搜索」白名单；子 agent（origin:
 #     'subagent'）放行，由各自 toolFilter 决定工具面
+#   · delegation-labels → delegation-labels.mjs 在 tools/pre-execute 瀑布上把
+#     命中角色的委派调用 description 原地改写为「角色名 · 原任务短语」，任务
+#     管理页 / 子代理目录树 / 后台任务列表的标签统一带角色名
 #   · delegation-*       → 4 个角色委派工具（dsh-tool-subagent，search_internal_deep 为静态委派），子 agent 创建时
 #     以 per-child tools.restrict() 只保留各自 allow 的工具
 #
@@ -67,6 +70,16 @@
 # 过滤主 agent 的 assembly.tools 为编排 + 内部搜索面；子 agent 放行。
 - id: orchestrator-restrict
   name: ./restrict.mjs
+
+# ── 委派标签角色名前缀 ───────────────────────────────────────────────────────
+# delegation-labels.mjs 挂 tools/pre-execute 瀑布，把命中角色的委派调用
+# description 原地改写为「角色名 · 原任务短语」——子会话 label 持久化后，任务
+# 管理页、会话头子代理目录树与后台任务列表统一显示角色名。roles 由生成器按
+# roles.<toolName>.name 填充；空对象 = 没有角色配了名字，插件不注册任何处理器。
+- id: delegation-labels
+  name: ./delegation-labels.mjs
+  config:
+    roles: {}          # 生成器按 roles.<toolName>.name 填充
 
 # ── shell ───────────────────────────────────────────────────────────────────
 

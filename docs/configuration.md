@@ -48,7 +48,7 @@ dsh-paoding 把「按角色分工的编排 preset」做成**配置驱动**：你
 
 - `roles.<toolName>.persona`：非空字符串**整体替换**该角色的部署 persona（含 `''` 与缺省 = 保留静态默认）。自定义角色缺省 persona 为 `You are the <toolName> agent. Handle tasks delegated to this role.`
 - `roles.<toolName>.tools`：`toolName` 属内置三角色时**全量覆盖**该角色 `toolFilter.allow` 的意图（安装器再对 host 依赖的名字做检测求交）；缺省 = 保留静态 allow。三角色若最终 allow 为空，安装直接报错（拒绝安装零工具角色）。
-- `roles.<toolName>.name`：仅对内置三角色生效的可选 `string | null` 显示名（缺省 `null` = 用该角色内置默认身份）。只替换该角色**默认** persona 首行身份句的主语——design 默认 `You are the design agent.`，配 `name: UI 设计` 后为 `You are the UI 设计 agent.`，句子其余文字不动；约束、边界与示例见 2.4。
+- `roles.<toolName>.name`：可选 `string | null` 显示名（内置与自定义角色条目同收；缺省 `null` = 内置三角色用默认身份）。内置角色用它替换该角色**默认** persona 首行身份句的主语——design 默认 `You are the design agent.`，配 `name: UI 设计` 后为 `You are the UI 设计 agent.`；凡配了名字的角色，委派标签一律加前缀（「角色名 · 任务短语」，见 2.4）——自定义角色只有标签效果（persona 本就是你写的原文）。约束、边界与示例见 2.4。
 - `roles.<toolName>.model`：该角色的专用模型 id（可选 `string`）。配置后，该角色派出的每个子 agent 都固定用这个模型，不再随主 agent 会话当前模型走；缺省 = 不注入 `agentOptions`，子 agent 继承主 agent 的模型（详见 2.5）。
 - `roles.<toolName>.provider`：该角色模型所在的 provider 路由（可选 `string`）。须与 `model` 成对配置才生效，只配 `provider` 会被安装器告警并忽略；只配 `model` 时沿用主 agent 的 provider 路由（详见 2.5）。
 - `roles.<toolName>.background_mode`：该角色的会话模式（可选 `'one-shot' | 'continuable'`，缺省 `one-shot`）——一次性用完即弃，或可续：子会话跨轮保留，主 agent 用 `send_message` 就地续修。内置角色与自定义角色同语义；continuable 的前置、代价与面板路径见 2.6。
@@ -201,24 +201,36 @@ roles_remove:
 
 ### 2.4 内置角色显示名：roles.\<toolName>.name
 
-内置三角色（`search_external` / `design` / `implement`）的条目下可写可选子键 `name`（`string | null`；缺省 / `null` = 用该角色**内置默认身份**）。它的作用窄而明确：**只替换该角色默认 persona 首行身份句的主语**——身份句其余文字（职责描述、行为边界等）原样不动，工具面与委派机制一概不碰。
+内置三角色（`search_external` / `design` / `implement`）的条目下可写可选子键 `name`（`string | null`；缺省 / `null` = 用该角色**内置默认身份**）。它有两处生效点，共用同一个配置：
 
-例：design 默认身份句是 `You are the design agent.`，配 `name: UI 设计` 后生成 `You are the UI 设计 agent.`：
+- **persona 身份句**：只替换该角色默认 persona 首行身份句的主语——身份句其余文字（职责描述、行为边界等）原样不动，工具面与委派机制一概不碰。
+- **委派标签前缀**：安装器把名字写进预设的 `delegation-labels` 插件行，该角色派出的每个子会话，其持久标签都会变成 `角色名 · 原任务短语`（详见下文「委派标签带角色名」）。
+
+例：design 默认身份句是 `You are the design agent.`，配 `name: UI 设计` 后生成 `You are the UI 设计 agent.`，同时该角色的委派标签形如「UI 设计 · 首页视觉方案」：
 
 ```yaml
 roles:
   design:
-    name: UI 设计      # 只换 persona 身份句主语；tools 可省（回落默认工具面）
+    name: UI 设计      # 换 persona 身份句主语 + 委派标签前缀；tools 可省（回落默认工具面）
 ```
 
-约束：trim 后 1–60 字符、不可含换行；空字符串 / 缺省 = 用该角色内置默认身份（不写此子键时，身份句是 SRC 原文，安装器不做任何替换）。
+约束：trim 后 1–60 字符、不可含换行；空字符串 / 缺省 = 用该角色内置默认身份、标签不加前缀（不写此子键时，身份句是 SRC 原文，安装器不做任何替换）。
 
 边界：
 
-- **只动 persona 身份句**：工具注册名与委派调用名（toolName）不变——主 agent 仍按 `search_external` / `design` / `implement` 委派；`restrict allow` 与主 agent persona 里的委派指引（如 `delegate to design`）也都不变。
-- **persona 被自定义时 `name` 不生效**：同一条目写了非空 `persona`（覆盖默认 persona）时，安装器在生成时忽略 `name` 并告警——想把名字显出来，直接写进自定义 persona 首行（如 `persona: |-` 块第一句 `You are the UI 设计 agent.`），此时无需 `name` 子键。
-- **被删除的角色不涉及**：`roles_remove` 整条删除的角色没有 persona 可改（见 2.3）。
-- **静态角色不在列**：`search_internal_deep` 不在安装器管理的三角色内，无此子键（见 2.2）。
+- **标签只加前缀，不动正文**：任务管理页、会话头子代理目录树与后台任务列表展示的就是委派时的 `description`，安装器不在其中改写任何任务语义。
+- **改名不碰机制面**：工具注册名与委派调用名（toolName）不变——主 agent 仍按 `search_external` / `design` / `implement` 委派；`restrict allow` 与主 agent persona 里的委派指引（如 `delegate to design`）也都不变。
+- **persona 被自定义时身份句不生效、标签前缀照常生效**：同一条目写了非空 `persona`（覆盖默认 persona）时，安装器在生成时忽略 `name` 的身份句替换并告警——想让名字显出来，直接写进自定义 persona 首行；但标签前缀不依赖 persona，配置后照常生效。
+- **被删除的角色不涉及**：`roles_remove` 整条删除的角色没有 persona，也没有委派可打标签（见 2.3）。
+- **静态角色不在列**：`search_internal_deep` 不在安装器管理的三角色内，无此子键，标签保持原样（见 2.2）。
+
+#### 委派标签带角色名
+
+委派工具调用的 `description` 参数会随子会话持久化，成为三处展示面的标签：侧栏任务管理页、会话头的子代理目录树、后台任务列表。编排模型随手写的 description 只是一句任务短语，多角色并行时扫一眼分不清谁在干活。安装器据此把配置了名字的角色的委派调用统一改写成 `角色名 · 原任务短语`——改写发生在工具执行的瀑布上（`delegation-labels.mjs`，随预设一起安装），不依赖提示词配合，主 agent 无感知。几点口径：
+
+- **幂等**：已带前缀的标签不会重复加前缀；
+- **只对新委派生效**：改配置之前已经开出去的子会话不追溯；
+- **自定义角色同享**：`roles` 键下任何角色（内置或自定义，见第 6 节）配了 `name` 都进这套前缀。
 
 生效方式与主 agent 显示名同款（见 5.1）：
 
@@ -453,7 +465,7 @@ main_agent_display_name: 庖丁   # 仅 preset 显示名换成「庖丁」，per
 
 - **手编**：写键后在「庖丁配置」点「保存并应用」，再重启 GUI / 新会话生效。
 - **面板**：左侧栏「庖丁配置」→ 主 agent 卡「主 agent 显示名（仅 preset 显示名）」输入框（带「恢复默认」按钮），点「保存并应用」后**重启 GUI / 新会话**生效。
-- **对照**：显示名线共两条、互不牵连：`main_agent_display_name`（仅主 agent 的 preset 显示名，见 5.1）、`roles.<toolName>.name`（内置角色默认 persona 首行身份句的主语，不改工具调用名，见 2.4），可各自独立配置。
+- **对照**：显示名线共两条、互不牵连：`main_agent_display_name`（仅主 agent 的 preset 显示名，见 5.1）、`roles.<toolName>.name`（角色 persona 身份句主语 + 委派标签前缀，不改工具调用名，见 2.4），可各自独立配置。
 
 ### 5.2 追加三态语义：main_agent_persona_extra
 
@@ -496,6 +508,10 @@ main_agent_display_name: 庖丁   # 仅 preset 显示名换成「庖丁」，per
 生成器会把角色 persona 的**首行职责句自动追加为主 agent persona 的委派行**（`- <职责>: delegate to
 <toolName>.`，紧跟既有委派行之后）——主 agent 全靠这行知道什么活该派给谁，因此建议把 persona 首行
 写成一句简短职责（例如「你的职责就是查找符合用户要求的技能」）。
+
+另有一个可选子键：自定义角色条目同样支持 `name`——它不参与 persona 身份句替换（自定义角色的
+persona 就是你写的原文），唯一作用是**委派标签前缀**（见 2.4「委派标签带角色名」）：配了名字，这个
+角色派出的子会话标签就是「名字 · 任务短语」，多个自定义角色并行时一眼可辨。
 
 ### 6.1 路径一：庖丁配置面板（推荐）
 

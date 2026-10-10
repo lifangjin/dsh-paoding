@@ -33,7 +33,7 @@ The key names below match `normalizeConfig` in `tools/lib/config.mjs` — the si
 | Top-level key | Type | Semantics |
 |---|---|---|
 | `profile` | string | Which profile's patch layer (`$DSH_HOME/profiles/<profile>/cordis.patch.yml`) is scanned during detection; default `web` |
-| `roles` | map | `toolName` → `{ persona?, name?, tools[], model?, provider?, start_mode?, background_mode? }`. For the three built-in roles (`search_external` / `design` / `implement`): overrides the persona and the allow intent, and may carry a `name` display name (rewrites only the subject of that role's default persona identity sentence — see 2.4), a dedicated model (`model` / `provider`, see 2.5), a session mode (`background_mode`, see 2.6) and a start mode (`start_mode`, see 2.7). Any other key is a **custom role**: the installer emits a fresh `delegation-<toolName>` block and injects the toolName into the main agent's `config.allow` (sections 2 and 6) |
+| `roles` | map | `toolName` → `{ persona?, name?, tools[], model?, provider?, start_mode?, background_mode? }`. For the three built-in roles (`search_external` / `design` / `implement`): overrides the persona and the allow intent, and may carry a `name` display name (rewrites the subject of that role's default persona identity sentence and prefixes its delegation labels — see 2.4), a dedicated model (`model` / `provider`, see 2.5), a session mode (`background_mode`, see 2.6) and a start mode (`start_mode`, see 2.7). Any other key is a **custom role**: the installer emits a fresh `delegation-<toolName>` block and injects the toolName into the main agent's `config.allow` (sections 2 and 6) |
 | `roles_remove` | string[] | toolNames of built-in roles deleted wholesale (only `search_external` / `design` / `implement` are accepted; other names are ignored with a warning; default `[]`). Deleting means the delegation block / tool surface / role persona / main-agent delegation guidance are no longer generated (see 2.3) |
 | `skills` | map | `skill` → the list of role toolNames the skill is assigned to; the installer appends an `Available skills: …` guidance sentence to those roles' personas (section 7) |
 | `main_agent_extra` | string[] | Tools appended to the main-agent allow list (host tools such as `mcp__codegraph__codegraph_explore`, `memory_search`, `mnemon_*`); names are checked against the preset's own tool face ∪ the detection inventory — a name in neither is not injected |
@@ -48,7 +48,7 @@ The key names below match `normalizeConfig` in `tools/lib/config.mjs` — the si
 
 - `roles.<toolName>.persona`: a non-empty string **replaces the role's deployment persona wholesale** (`''` or absent keeps the static default). A custom role without a persona gets `You are the <toolName> agent. Handle tasks delegated to this role.`
 - `roles.<toolName>.tools`: when `toolName` is one of the three built-ins this **fully overrides the intent** of that role's `toolFilter.allow` (the installer then intersects host-dependent names with what was actually detected); absent keeps the static allow. If a built-in role would end up with an empty allow, the install aborts (a zero-tool role is refused).
-- `roles.<toolName>.name`: an optional `string | null` display name for the built-in trio only (absent / `null` = the role's built-in default identity). It rewrites only the **subject of that role's default persona identity sentence** — design's default `You are the design agent.` with `name: UI 设计` becomes `You are the UI 设计 agent.`, with the rest of the sentence untouched; constraints, boundaries and an example are in 2.4.
+- `roles.<toolName>.name`: an optional `string | null` display name (built-in and custom role entries alike; absent / `null` = the built-in trio keeps its default identity). For built-ins it rewrites the **subject of that role's default persona identity sentence** — design's default `You are the design agent.` with `name: UI 设计` becomes `You are the UI 设计 agent.` — and for every named role it prefixes the role's delegation labels (`role name · task phrase`, see 2.4); custom roles only get the label effect, since their persona is your text. Constraints, boundaries and an example are in 2.4.
 - `roles.<toolName>.model`: a dedicated model id for the role (optional `string`). When set, every sub-agent the role spawns runs on that model instead of following the main agent's current session model; absent = nothing is injected and the child inherits the main agent's model (see 2.5).
 - `roles.<toolName>.provider`: the provider route the role's model lives on (optional `string`). It only takes effect paired with `model`; a lone `provider` is warned about and ignored by the installer, while a lone `model` rides the main agent's provider route (see 2.5).
 - `roles.<toolName>.background_mode`: the role's session mode (optional `'one-shot' | 'continuable'`; default `one-shot`) — run-and-discard, or continuable: the child conversation is kept across turns so the main agent can resume in place with `send_message`. Built-in and custom role entries share the semantics; the continuable prerequisites, costs and panel path are in 2.6.
@@ -201,24 +201,36 @@ Restoring:
 
 ### 2.4 Built-in role display names: roles.\<toolName>.name
 
-Entries of the built-in trio (`search_external` / `design` / `implement`) may carry an optional `name` sub-key (`string | null`; absent / `null` = the role's **built-in default identity**). Its effect is narrow and explicit: **it rewrites only the subject of that role's default persona identity sentence at the head of the persona** — the rest of the sentence (job description, behavior boundaries, …) stays verbatim, and the tool surface / delegation machinery are never touched.
+Entries of the built-in trio (`search_external` / `design` / `implement`) may carry an optional `name` sub-key (`string | null`; absent / `null` = the role's **built-in default identity**). It takes effect in two places off a single setting:
 
-Example: design's default identity sentence is `You are the design agent.`; with `name: UI 设计` it is generated as `You are the UI 设计 agent.`:
+- **Persona identity sentence**: rewrites only the subject of that role's default persona identity sentence at the head of the persona — the rest of the sentence (job description, behavior boundaries, …) stays verbatim, and the tool surface / delegation machinery are never touched.
+- **Delegation label prefix**: the installer writes the name into the preset's `delegation-labels` plugin row; every sub-session the role spawns gets a persistent label of the form `role name · original task phrase` (see "Delegation labels carry the role name" below).
+
+Example: design's default identity sentence is `You are the design agent.`; with `name: UI 设计` it is generated as `You are the UI 设计 agent.`, and that role's delegation labels look like「UI 设计 · 首页视觉方案」:
 
 ```yaml
 roles:
   design:
-    name: UI 设计      # rewrites only the subject of the persona identity sentence; tools may be omitted (the default tool surface applies)
+    name: UI 设计      # rewrites the persona identity sentence subject + delegation label prefix; tools may be omitted (the default tool surface applies)
 ```
 
-Constraints: trimmed, 1–60 characters, no newlines; an empty string / an absent key = the role's built-in default identity (without the sub-key the identity sentence stays verbatim from the SRC — the installer substitutes nothing).
+Constraints: trimmed, 1–60 characters, no newlines; an empty string / an absent key = the role's built-in default identity and no label prefix (without the sub-key the identity sentence stays verbatim from the SRC — the installer substitutes nothing).
 
 Boundaries:
 
-- **Only the persona identity sentence moves**: the tool registration name and the delegation call name (toolName) stay unchanged — the main agent still delegates to `search_external` / `design` / `implement`; `restrict allow` and the delegation guidance in the main-agent persona (e.g. `delegate to design`) are untouched too.
-- **`name` does not apply once the persona is customized**: when the same entry carries a non-empty `persona` (overriding the default), the installer ignores `name` at generation with a warning — to surface the name, write it directly into the first line of the custom persona (e.g. the first sentence of the `persona: |-` block: `You are the UI 设计 agent.`); the `name` sub-key is then unnecessary.
-- **Deleted roles are not involved**: a role deleted wholesale by `roles_remove` has no persona left to rewrite (see 2.3).
-- **The static role is out of scope**: `search_internal_deep` is outside the installer-managed trio and has no such sub-key (see 2.2).
+- **Labels only get a prefix; the body is never rewritten**: the task-management page, the sub-agent tree in the session header and the background-job list all show the `description` captured at delegation time — the installer rewrites no task semantics inside it.
+- **Renaming never touches the machinery**: the tool registration name and the delegation call name (toolName) stay unchanged — the main agent still delegates to `search_external` / `design` / `implement`; `restrict allow` and the delegation guidance in the main-agent persona (e.g. `delegate to design`) are untouched too.
+- **With a custom persona the identity sentence is skipped but the label prefix still applies**: when the same entry carries a non-empty `persona` (overriding the default), the installer skips the `name` identity-sentence rewrite at generation with a warning — to surface the name, write it directly into the first line of the custom persona; the label prefix does not depend on the persona and applies as configured.
+- **Deleted roles are not involved**: a role deleted wholesale by `roles_remove` has no persona left and no delegations left to label (see 2.3).
+- **The static role is out of scope**: `search_internal_deep` is outside the installer-managed trio and has no such sub-key; its labels stay as written (see 2.2).
+
+#### Delegation labels carry the role name
+
+The `description` argument of a delegation tool call persists with the sub-session and becomes the label shown in three places: the sidebar task-management page, the sub-agent tree in the session header, and the background-job list. A task phrase the orchestrator jots down says nothing about who is doing the work once several roles run in parallel. For every role with a configured name, the installer therefore rewrites its delegation calls to `role name · original task phrase` — the rewrite happens in-place on the tools/pre-execute waterfall (`delegation-labels.mjs`, installed with the preset), with no reliance on prompt cooperation and no awareness required from the main agent. Ground rules:
+
+- **Idempotent**: a label that already carries the prefix never gets a second one;
+- **New delegations only**: sub-sessions spawned before the configuration change are not relabeled;
+- **Custom roles included**: any role under the `roles` key (built-in or custom, see section 6) with a `name` joins this prefixing.
 
 Applying it works just like the main-agent display name (see 5.1):
 
@@ -453,7 +465,7 @@ Where to set it:
 
 - **Hand-editing**: write the key and hit Save & Apply in 庖丁配置, then restart the GUI or open a new session.
 - **Panel**: 庖丁配置 (left sidebar) → main-agent card, the「主 agent 显示名（仅 preset 显示名）」("main agent display name (preset display name only)") input, with its「恢复默认」("restore default") button; after「保存并应用」(save & apply) it takes effect on a **GUI restart / new session**.
-- For contrast: there are two independent naming lines that never interfere with each other: `main_agent_display_name` (the main agent's preset display name only, see 5.1) and `roles.<toolName>.name` (the subject of a built-in role's default persona identity sentence, never the tool call name — see 2.4). Configure each on its own.
+- For contrast: there are two independent naming lines that never interfere with each other: `main_agent_display_name` (the main agent's preset display name only, see 5.1) and `roles.<toolName>.name` (a role's persona identity-sentence subject + delegation label prefix, never the tool call name — see 2.4). Configure each on its own.
 
 ### 5.2 Persona extra: three-state semantics
 
@@ -502,6 +514,12 @@ least one tool before applying. Second, the generator
 row** (`- <duty>: delegate to <toolName>.`, right after the existing delegation rows); that row is the
 main agent's only routing hint for the role, so make the persona's first line a short duty sentence
 (e.g. "Find the skill that matches the user's need").
+
+One optional sub-key on top: custom role entries accept `name` too — it takes no part in the persona
+identity-sentence rewrite (a custom role's persona is verbatim what you wrote) and its only effect is
+the **delegation label prefix** (see 2.4, "Delegation labels carry the role name"): with a name set,
+this role's sub-session labels read `name · task phrase`, easy to tell apart when several custom roles
+run in parallel.
 
 ### 6.1 Path 1: the 庖丁配置 panel (recommended)
 

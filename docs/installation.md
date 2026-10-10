@@ -19,13 +19,13 @@
 |---|---|---|
 | `$DSH_HOME` | `~/.dsh` | DSH 家目录（认环境变量 `DSH_HOME`，缺省 `$HOME/.dsh`）。host 层配置 `cordis.patch.yml`、`node_modules`、`profiles/<name>/cordis.patch.yml`、插件 profile 目录都在其下 |
 | preset roster 根目录 | `$DSH_HOME/.agent-presets/` | DSH ≤ 0.1.6 由 `dsh-agent-presets` 扫描此目录发现本地 authored presets；DSH ≥ 0.1.7 宿主不再扫目录，此目录退为预设文件存放处（见第 2 节「版本支持与预设落点双轨」） |
-| 本预设安装目标 | `$DSH_HOME/.agent-presets/orchestrator` | 生成产物：`agent.cordis.yml`（重写后的角色配置）、`preset.yml`、`restrict.mjs`、`.generator-version` 版本与轨道标记，是一个静态目录；按工作区配置生成的预设落同一父目录下的 `orchestrator-<slug>` |
+| 本预设安装目标 | `$DSH_HOME/.agent-presets/orchestrator` | 生成产物：`agent.cordis.yml`（重写后的角色配置）、`preset.yml`、`restrict.mjs`、`delegation-labels.mjs`、`.generator-version` 版本与轨道标记，是一个静态目录；按工作区配置生成的预设落同一父目录下的 `orchestrator-<slug>` |
 | 声明行托管块（仅 DSH ≥ 0.1.7） | `$DSH_HOME/cordis.patch.yml` 内的托管块 | 以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、配套 end 标记收尾，块内 `- insert:` 写 `@deepseek-ai/dsh-agent-preset` 声明行；安装器自动维护，详见第 2 节 |
 | 配置文件 | `$DSH_HOME/dsh-paoding.config.yml` | 「庖丁配置」面板「保存并应用」写入的角色与工具分配（`0o600`，可手编）；首装自动化同样读写它 |
 
 - **环境变量**：`DSH_HOME` 覆盖 DSH 家目录（默认 `~/.dsh`）；`DSH_PAODING_CONFIG` 覆盖配置文件路径（面板认它；仓库内兜底 CLI 则用 `--config <file>` 指定）。
 
-仓库内 `presets/orchestrator/` 是静态预设源（生成管线读取并重写 `agent.cordis.yml`；`preset.yml`、`restrict.mjs` 原样复制——唯一例外是配置了 `main_agent_display_name`（或工作区派生显示名）时会改写 `preset.yml` 的 `name:` 行），`tools/` 是生成器本体（面板与兜底 CLI 共用），`plugins/paoding-config-ui/` 是「庖丁配置」面板插件本体。只想正常使用的话，这些都不用碰——见下一节。
+仓库内 `presets/orchestrator/` 是静态预设源（生成管线读取并重写 `agent.cordis.yml`；`preset.yml`、`restrict.mjs`、`delegation-labels.mjs` 原样复制——唯一例外是配置了 `main_agent_display_name`（或工作区派生显示名）时会改写 `preset.yml` 的 `name:` 行），`tools/` 是生成器本体（面板与兜底 CLI 共用），`plugins/paoding-config-ui/` 是「庖丁配置」面板插件本体。只想正常使用的话，这些都不用碰——见下一节。
 
 ## 2. 安装：唯一官方通道
 
@@ -56,8 +56,8 @@ dsh plugin --profile web add dsh-paoding
 
 两代宿主发现「本地 authored preset」的机制不同，安装器据此分双轨落点，宿主检测全自动、用户无感：
 
-- **目录轨（DSH ≤ 0.1.6）**：宿主扫描 `$DSH_HOME/.agent-presets/` 下的目录来发现 preset，目录即注册。安装器照旧把产物写成 `$DSH_HOME/.agent-presets/orchestrator/`（`agent.cordis.yml` + `preset.yml` + `restrict.mjs`）；按工作区配置生成的预设落同目录下的 `orchestrator-<slug>`。
-- **声明行轨（DSH ≥ 0.1.7）**：宿主不再扫目录，改为读取 patch 里的 `@deepseek-ai/dsh-agent-preset` 声明行。安装器在 `$DSH_HOME/cordis.patch.yml` 里维护一个托管块——以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、以配套的 end 标记收尾——块内用 `- insert:` 写声明行：全局预设 `config.id: orchestrator`，工作区预设 `config.id: orchestrator-<slug>`，各自的 `plugins` 内联全部插件行；`restrict.mjs` 以绝对 `file:` URL 引用。产物三件套仍落在 `.agent-presets/<id>/`，只是从「目录即注册」变成「文件存放处」。托管块之外的用户内容一字节不动；块内带 do not edit 标记，手改块内内容会在下次保存时被覆盖。
+- **目录轨（DSH ≤ 0.1.6）**：宿主扫描 `$DSH_HOME/.agent-presets/` 下的目录来发现 preset，目录即注册。安装器照旧把产物写成 `$DSH_HOME/.agent-presets/orchestrator/`（`agent.cordis.yml` + `preset.yml` + `restrict.mjs` + `delegation-labels.mjs`）；按工作区配置生成的预设落同目录下的 `orchestrator-<slug>`。
+- **声明行轨（DSH ≥ 0.1.7）**：宿主不再扫目录，改为读取 patch 里的 `@deepseek-ai/dsh-agent-preset` 声明行。安装器在 `$DSH_HOME/cordis.patch.yml` 里维护一个托管块——以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、以配套的 end 标记收尾——块内用 `- insert:` 写声明行：全局预设 `config.id: orchestrator`，工作区预设 `config.id: orchestrator-<slug>`，各自的 `plugins` 内联全部插件行；`restrict.mjs` / `delegation-labels.mjs` 以绝对 `file:` URL 引用。产物四件套仍落在 `.agent-presets/<id>/`，只是从「目录即注册」变成「文件存放处」。托管块之外的用户内容一字节不动；块内带 do not edit 标记，手改块内内容会在下次保存时被覆盖。
 
 安装器按下面的顺序判定走哪条轨：
 

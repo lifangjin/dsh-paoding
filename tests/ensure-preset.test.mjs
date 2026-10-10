@@ -54,6 +54,7 @@ async function withEnv(configFile, fn) {
 
 const markerFileOf = (dshHome) => path.join(dshHome, '.agent-presets', 'orchestrator', '.generator-version')
 const agentFileOf = (dshHome, presetId = 'orchestrator') => path.join(dshHome, '.agent-presets', presetId, 'agent.cordis.yml')
+const labelsFileOf = (dshHome, presetId = 'orchestrator') => path.join(dshHome, '.agent-presets', presetId, 'delegation-labels.mjs')
 
 test('首装（无标记）：directory 宿主整盘重生成，标记记版本+轨道，不写声明行', async () => {
   const { dshHome, configFile } = freshEnv('fresh-dir')
@@ -61,6 +62,7 @@ test('首装（无标记）：directory 宿主整盘重生成，标记记版本+
     const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
     assert.equal(r.installed, true)
     assert.ok(existsSync(agentFileOf(dshHome)), 'preset 三件套应落盘')
+    assert.ok(existsSync(labelsFileOf(dshHome)), 'delegation-labels.mjs 应随 restrict.mjs 一起落盘')
     assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\nworker-thread\n`)
     assert.deepEqual(readHomePatchRows(dshHome), [], 'directory 轨不得写声明行')
     assert.ok(existsSync(configFile), 'fresh 安装应落基础模板配置')
