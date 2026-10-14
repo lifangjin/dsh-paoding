@@ -5,7 +5,10 @@
  * 往返」）。覆盖：恒等性金测（防 preset 改版静默破坏生成层）、roles_remove
  * span 删除、主 persona 身份行保持默认 / 自定义角色插入、restrict allow 注入集合、
  * allow 白名单语义（presetUniverse ∪ inventory：库存缺失的插件名丢弃、在场的
- * 保留、核心名不依赖库存直通）、parseYamlSubset 块标量保真、自定义角色保留名校验、background_mode（解析 warn
+ * 保留、核心名不依赖库存直通）、parseYamlSubset 块标量保真、自定义角色保留名校验、工具条目通配符
+ * 展开（glob.mjs：零通配恒等、候选集顺序原位展开保序去重、`?` 恰一字符、主 agent 侧展开后再过
+ * usableWith 的部分命中、内置/自定义角色侧展开、零匹配 warn 丢弃、配置层原样存取往返幂等、
+ * 默认零 diff 保持）、background_mode（解析 warn
  * 回落 / 序列化恒写出与往返幂等 / 内置块源预置行的原位改写与兜底注入 / 自定义
  * 角色恒写该行 / 全默认零 diff / roles_remove 命中忽略）、start_mode（解析 warn
  * 回落 / 序列化恒写出与往返幂等 / 内置块块级 provider 行原位改写 fork，无行不兜底 /
@@ -32,6 +35,7 @@ import {
 } from '../tools/lib/compose.mjs'
 import { parseYamlSubset, stripInlineComment } from '../tools/lib/yaml.mjs'
 import { loadConfig, serializeConfig } from '../tools/lib/config.mjs'
+import { expandToolPatterns, hasWildcard } from '../tools/lib/glob.mjs'
 
 const SRC = readFileSync(path.join(REPO_ROOT, 'presets', 'orchestrator', 'agent.cordis.yml'), 'utf8')
 const RESTRICT_SRC = readFileSync(path.join(REPO_ROOT, 'presets', 'orchestrator', 'restrict.mjs'), 'utf8')
@@ -775,6 +779,190 @@ test('allow 白名单: presetUniverse 核心名（read/grep）不依赖 inventor
   const kept = filterUsableTools(blocks.get('search_external').names, presetUniverse, new Set())
   assert.ok(kept.every((n) => !n.startsWith('mcp__')), 'SRC 自带 mcp__ 行在空库存下被保留')
   assert.ok(kept.length > 0, '核心名在空库存下被误删')
+})
+
+// ── h2) 工具条目通配符展开（glob.mjs：生成期展开为具体名，运行时语义不变）────
+
+test('expandToolPatterns: 零通配恒等返回（同引用）；模式按候选集顺序原位展开、整体保序去重、? 恰一字符', () => {
+  const cands = new Set([
+    'read',
+    'grep',
+    'mcp__tavily__tavily_search',
+    'mcp__tavily__tavily_extract',
+    'mcp__tavily__tavily_map',
+  ])
+  // 零通配：原数组原样返回 —— 默认路径零行为变化、产物零 diff 的根基
+  const plain = ['read', 'grep']
+  assert.equal(expandToolPatterns(plain, cands), plain, '零通配输入应原样返回同一数组')
+  // 原位展开：命中名按候选集自身顺序（Set 插入序）落在模式条目的位置，前后精确名不动
+  assert.deepEqual(expandToolPatterns(['read', 'mcp__tavily__tavily_*', 'grep'], cands), [
+    'read',
+    'mcp__tavily__tavily_search',
+    'mcp__tavily__tavily_extract',
+    'mcp__tavily__tavily_map',
+    'grep',
+  ])
+  // 整体保序去重：模式命中已写出的精确名时不产生重复行
+  assert.deepEqual(
+    expandToolPatterns(['mcp__tavily__tavily_search', 'mcp__tavily__tavily_*'], cands),
+    ['mcp__tavily__tavily_search', 'mcp__tavily__tavily_extract', 'mcp__tavily__tavily_map'],
+  )
+  // `?` 恰一字符；无通配的括号条目按字面原样保留（过滤是 usableWith 的职责）
+  assert.deepEqual(expandToolPatterns(['rea?'], cands), ['read'])
+  assert.deepEqual(expandToolPatterns(['re(ad)'], cands), ['re(ad)'], '无通配条目应原样保留，不做正则解读')
+  // 正则元字符按字面：若 (ad) 被当正则组，re(ad)* 会命中 read —— 字面语义下零匹配丢弃
+  captureWarn((warnings) => {
+    assert.deepEqual(expandToolPatterns(['re(ad)*'], cands), [], '正则元字符不得按正则语义匹配')
+    assert.ok(warnings.some((w) => w.includes('re(ad)*')), '字面零匹配未 warn（应含模式串）')
+  })
+  // 展开幂等：展开产物再读回展开不再变（产物只含具体名）
+  const once = expandToolPatterns(['mcp__tavily__tavily_*'], cands)
+  assert.deepEqual(expandToolPatterns(once, cands), once)
+  // hasWildcard 形状
+  assert.equal(hasWildcard('mcp__tavily__tavily_*'), true)
+  assert.equal(hasWildcard('rea?'), true)
+  assert.equal(hasWildcard('read'), false)
+  assert.equal(hasWildcard(42), false)
+})
+
+test('computeRestrictAllow: main_agent_extra 通配符展开后再过 usableWith —— 部分命中、语义叠加不替代', () => {
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  // tavily 五名里只有 search/extract 检测到：模式展开出五个候选，但 host 依赖名
+  // 必须「真的被检测到」才保留 —— 展开不豁免白名单判定（语义叠加）。
+  const inventory = new Set(['mcp__tavily__tavily_search', 'mcp__tavily__tavily_extract'])
+  const allow = computeRestrictAllow(restrictBase, new Set(restrictBase), inventory, ['mcp__tavily__tavily_*'], [], [], [])
+  assert.deepEqual(
+    allow.filter((n) => n.startsWith('mcp__tavily__')),
+    ['mcp__tavily__tavily_search', 'mcp__tavily__tavily_extract'],
+    '展开后的 host 名仍须过 usableWith（未检测的 crawl/extract/map/research 中未检测者不得入 allow）',
+  )
+  // 模式命中非 host 的库存名：正常并入 allow
+  const allow2 = computeRestrictAllow(restrictBase, new Set(restrictBase), new Set(['memory_search']), ['m*_search'], [], [], [])
+  assert.deepEqual(allow2.filter((n) => !restrictBase.includes(n)), ['memory_search'], '展开应命中库存名并入 allow')
+  // 展开候选集 = presetUniverse ∪ inventory，不会引入集合之外的名字
+  assert.equal(
+    computeRestrictAllow(restrictBase, new Set(restrictBase), new Set(), ['mcp__tavily__tavily_*'], [], [], []),
+    null,
+    '空库存下展开名全被过滤，allow 应与 base 一致（不注入）',
+  )
+})
+
+test('内置角色 tools 通配符: mcp__tavily__tavily_* 展开为五名，顺序随候选集（源块序）', () => {
+  const blocks = locateAllowBlocks(SRC, yamlMod)
+  const personaBlocks = locatePersonaBlocks(SRC, yamlMod)
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  const assignments = builtinToolsOverride('implement', ['read', 'mcp__tavily__tavily_*'])
+  const { text, roleResults } = composeGenerated(
+    SRC, blocks, personaBlocks, assignments, fullInventory(), restrictBase, {},
+  )
+  // 五名只存在于 search_external 块 → 候选集（presetUniverse）里的相对顺序 = 源块书写顺序
+  const expectedFive = blocks.get('search_external').names.filter((n) => n.startsWith('mcp__tavily__'))
+  assert.equal(expectedFive.length, 5, '构造失败：源块缺五个 tavily 名')
+  const implement = roleResults.find((rr) => rr.role === 'implement')
+  assert.deepEqual(implement.kept, ['read', ...expectedFive], '模式应按候选集顺序原位展开')
+  assert.deepEqual(implement.removed, [], '展开名全部命中时不应有 removed')
+  for (const name of expectedFive) {
+    assert.ok(text.includes(`- ${name}`), `产物缺展开名 ${name}`)
+  }
+  assert.ok(!text.includes('tavily_*'), '产物不得残留模式串')
+})
+
+test('自定义角色 tools 通配符: 展开成具体名进块内 allow；全零匹配拒绝零工具角色；旧签名不展开', () => {
+  const blocks = locateAllowBlocks(SRC, yamlMod)
+  const personaBlocks = locatePersonaBlocks(SRC, yamlMod)
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  const role = (tools) => ({ name: null, model: null, provider: null, persona: 'Review code changes carefully.', tools })
+  const { text } = composeGenerated(
+    SRC, blocks, personaBlocks,
+    { ...emptyAssignments(), roles: { reviewer: role(['read', 'mcp__tavily__tavily_*']) } },
+    fullInventory(), restrictBase, {},
+  )
+  const rows = parseYamlSubset(text)
+  const reviewer = (rows.find((r) => r?.id === 'delegation')?.config ?? []).find((r) => r?.id === 'delegation-reviewer')
+  const expectedFive = blocks.get('search_external').names.filter((n) => n.startsWith('mcp__tavily__'))
+  assert.deepEqual(
+    reviewer?.config?.toolFilter?.allow,
+    ['read', ...expectedFive],
+    '自定义角色 allow 应含展开后的具体名（自定义 allow 不走 usableWith，展开是纯加法）',
+  )
+
+  // 模式全部零匹配：展开后 tools 变空 → 沿用既有零工具防护（拒绝安装）
+  captureWarn((warnings) => {
+    assert.throws(
+      () => composeGenerated(
+        SRC, blocks, personaBlocks,
+        { ...emptyAssignments(), roles: { reviewer: role(['mcp__ghost__*']) } },
+        fullInventory(), restrictBase, {},
+      ),
+      /zero-tool role/,
+      '展开后零工具的角色未被拒绝',
+    )
+    assert.ok(warnings.some((w) => w.includes('mcp__ghost__*')), '零匹配模式未 warn（应含模式串本身）')
+  })
+
+  // 旧签名（不传候选集）不展开：renderCustomRoleBlocks 直接调用方行为不变
+  const raw = renderCustomRoleBlocks({ reviewer: role(['mcp__tavily__tavily_*']) }, {}, restrictBase)
+  assert.ok(raw.includes('- mcp__tavily__tavily_*'), '不传候选集时模式条目应原样保留')
+})
+
+test('工具通配符: 零匹配 warn 且丢弃（主 agent 侧），无通配默认路径零 diff 不变', () => {
+  const blocks = locateAllowBlocks(SRC, yamlMod)
+  const personaBlocks = locatePersonaBlocks(SRC, yamlMod)
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  captureWarn((warnings) => {
+    const { roleResults } = composeGenerated(
+      SRC, blocks, personaBlocks,
+      builtinToolsOverride('implement', ['read', 'mcp__ghost__*']),
+      fullInventory(), restrictBase, {},
+    )
+    assert.ok(warnings.some((w) => w.includes('mcp__ghost__*')), '角色 tools 零匹配模式未 warn')
+    const implement = roleResults.find((rr) => rr.role === 'implement')
+    assert.deepEqual(implement.kept, ['read'], '零匹配模式应从角色 allow 剔除')
+    // 展开期已丢弃的模式不得再进 removed（报告里没有幽灵名）
+    assert.deepEqual(implement.removed, [], '展开期丢弃的模式不应进 removed')
+  })
+  // 无通配的既有行为不变：精确名 extra 产物仍与源零 diff 等价口径
+  //（main_agent_extra 为空 + 空 assignments = 恒等金测；此处只复验展开是恒等变换）
+  const extra = ['memory_search', 'mcp__tavily__tavily_search']
+  assert.deepEqual(
+    expandToolPatterns(extra, new Set(['memory_search', 'mcp__tavily__tavily_search'])),
+    extra,
+    '零通配 extra 应逐项原样保留',
+  )
+})
+
+test('工具通配符: 配置层原样存取（load→serialize→load 幂等），展开只发生在生成期', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'dsh-paoding-test-'))
+  const file = path.join(dir, 'dsh-paoding.config.yml')
+  writeFileSync(
+    file,
+    [
+      'roles:',
+      '  search_external:',
+      '    tools:',
+      '      - web_search',
+      '      - mcp__tavily__tavily_*',
+      "  reviewer:",
+      '    tools:',
+      '      - read',
+      "      - 'mcp__tavily__tavily_se?rch'",
+      'main_agent_extra:',
+      '  - mcp__codegraph__codegraph_*',
+    ].join('\n') + '\n',
+  )
+  const cfg1 = loadConfig(file, null)
+  assert.deepEqual(cfg1.roles.search_external.tools, ['web_search', 'mcp__tavily__tavily_*'], '配置层不得展开/丢弃模式条目')
+  assert.deepEqual(cfg1.roles.reviewer.tools, ['read', 'mcp__tavily__tavily_se?rch'], '带引号的模式条目解析应还原原值')
+  assert.deepEqual(cfg1.main_agent_extra, ['mcp__codegraph__codegraph_*'], 'main_agent_extra 模式条目应原样收下')
+  // 往返幂等：再 load 一次再 serialize，逐字节一致（模式条目原样落盘、不炸不丢）
+  const text1 = serializeConfig(cfg1)
+  assert.ok(text1.includes('- mcp__tavily__tavily_*'), '序列化后模式条目丢失')
+  assert.ok(text1.includes('- mcp__codegraph__codegraph_*'), '序列化后 main_agent_extra 模式条目丢失')
+  const file2 = path.join(dir, 'roundtrip.config.yml')
+  writeFileSync(file2, text1)
+  const cfg2 = loadConfig(file2, null)
+  assert.equal(serializeConfig(cfg2), text1, '含模式条目的配置往返后序列化漂移')
+  assert.deepEqual(cfg2.roles.search_external.tools, ['web_search', 'mcp__tavily__tavily_*'])
 })
 
 // ── j) workflow worker 行宿主版本适配 ───────────────────────────────────────

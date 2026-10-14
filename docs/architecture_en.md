@@ -248,8 +248,8 @@ note for that role below; see
 > Note: `codegraph` and `memory_search` were removed from this role on 2026-09-02 — when their plugins
 > (codegraph MCP / magic-memory) are disabled they are outside the sub-agent's visible registry, and
 > `tools.restrict()` would refuse to create the role with unknown tools. Re-add them on demand after
-> re-enabling the plugins (allow lists use exact name matching, no globs — see the "Known limitations"
-> section below).
+> re-enabling the plugins (tool entries accept `*` / `?` wildcards, expanded at generation time — see the
+> "Known limitations" section below).
 
 ## Under the hood
 
@@ -380,8 +380,10 @@ composition:
   arbitrarily by the model at runtime. "Picking a role tool picks a tool surface" is an advantage for fixed
   division of labor, but a tool cannot be granted to a role mid-conversation — changing it requires editing
   the configuration / static source and re-running the generator.
-- **`toolFilter.allow` uses exact name matching and supports no globs**: the five tavily tools must be
-  listed in full (`mcp__tavily__tavily_search/crawl/extract/map/research`).
+- **`toolFilter.allow` accepts `*` / `?` wildcards, but they expand only at generation time**: the five
+  tavily tools fit on one line as `mcp__tavily__tavily_*`; the generator expands patterns against the
+  candidate tool surface into concrete names in the generated preset, so runtime matching stays exact-name —
+  semantics unchanged. Full glob syntax (character classes, escapes, …) is not in scope.
 - **Tools absent from the main-agent whitelist raise no error**: the waterfall filter only matches by name
   against the resolved `assembly.tools`, so a tool that is not mounted (e.g. a commented-out MCP) simply
   never appears — generation and runtime both pass silently. Config intent and actual mounts are reconciled

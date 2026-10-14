@@ -23,6 +23,11 @@
  * allow 过滤走白名单语义（usableWith / presetUniverse ∪ inventory，见
  * filterUsableTools 上方说明）：手写进配置、既不在 preset 自带工具面也不在
  * 检测库存的名字一律从 allow 丢弃，不再「非 host 依赖名直通」。
+ * 工具条目支持 `*` / `?` 通配（expandToolPatterns，见 glob.mjs）：主 agent 侧
+ * （computeRestrictAllow 的 base / mainAgentExtra / customToolNames 三路）与角色
+ * 侧（内置角色 intent、自定义角色 tools）都在白名单过滤**之前**先对候选集展开
+ * 为具体名 —— 语义叠加不替代，展开后的名字仍走既有 usableWith / 直通过滤；
+ * 产物只落具体名，运行时 toolFilter 语义不变。
  * workflow worker 行按宿主版本生成期适配（adaptWorkflowWorkerRow：≥0.1.6 把
  * 0.1.5-only 的 workflow-worker-thread 条目换成 workflow-ptc；探测不到版本
  * 保守保留源行，产物零 diff 性质随之保留）。
@@ -33,13 +38,14 @@
  * agent persona 委派行（composeMainPersonaEdit 第 4 参 customBullets →
  * `- <职责>: delegate to <toolName>.`），否则主 agent 永远不会委派给自定义角色。
  * 依赖 util（ROLES / warn / DEFAULT_MAIN_AGENT_PERSONA_EXTRA）、config
- * （normalizeModelRef / yamlScalar）与 host
+ * （normalizeModelRef / yamlScalar）、glob（expandToolPatterns）与 host
  * （isHostDependent）；被 state 引用。
  */
 import { DEFAULT_MAIN_AGENT_PERSONA_EXTRA, ROLES, warn } from './util.mjs'
 import { normalizeModelRef, yamlScalar } from './config.mjs'
 import { isHostDependent } from './host.mjs'
 import { isPtcWorkerHost } from './preset-system.mjs'
+import { expandToolPatterns } from './glob.mjs'
 
 // ── workflow worker 行的宿主版本适配 ─────────────────────────────────────────
 
@@ -220,18 +226,25 @@ export function replaceRoleIdentity(text, displayName) {
 /**
  * Render the delegation block(s) for custom roles, matching the existing
  * delegation-* indentation (4-space list items).
+ * expandCandidates（可选，Set/数组）：传入时角色 tools 先过通配符展开（与内置
+ * 角色同一候选集口径，见 composeGenerated），展开后的具体名直接进块内 allow ——
+ * 自定义角色的 allow 不走 usableWith（角色名本身就不在既有工具面里），展开是
+ * 纯加法，不过滤；模式零匹配被丢弃后 tools 若变空，走下方既有的零工具 throw
+ *（拒绝安装零工具角色，warn 已提示是哪个模式没匹配上）。缺省不展开（直接调用
+ * 方/测试的旧签名行为不变）。
  */
-export function renderCustomRoleBlocks(roles, skillsMap, restrictBase = []) {
+export function renderCustomRoleBlocks(roles, skillsMap, restrictBase = [], expandCandidates = null) {
   const custom = Object.entries(roles).filter(([toolName]) => !ROLES.includes(toolName))
   if (custom.length === 0) return ''
   const chunks = []
   for (const [toolName, role] of custom) {
     // 保留名校验（见 assertCustomToolName）+ 零工具防护（与 composeGenerated
-    // 内置角色循环同款）：tools 为空（缺省或 `tools:` 空列表）会生成
-    // `toolFilter.allow:`（YAML null），子 agent 创建后零工具——宁可拒绝安装，
-    // 也不静默生成一个干不了活的角色。
+    // 内置角色循环同款）：tools 为空（缺省或 `tools:` 空列表，或传入候选集时
+    // 通配符展开后零命中）会生成 `toolFilter.allow:`（YAML null），子 agent
+    // 创建后零工具——宁可拒绝安装，也不静默生成一个干不了活的角色。
     assertCustomToolName(toolName, restrictBase)
-    if ((role.tools ?? []).length === 0) {
+    const tools = expandCandidates === null ? (role.tools ?? []) : expandToolPatterns(role.tools ?? [], expandCandidates)
+    if (tools.length === 0) {
       throw new Error(`role "${toolName}" would end up with an empty toolFilter.allow — refusing to install a zero-tool role.`)
     }
     const persona = withSkillGuidance(
@@ -281,7 +294,7 @@ export function renderCustomRoleBlocks(roles, skillsMap, restrictBase = []) {
         ...persona.split('\n').map((l) => `          ${l}`),
         '        toolFilter:',
         '          allow:',
-        ...(role.tools ?? []).map((t) => `            - ${yamlScalar(t)}`),
+        ...tools.map((t) => `            - ${yamlScalar(t)}`),
       ].join('\n'),
     )
   }
@@ -302,16 +315,23 @@ export function firstLine(text) {
  * removed: once roles_remove is non-empty the explicit allow MUST be injected,
  * otherwise the static restrict.mjs MAIN_AGENT_ALLOW would keep delegating to
  * the deleted role (删除不生效).
+ * 三路入参（base / mainAgentExtra / customToolNames）先过通配符展开（候选集 =
+ * presetUniverse ∪ inventory，与 usableWith 判定用的同一集合），展开后的名字仍
+ * 走各自既有的过滤口径（base / extra 过 usableWith，customToolNames 直通收）——
+ * 语义叠加不替代。base 与 customToolNames 实际都是精确名（restrict.mjs 源名单 /
+ * assignments.roles 的键），展开为恒等变换，零风险；mainAgentExtra 是手写配置
+ * 条目，通配符的主战场。零通配时展开是同引用恒等，默认路径输出逐字节不变。
  */
 export function computeRestrictAllow(base, presetUniverse, inventory, mainAgentExtra, mainAgentRemove, customToolNames, removedRoleNames = []) {
+  const expandCandidates = new Set([...presetUniverse, ...inventory])
   const kept = []
-  for (const name of base) {
+  for (const name of expandToolPatterns(base, expandCandidates)) {
     if (usableWith(name, presetUniverse, inventory)) kept.push(name)
   }
-  for (const name of mainAgentExtra) {
+  for (const name of expandToolPatterns(mainAgentExtra, expandCandidates)) {
     if (!kept.includes(name) && usableWith(name, presetUniverse, inventory)) kept.push(name)
   }
-  for (const name of customToolNames) {
+  for (const name of expandToolPatterns(customToolNames, expandCandidates)) {
     if (!kept.includes(name)) kept.push(name)
   }
   const removed = new Set([...(mainAgentRemove ?? []), ...(removedRoleNames ?? [])])
@@ -730,11 +750,18 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
     for (const name of block.names) presetUniverse.add(name)
   }
 
+  // 通配符展开候选集 = presetUniverse ∪ inventory（与 usableWith 判定用的同一
+  // 集合）：内置角色 intent / 自定义角色 tools / main_agent_extra 三处的 `*` /
+  // `?` 模式条目都先对它展开成具体名，再进各自既有的过滤（语义叠加不替代）。
+  const expandCandidates = new Set([...presetUniverse, ...inventory])
+
   // Role allow results (default roles only; custom roles are rendered fresh).
   const roleResults = []
   for (const role of ROLES) {
     if (removedRoles.includes(role)) continue // 已删除角色：不产 roleResults / allow edits
-    const intent = assignments.roles[role]?.tools ?? blocks.get(role).names
+    // 意图先过通配符展开再进白名单过滤；roleResults 的 intent/removed 都记展开
+    // 后的具体名（报告口径「配了几个 → 留几个」对模式条目才有意义）。
+    const intent = expandToolPatterns(assignments.roles[role]?.tools ?? blocks.get(role).names, expandCandidates)
     const filtered = filterUsableTools(intent, presetUniverse, inventory)
     if (filtered.length === 0) {
       throw new Error(`role "${role}" would end up with an empty toolFilter.allow — refusing to install a zero-tool role.`)
@@ -886,17 +913,23 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
   // workflow worker 行宿主版本适配（≥0.1.6 换 workflow-ptc；见 adaptWorkflowWorkerRow）。
   out = adaptWorkflowWorkerRow(out, hostVersionTriple)
 
-  const customBlock = renderCustomRoleBlocks(assignments.roles, skillsMap, restrictBase)
+  // 自定义角色块：tools 里的通配符条目按同一候选集展开成具体名再进 allow
+  //（第 4 参见 renderCustomRoleBlocks）。
+  const customBlock = renderCustomRoleBlocks(assignments.roles, skillsMap, restrictBase, expandCandidates)
   if (customBlock !== '') out = insertCustomRoles(out, customBlock)
 
   const mainAgentRemove = assignments.main_agent_remove ?? []
   // Warn about removals that are not part of the main agent's current allow
   // (undetected host tools, typos, names never present) and skip them.
+  // main_agent_extra 贡献先过通配符展开（与 computeRestrictAllow 的 allow 口径
+  // 一致），否则 extra 里的模式条目会让精确名的 remove 误报「不在当前 allow」。
   if (mainAgentRemove.length > 0) {
     const removable = new Set(
-      [...restrictBase, ...(assignments.main_agent_extra ?? []), ...customToolNames].filter((n) =>
-        usableWith(n, presetUniverse, inventory),
-      ),
+      [
+        ...restrictBase,
+        ...expandToolPatterns(assignments.main_agent_extra ?? [], expandCandidates),
+        ...customToolNames,
+      ].filter((n) => usableWith(n, presetUniverse, inventory)),
     )
     for (const name of mainAgentRemove) {
       if (!removable.has(name)) warn(`main_agent_remove: '${name}' 不在主 agent 当前 allow（未检测或不存在），已跳过`)
