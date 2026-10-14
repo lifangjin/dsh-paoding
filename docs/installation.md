@@ -117,7 +117,7 @@ dsh plugin --profile <name> update dsh-paoding
 
 （profile 自动探测，通常无需手填。）升级只换 profile 里的插件包本体，当前进程的代码不变；成功后提示**重启 DSH**，重启时 preset 按 `.generator-version` 标记自动按新版重生成。只升级 dsh 本体（不动插件）同理：重启即触发轨道迁移自愈，无需重装或重新应用。
 
-手动升级等价：普通 profile 直接在终端跑上面这条 `dsh plugin update` 命令；desktop profile 被 dsh CLI 独占守卫挡住，等价命令是 `cd ~/.dsh/profiles/desktop && pnpm add dsh-paoding@latest`，同样重启生效。
+手动升级等价：普通 profile 直接在终端跑上面这条 `dsh plugin update` 命令；desktop profile 被 dsh CLI 独占守卫挡住，等价命令是 `cd ~/.dsh/profiles/desktop && pnpm add dsh-paoding@latest`（机器上没有裸 `pnpm` 命令时用 `corepack pnpm add`，见第 8 节排查），同样重启生效。
 
 **开发 link 形态**（见第 4 节）版本比较照常（更新卡有新版照常提示），但无法就地升级——升级器要求包真实装在某个 profile 的 node_modules 下，link 直连仓库匹配不到；点「升级」会如实报这一点，并提示手动跑 `dsh plugin add dsh-paoding@latest` 切回 registry 版。
 
@@ -190,7 +190,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 
 ### 数据接口与安全
 
-面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地升级：普通 profile 走 `dsh plugin update`，desktop profile 直跑 `pnpm add`）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
+面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地升级：普通 profile 走 `dsh plugin update`，desktop profile 直跑 `pnpm add`，pnpm 按「裸 pnpm → `corepack pnpm` → PNPM_HOME 落位」候选链解析）、`GET /api/paoding/config/export`（配置文件原文导出，下载/备份用）、`POST /api/paoding/config/import`（整份导入：先验格式、与「保存并应用」共用写盘闸）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
 
 ### 面板能力
 
@@ -199,6 +199,9 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 - **技能分配**：每个 skill 一行，勾选分配给哪些 agent（写入对应 persona 的 `Available skills` 软引导；角色技能软引导，主 agent 技能另有 read 按需/内联两组）。
 - **预览生成**：不写盘生成 `agent.cordis.yml`，显示每个角色 allow 的 intent → kept 计数与生成全文。
 - **保存并应用**：确认后写入 preset（覆盖 `$DSH_HOME/.agent-presets/orchestrator`）并按宿主版本同步登记——≤ 0.1.6 目录扫描即生效，≥ 0.1.7 同步维护 `$DSH_HOME/cordis.patch.yml` 里的声明行托管块（见第 2 节）——再把当前分配保存到 `$DSH_HOME/dsh-paoding.config.yml`；应用成功后提示重启 DSH 或新建会话生效（检测到 patch 比生成结果新时提示重启后生效）。打开面板时会加载既有配置文件作为当前值——手编过的选择直接可见、可改。
+- **场景模板**：页头三档切换（轻量：只留实现角色；调研：只留检索角色；全开：全员到齐、主 agent 额外工具带满检测库存），一键换「班底」；只动 `roles_remove` 与 `main_agent_extra`，各角色精调过的工具面、persona、模型、启动方式分毫不动，切回即原样复原。
+- **检查提示卡**：每次「预览生成 / 保存并应用」自动过一遍体检（配置了未挂载的工具、零工具角色、查无此名的模型、预设落后于配置），分级提示以卡片形式贴在页头下方，处理完再保存不迟。
+- **「更多」菜单**：配置导出（下载 `dsh-paoding.config.yml` 原文）/ 导入（先验格式，整份覆盖含工作区段，需二次确认）与面板语言切换（中英自动识别、手动选择优先并记住）。
 
 ## 7. 卸载
 
