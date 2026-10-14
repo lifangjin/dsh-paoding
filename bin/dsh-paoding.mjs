@@ -15,9 +15,16 @@ const REFUSE =
 const usage = `dsh-paoding 安装快捷方式（等价于 dsh plugin --profile <name> add dsh-paoding@<version>）
 
 用法：npx dsh-paoding@latest [--profile <name>]
+      npx dsh-paoding@latest doctor [--profile <name>] [--config <file>]
+
+子命令：
+  doctor            本机安装体检（只读）：配置文件 / 预设轨道 / 托管声明行 /
+                    孤儿工作区预设 / 预设漂移 / 版本标记，结尾给汇总；
+                    有错误级发现时退出码 1。
 
 选项：
   --profile <name>  插件装入的 profile，默认 web（dsh web 的默认 profile）
+  --config <file>   配置文件路径（仅 doctor 子命令使用）
   --help            显示本帮助
   --version         显示包版本
 
@@ -28,6 +35,22 @@ ${REFUSE}`;
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 const argv = process.argv.slice(2);
+
+// doctor 子命令：包不再携带独立 CLI，但 tools/ 随包发布（package.json files），
+// 体检逻辑本体在 tools/lib/cli.mjs——这里 dynamic import 转发（--profile /
+// --config 等参数原样透传，由它自己的 parseArgs 解析），退出码语义：
+// 无错误 0，有 error 级发现 1。放在参数循环之前：doctor 的参数不用本入口的
+// profile 解析兜底。
+if (argv.includes('doctor')) {
+  try {
+    const { main } = await import('../tools/lib/cli.mjs');
+    process.exit((await main({ argv })) ?? 0);
+  } catch (err) {
+    console.error(`doctor 运行失败：${err?.message ?? err}`);
+    process.exit(1);
+  }
+}
+
 let profile;
 for (let i = 0; i < argv.length; i++) {
   const arg = argv[i];

@@ -10,7 +10,9 @@
  * 依赖 util（ROLES / SRC_DIR / PROFILE_NAME_RE）、config（normalizeRoleName）、
  * host（removedReason）、state（PRESET_ASIS_FILES / collectState /
  * generateAndInstall）、alloc（autoAssignments，--auto 语义与插件首装共享）、
- * version（getVersionInfo，main 收尾的新版提示）以及 node:os / node:path。
+ * health（captureWarnings / healthCheck，--dry-run 报告的结构化体检）、
+ * doctor（runDoctor，doctor 子命令的只读体检）、version（getVersionInfo，
+ * main 收尾的新版提示）以及 node:os / node:path。
  */
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -19,6 +21,8 @@ import { normalizeRoleName } from './config.mjs'
 import { removedReason } from './host.mjs'
 import { PRESET_ASIS_FILES, collectState, generateAndInstall } from './state.mjs'
 import { autoAssignments } from './alloc.mjs'
+import { captureWarnings, healthCheck } from './health.mjs'
+import { runDoctor } from './doctor.mjs'
 import { getVersionInfo } from './version.mjs'
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
@@ -35,6 +39,7 @@ export function printHelp() {
 
 Usage:
   node tools/install.mjs [options]
+  node tools/install.mjs doctor [options]
 
 Options:
   --profile <name>   Profile whose patch layer is scanned (default: web).
@@ -47,12 +52,18 @@ Options:
   --auto             Non-interactive: apply the config file when present,
                      otherwise apply the base template (--suggest seeds smart
                      defaults on a fresh install instead).
-  --dry-run          Print the detection report and the generated allow lists
-                     without writing anything; exit 0.
+  --dry-run          Print the detection report, the generated allow lists and
+                     the config health check without writing anything; exit 0.
   --suggest          Fresh install without a config file: seed smart defaults
                      from the detected host/MCP tools instead of the base
                      template (host tools are folded in automatically).
   --help             Show this help and exit.
+
+Subcommands:
+  doctor             Read-only health check of the local install (config file,
+                     preset track vs host version, managed patch rows, orphan
+                     workspace presets, config drift, version marker) and a
+                     summary; exit 1 only on error-level findings.
 
 Environment:
   DSH_HOME           Directory holding cordis.patch.yml etc. (default: $HOME/.dsh)
@@ -73,10 +84,15 @@ function assertProfileName(value) {
 }
 
 export function parseArgs(argv) {
-  const opts = { profile: null, patches: [], dryRun: false, help: false, auto: false, config: undefined, suggest: false }
+  const opts = { command: 'install', profile: null, patches: [], dryRun: false, help: false, auto: false, config: undefined, suggest: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
-    if (arg === '--help' || arg === '-h') {
+    if (arg === 'doctor') {
+      // 子命令：doctor = 只读体检；缺省 install（原 installer 主流程）。位置参数
+      // 只认这一个，其余仍按未知选项报错；--help / --profile / --config 等照常
+      // 解析，doctor 分支共用。
+      opts.command = 'doctor'
+    } else if (arg === '--help' || arg === '-h') {
       opts.help = true
     } else if (arg === '--dry-run') {
       opts.dryRun = true
@@ -130,7 +146,7 @@ export function parseArgs(argv) {
 
 // ── report & install ────────────────────────────────────────────────────────
 
-export function printReport({ scanned, mcpReports, pluginReports, roleResults, dstDir, dryRun, staleNote, mainAgent }) {
+export function printReport({ scanned, mcpReports, pluginReports, roleResults, dstDir, dryRun, staleNote, mainAgent, health = null }) {
   const pad = (s, n) => String(s).padEnd(n)
   console.log('dsh-paoding installer — orchestrator preset (host-aware tool filtering)')
   console.log(`  preset source : ${SRC_DIR}`)
@@ -188,6 +204,21 @@ export function printReport({ scanned, mcpReports, pluginReports, roleResults, d
   } else {
     console.log('  removed: none — every host-dependent allow entry is enabled')
   }
+  if (health !== null) {
+    // 配置体检小节（--dry-run 报告专属；health 为 null 时不打印，--auto 输出
+    // 保持原样）。条目结构与面板 preview/apply 响应的 warnings 字段同源
+    //（tools/lib/health.mjs healthCheck）。
+    console.log()
+    console.log('config health (体检):')
+    if (health.length === 0) {
+      console.log('  ✔ 未发现问题')
+    } else {
+      for (const h of health) {
+        const mark = h.level === 'error' ? '✘' : h.level === 'warn' ? '⚠' : 'ℹ'
+        console.log(`  ${mark} ${h.code} — ${h.message}`)
+      }
+    }
+  }
   if (staleNote) {
     console.log('\nnote: 检测到 patch 配置在本次安装后有过修改，改动后请重跑 node tools/install.mjs --auto')
   }
@@ -211,6 +242,30 @@ export function printReport({ scanned, mcpReports, pluginReports, roleResults, d
   console.log(`uninstall: rm -rf "${dstDir}"`)
 }
 
+/** doctor 子命令的人读报告：每行「✔/✘/⚠/– 项目 — 一句说明」，结尾汇总。
+ *  渲染与检查本体分离（tools/lib/doctor.mjs 只产结构化 items，便于测试）。 */
+export function printDoctorReport(report, { dshHome, configFile }) {
+  const marks = { ok: '✔', error: '✘', warn: '⚠', skip: '–' }
+  console.log('dsh-paoding doctor — 安装体检（只读，不改任何文件）')
+  console.log(`  DSH_HOME : ${dshHome}`)
+  console.log(`  配置文件 : ${configFile}`)
+  console.log()
+  for (const { status, label, detail } of report.items) {
+    console.log(`${marks[status] ?? '·'} ${label} — ${detail}`)
+  }
+  const count = (status) => report.items.filter((i) => i.status === status).length
+  const errors = count('error')
+  const warns = count('warn')
+  console.log()
+  if (errors > 0) {
+    console.log(`汇总: ${report.items.length} 项检查，${errors} 项错误（✘）${warns > 0 ? `、${warns} 项警告（⚠）` : ''}——请先处理 ✘ 再使用；详细说明见 docs/installation.md 排查节`)
+  } else if (warns > 0) {
+    console.log(`汇总: ${report.items.length} 项检查，无错误；${warns} 项警告（⚠）不影响使用，可按各行说明处理`)
+  } else {
+    console.log(`汇总: ${report.items.length} 项检查全部正常`)
+  }
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
 
 /**
@@ -230,6 +285,16 @@ export async function main({ argv = process.argv.slice(2) } = {}) {
   if (opts.help) {
     printHelp()
     return 0
+  }
+
+  // doctor 子命令：只读体检，不走 --auto 门禁（门禁仅拦会动盘的安装主流程），
+  // 也不用 collectState 的全量检测——runDoctor 内部按项自行探测与降级。
+  if (opts.command === 'doctor') {
+    const dshHome = process.env.DSH_HOME || path.join(homedir(), '.dsh')
+    const configFile = opts.config || path.join(dshHome, 'dsh-paoding.config.yml')
+    const report = await runDoctor({ dshHome, configFile, profile: opts.profile })
+    printDoctorReport(report, { dshHome, configFile })
+    return report.hasErrors ? 1 : 0
   }
 
   // 无 --auto 直接拒绝（交互模式已删）：--dry-run 只读不动盘，放行作检测预览。
@@ -281,12 +346,24 @@ export async function main({ argv = process.argv.slice(2) } = {}) {
   // saveConfigOnWrite：fresh 非交互安装把基础模板落进配置文件（显式
   // main_agent_extra: [] 锚定「未开启 host 工具」）；existing 路径绝不覆写
   // 用户配置文件。
+  // --dry-run 顺路做一次结构化体检（captureWarnings 抓生成期告警 + healthCheck，
+  // 产物 dryRunResult 直喂体检零重跑；models 缺省 null，CLI 不做模型目录发现）：
+  // health 条目由 printReport 的新小节打印。--auto 路径不体检，输出保持原样。
   let composed
+  let healthItems = null
   try {
-    composed = generateAndInstall(state, assignments, {
-      dryRun: opts.dryRun,
-      saveConfigOnWrite: !existing && !opts.dryRun,
-    })
+    if (opts.dryRun) {
+      const [result, generationWarnings] = captureWarnings(() =>
+        generateAndInstall(state, assignments, { dryRun: true, saveConfigOnWrite: false }),
+      )
+      composed = result
+      healthItems = healthCheck({ state, assignments, dryRunResult: composed, generationWarnings }).items
+    } else {
+      composed = generateAndInstall(state, assignments, {
+        dryRun: false,
+        saveConfigOnWrite: !existing,
+      })
+    }
   } catch (err) {
     console.error(`error: ${err.message}`)
     return 1
@@ -307,6 +384,7 @@ export async function main({ argv = process.argv.slice(2) } = {}) {
       extra: assignments.main_agent_extra ?? [],
       removed: assignments.main_agent_remove ?? [],
     },
+    health: healthItems,
   })
   if (!existing && !opts.dryRun) {
     // fresh 非交互安装：提示基础模板已落盘、host/MCP 工具去哪补（--suggest 可
