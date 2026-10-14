@@ -12,9 +12,12 @@
     //  - t(key, params)：按当前语言取文案，params 做 {name} 插值（split/join
     //    而非 replace，避免替换串里的 $ 模式被二次解释）。缺 key 原样返回 key
     //    本身——线上宁可露出 key 也不静默吞掉，测试侧保证不会发生。
-    //  - 语言解析：localStorage "paoding-lang"（"zh"/"en"）显式优先 →
-    //    navigator.language 以 zh 开头 → zh，否则 en（首次使用者多半是中文
-    //    文档进来的，缺省 en 但 zh 环境自动命中）。
+    //  - 语言解析（zh 信号优先）：localStorage "paoding-lang" 显式优先 →
+    //    navigator.language/languages 与宿主页面 <html lang> 任一带 zh 前缀
+    //    → zh → 时区属中文地区 → zh → en 前缀命中 → en → 兜底 zh。Electron
+    //    外壳会把 navigator 语言钉成应用 locale（常 en-US，不跟操作系统），
+    //    en 信号不可信而时区可信，故 zh 信号整体压过 en；服务端消息仅中文，
+    //    误判 zh（真英文用户点一次 English 即记住）代价远小于误判 en 混排。
     //  - 切语言：setLang(lang) 写 localStorage + 同步广播 onLangChange；
     //    监听方各自刷新（86 PageShell 整页重渲染、82 委派行重建标题），面板
     //    数据重拉复用既有 registerReload 通道，不另造机制。
@@ -28,15 +31,48 @@
     // 语言探测：localStorage 显式值优先；其余按 navigator.language 首缀猜 zh，
     // 兜底 en。全程 try/catch——非浏览器/受限环境（vm 测试、老内核）不炸，逐层回落。
     function paodingDetectLang() {
+      // zh 信号优先于 en 信号（不是平级链）：Electron 外壳会把 navigator
+      // 语言钉成应用 locale（常为 en-US，跟打包不跟操作系统），en 命中在
+      // 本环境不可信；而本插件服务端消息仅中文，误判 zh 的代价（真英文
+      // 用户点一次 English，localStorage 记住）远小于误判 en（中文用户看
+      // 中英混排面板）。故顺序：显式选择 → 任一 zh 信号 → en 信号 → zh。
+      // ① 手动选择（localStorage）显式最优先
       try {
         var saved = window.localStorage.getItem(PAODING_LANG_KEY);
         if (saved === "zh" || saved === "en") return saved;
       } catch (err) { /* localStorage 不可用：继续探测 */ }
+      var navLangs = [];
       try {
-        if (typeof navigator !== "undefined" && navigator.language
-          && String(navigator.language).toLowerCase().indexOf("zh") === 0) return "zh";
-      } catch (err) { /* navigator 不可用：落兜底 */ }
-      return "en";
+        if (typeof navigator !== "undefined") {
+          if (navigator.language) navLangs.push(String(navigator.language));
+          if (navigator.languages && navigator.languages.length) {
+            for (var i = 0; i < navigator.languages.length; i++) navLangs.push(String(navigator.languages[i]));
+          }
+        }
+      } catch (err) { /* navigator 不可用：navLangs 留空 */ }
+      var docLang = "";
+      try {
+        docLang = String((document.documentElement && document.documentElement.lang) || "");
+      } catch (err) { /* 无 document：留空 */ }
+      // ② navigator / 宿主页面 <html lang> 任一带 zh 前缀 → zh
+      for (var j = 0; j < navLangs.length; j++) {
+        if (navLangs[j].toLowerCase().indexOf("zh") === 0) return "zh";
+      }
+      if (docLang.toLowerCase().indexOf("zh") === 0) return "zh";
+      // ③ 时区属中文地区 → zh：Electron webview 里 navigator 常整体被钉成
+      //    en-US，时区是跟着操作系统走的最后真身（Asia/Shanghai 等）。
+      try {
+        var tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+        if (/Asia\/(Shanghai|Hong_Kong|Macau|Taipei|Urumqi|Chongqing)$/.test(tz)) return "zh";
+      } catch (err) { /* 无 Intl：继续 */ }
+      // ④ en 信号（浏览器环境常规英文用户在此命中；Electron 假 en-US 已被
+      //    ③ 时区先一步接走——中文时区的 Electron 用户不会再走到这里）
+      for (var k = 0; k < navLangs.length; k++) {
+        if (navLangs[k].toLowerCase().indexOf("en") === 0) return "en";
+      }
+      if (docLang.toLowerCase().indexOf("en") === 0) return "en";
+      // ⑤ 无任何信号 → zh（服务端消息仅中文，en 面板必混排）
+      return "zh";
     }
 
     var paodingLang = paodingDetectLang();

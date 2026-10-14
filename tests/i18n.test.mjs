@@ -5,7 +5,8 @@
  * - zh / en 字典 key 集合一致、{param} 占位符集合一致；
  * - 源码里所有 t("<key>") 字面引用（含 55 模板 label/desc、82 委派标题回落、
  *   70 体检六码 warn.title.<code>）都能在字典里命中；
- * - 语言解析：localStorage 显式值优先 > navigator.language zh* > zh/en 兜底；
+ * - 语言解析（zh 信号优先）：localStorage 显式 > navigator/页面 lang 带
+ *   zh > 中文时区 > en 信号 > 兜底 zh；
  * - setLang 幂等、写盘、广播；onLangChange 反注册生效；
  * - t() 插值 {name}/{n}/{v}，缺 key 原样返回 key。
  */
@@ -19,18 +20,27 @@ import { fileURLToPath } from 'node:url'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const CLIENT_DIR = path.join(HERE, '..', 'plugins', 'paoding-config-ui', 'src', 'client')
 
-/** 干净沙箱：可注入 localStorage 预置值与 navigator.language。 */
-function loadI18n({ stored, navLang } = {}) {
+/** 干净沙箱：可注入 localStorage 预置值、navigator.language(s)、宿主页
+ * <html lang> 与时区（Intl 桩，只实现探测用到的 resolvedOptions().timeZone）。 */
+function loadI18n({ stored, navLang, navLangs, docLang, tz } = {}) {
   const ls = {
     _kv: stored ? { 'paoding-lang': stored } : {},
     getItem(k) { return this._kv[k] ?? null },
     setItem(k, v) { this._kv[k] = String(v) },
     removeItem(k) { delete this._kv[k] },
   }
+  const navigator_ = { language: navLang ?? 'zh-CN' }
+  if (navLangs) navigator_.languages = navLangs
   const sandbox = {
     window: { localStorage: ls },
     localStorage: ls,
-    navigator: { language: navLang ?? 'zh-CN' },
+    navigator: navigator_,
+    document: docLang ? { documentElement: { lang: docLang } } : { documentElement: {} },
+    Intl: {
+      DateTimeFormat: function () {
+        return { resolvedOptions: () => ({ timeZone: tz ?? 'Asia/Shanghai' }) }
+      },
+    },
   }
   vm.createContext(sandbox)
   const src = readFileSync(path.join(CLIENT_DIR, '04-i18n.js'), 'utf8')
@@ -64,18 +74,29 @@ test('字典形状：zh/en 占位符集合一致', () => {
 
 // ── 语言解析 ────────────────────────────────────────────────────────────────
 
-test('语言解析：localStorage 显式值优先于 navigator', () => {
-  assert.equal(loadI18n({ stored: 'en', navLang: 'zh-CN' }).pdLang(), 'en')
-  assert.equal(loadI18n({ stored: 'zh', navLang: 'en-US' }).pdLang(), 'zh')
+test('语言解析：localStorage 显式值优先于一切探测', () => {
+  assert.equal(loadI18n({ stored: 'en', navLang: 'zh-CN', tz: 'Asia/Shanghai' }).pdLang(), 'en')
+  assert.equal(loadI18n({ stored: 'zh', navLang: 'en-US', tz: 'America/New_York' }).pdLang(), 'zh')
   // 非法显式值忽略，回落探测
-  assert.equal(loadI18n({ stored: 'fr', navLang: 'en-US' }).pdLang(), 'en')
+  assert.equal(loadI18n({ stored: 'fr', navLang: 'en-US', tz: 'America/New_York' }).pdLang(), 'en')
 })
 
-test('语言解析：navigator.language zh 前缀 → zh，否则 en；无存储无导航 → zh', () => {
-  assert.equal(loadI18n({ navLang: 'zh-TW' }).pdLang(), 'zh')
-  assert.equal(loadI18n({ navLang: 'en-US' }).pdLang(), 'en')
-  assert.equal(loadI18n({ navLang: 'ja-JP' }).pdLang(), 'en')
-  assert.equal(loadI18n({}).pdLang(), 'zh')
+test('语言解析：zh 信号优先于 en——Electron 外壳 navigator 被钉成 en-US 的中文机器', () => {
+  // 用户实报场景：DSH Electron webview navigator.language=en-US（应用 locale），
+  // 操作系统时区 Shanghai——时区压过假 en 信号
+  assert.equal(loadI18n({ navLang: 'en-US', tz: 'Asia/Shanghai' }).pdLang(), 'zh')
+  // 常规英文浏览器（en 语言 + 非中文时区）仍是 en
+  assert.equal(loadI18n({ navLang: 'en-US', tz: 'America/New_York' }).pdLang(), 'en')
+  // 偏好列表里带 zh 也算（Electron languages 偶有保留 OS 偏好）
+  assert.equal(loadI18n({ navLang: 'en-US', navLangs: ['en-US', 'zh-CN'], tz: 'America/New_York' }).pdLang(), 'zh')
+})
+
+test('语言解析：宿主页面 <html lang> 与最终兜底', () => {
+  assert.equal(loadI18n({ navLang: 'zh-TW', tz: 'America/New_York' }).pdLang(), 'zh')
+  assert.equal(loadI18n({ navLang: 'ja-JP', docLang: 'zh-CN', tz: 'America/New_York' }).pdLang(), 'zh')
+  assert.equal(loadI18n({ navLang: 'ja-JP', docLang: 'en-US', tz: 'America/New_York' }).pdLang(), 'en')
+  // 无任何 zh/en 信号：兜底 zh（服务端消息仅中文，en 面板必混排）
+  assert.equal(loadI18n({ navLang: 'ja-JP', tz: 'America/New_York' }).pdLang(), 'zh')
 })
 
 // ── setLang / 订阅 ──────────────────────────────────────────────────────────
