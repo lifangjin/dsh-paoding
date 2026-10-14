@@ -135,7 +135,7 @@ dsh plugin --profile web add link:"$PWD"
 
 包直接落在仓库目录上，改动经 HMR 或重启生效，无需反复重装。此形态无法就地升级（见第 3 节）；想切回 registry 版，`dsh plugin --profile web add dsh-paoding@latest` 即可。
 
-**仓库内兜底 CLI**（不宣传，仅限克隆了仓库的开发者）：`node tools/install.mjs --auto`（有配置应用配置，没有写基础模板）、`--dry-run`（只打印检测报告与将生成的 allow，不写盘）、`--config <file>`（指定配置文件）、`--suggest`（fresh 安装无配置时按智能默认分配 host 工具；默认基础模板不写 host 工具）、`--profile <name>`（指定扫描哪个 profile 的 patch 层，默认 `web`）。不带 `--auto`（且非只读的 `--dry-run`）会被拒绝并提示——交互式安装已移除，可视化配置一律走插件通道自带的 Web 面板。
+**仓库内兜底 CLI**（不宣传，仅限克隆了仓库的开发者）：`node tools/install.mjs --auto`（有配置应用配置，没有写基础模板）、`--dry-run`（只打印检测报告、将生成的 allow 与配置体检，不写盘）、`--config <file>`（指定配置文件）、`--suggest`（fresh 安装无配置时按智能默认分配 host 工具；默认基础模板不写 host 工具）、`--profile <name>`（指定扫描哪个 profile 的 patch 层，默认 `web`）、`doctor`（只读安装体检，用法见第 8 节开头）。不带 `--auto`（且非只读的 `--dry-run` / `doctor`）会被拒绝并提示——交互式安装已移除，可视化配置一律走插件通道自带的 Web 面板。
 
 ## 5. host patch 检测机制
 
@@ -155,7 +155,7 @@ dsh plugin --profile web add link:"$PWD"
 
 - **启用判定**：patch 条目未被禁用（`enabled !== false` 且无 `disabled`）即视为启用；插件另查 `config.enabled`。
 - **MCP 服务器识别**：条目名的包名段**精确等于** `dsh-mcp-client`（scoped/子路径形式按 `/` 取末段比对，`not-dsh-mcp-client-foo` 这类不会误判），或配置含 `serverName` 且 transport 为 `stdio` / `streamable-http` / `sse`（或有 `command`）。
-- **精确工具名解析**（`toolFilter.allow` 是精确名匹配、不支持 glob，名字必须拼全）：检测顺序是**所有 `stdio` / `streamable-http` 服务器一律先实时 JSON-RPC 握手**（stdio 拉起进程发 `initialize` + `tools/list`；streamable-http 走 POST；**15 秒超时**），把返回的工具名解析成 `mcp__<server>__<tool>`；静态已知表（`tavily` → 5 个工具 `tavily_search` / `tavily_crawl` / `tavily_extract` / `tavily_map` / `tavily_research`，`codegraph` → `codegraph_explore`）只是已知服务器**握手失败时的降级兜底**——工具按表保留，报告标注 static table，不丢工具；未知服务器握手失败才整服务器跳过。
+- **精确工具名解析**（检测与产物按精确名对账；配置条目可写 `*`/`?` 通配，生成期展开成具体名，见配置文档）：检测顺序是**所有 `stdio` / `streamable-http` 服务器一律先实时 JSON-RPC 握手**（stdio 拉起进程发 `initialize` + `tools/list`；streamable-http 走 POST；**15 秒超时**），把返回的工具名解析成 `mcp__<server>__<tool>`；静态已知表（`tavily` → 5 个工具 `tavily_search` / `tavily_crawl` / `tavily_extract` / `tavily_map` / `tavily_research`，`codegraph` → `codegraph_explore`）只是已知服务器**握手失败时的降级兜底**——工具按表保留，报告标注 static table，不丢工具；未知服务器握手失败才整服务器跳过。
 - **本地工具插件**：按白名单匹配 patch 条目名并登记其工具，如 `magic-memory` → `memory_search`（新增插件需扩展白名单，见 `tools/lib/host.mjs` 的 `KNOWN_HOST_PLUGINS`）。
 - **跳过不报错**：「握手失败、超时、`sse` 等不支持实时发现的服务器被跳过」只适用于**未知服务器**——整服务器跳过，对应角色只是缺这些工具，生成不报错（报告里会标注 `handshake failed` 及原因，URL/密钥会被打码）；已知服务器握手失败回落静态表、工具保留，不在此列。
 
@@ -217,6 +217,18 @@ rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets"/orchestrator-*
 卸载不影响 host 的其它内容（MCP、插件、会话等），与 DSH 源码零耦合；之后新建会话时「编排模式 (Orchestrator)」不再出现在预设选择器里。
 
 ## 8. 常见问题与排查
+
+**先跑一遍体检**
+
+多数「装不上 / 不出现 / 行为怪」都能用只读体检直接定位：
+
+```bash
+npx dsh-paoding@latest doctor          # 或仓库内：node tools/install.mjs doctor
+```
+
+doctor 不改任何文件，逐项检查并给出 `✔ 正常 / ⚠ 警告 / ✘ 错误 / – 跳过` 四档结论：配置文件能否解析、预设安装轨道与宿主版本是否匹配、托管声明行有无孤儿行或损坏块、`.agent-presets/orchestrator-*` 有没有配置里已不引用的孤儿目录、已装预设与当前配置的再生成结果有无漂移、`.generator-version` 版本标记是否对得上。结尾有汇总；出现 ✘ 时退出码为 1，⚠ 与 – 不影响使用（跳过多见于全新机器，属正常）。`--config` / `--profile` 与安装时同义。
+
+面板侧也有同源的保存时体检：每次「预览生成 / 保存并应用」的响应都带 `warnings` 字段（配置了未挂载工具、零工具角色、角色专用模型不在模型目录、预设落后于配置等），按条目提示处理即可，不用等运行时报错。
 
 **pnpm 缺失**
 

@@ -11,7 +11,10 @@ import path from 'node:path'
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { assignSlugs, collectState, generateAndInstall, presetIdOf } from '../../tools/install.mjs'
-import { autoAssignments } from '../../tools/lib/alloc.mjs'
+import { autoAssignments, baseAssignments } from '../../tools/lib/alloc.mjs'
+import { normalizeConfig, normalizeTargetFields, saveConfig, serializeConfig } from '../../tools/lib/config.mjs'
+import { parseYamlSubset, preprocessPatchText } from '../../tools/lib/yaml.mjs'
+import { captureWarnings, healthCheck } from '../../tools/lib/health.mjs'
 import {
   backfillHomePatchRows,
   detectHostVersionTriple,
@@ -159,12 +162,112 @@ export function serializeState(s) {
 }
 
 /** Compose + (optionally) install from a UI-supplied assignments object.
- *  workspacePath 非 null 时为该工作区生成独立 preset（见 generateAndInstall）。 */
-export function installAssignments(state, assignments, { dryRun = false, saveConfigOnWrite = false, workspacePath = null } = {}) {
+ *  workspacePath 非 null 时为该工作区生成独立 preset（见 generateAndInstall）。
+ *
+ *  0.3.10 起响应在既有字段之外纯增量附带 `warnings`（tools/lib/health.mjs 的
+ *  结构化体检结果，见 healthCheck）：生成成功时把本次生成的产物直接喂体检
+ *  （零重跑），生成失败（如零工具角色 throw）时体检照跑、items 挂在
+ *  error.warnings 上随原错误上抛——路由层 422 响应可将其一并透传给面板。
+ *  models（可选）：面板 models 路由的目录（groups 数组），体检的 unknown_model
+ *  项据此核对角色专用模型名；调用方拿不到目录时传 null（缺省），该项自动跳过。 */
+export function installAssignments(state, assignments, { dryRun = false, saveConfigOnWrite = false, workspacePath = null, models = null } = {}) {
   if (!assignments || typeof assignments !== 'object') {
     throw new Error('missing assignments object')
   }
-  return generateAndInstall(state, assignments, { dryRun, saveConfigOnWrite, workspacePath })
+  let result = null
+  let generationWarnings = []
+  let generateError = null
+  try {
+    ;[result, generationWarnings] = captureWarnings(() =>
+      generateAndInstall(state, assignments, { dryRun, saveConfigOnWrite, workspacePath }),
+    )
+  } catch (err) {
+    generateError = err
+  }
+  const { items } = healthCheck({ state, assignments, models, dryRunResult: result, generationWarnings })
+  if (generateError !== null) {
+    generateError.warnings = items
+    throw generateError
+  }
+  return { ...result, warnings: items }
+}
+
+// ── 配置文件导出 / 导入（面板页头「更多」菜单的服务端核心）────────────────────
+
+/**
+ * 基础模板配置文本：配置文件不存在时导出的回落内容。与 fresh 首装自愈
+ * （ensurePresetInstalled → generateAndInstall 的 saveConfig 分支）完全同源：
+ * baseAssignments + normalizeTargetFields + serializeConfig 单一序列化路径，
+ * 保证「导出的模板 → 再导入」往返出来的也是合法、可再解析的配置。
+ */
+function baseTemplateConfigText(state) {
+  return serializeConfig({
+    profile: state.effectiveProfile,
+    ...normalizeTargetFields(baseAssignments(state.staticBase)),
+    workspaces: {},
+  })
+}
+
+/**
+ * 导出配置：返回配置文件原文（字节不动，用户手编的注释 / 排版原样带走）；
+ * 文件不存在（ENOENT）时回落基础模板文本——与首装自愈写的内容一致，导出
+ * 即是「当前生效配置」的忠实快照。其余读失败（权限 / EIO 等）原样上抛：
+ * 静默回落模板会把「读不了」伪装成「没有」，误导用户拿模板覆盖回去。
+ * 只读不写，不触碰 state 缓存。
+ */
+export async function exportConfigPayload() {
+  const file = resolveConfigFile()
+  let content = null
+  try {
+    content = await readFile(file, 'utf8')
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err
+    content = baseTemplateConfigText(await getState())
+  }
+  return { ok: true, filename: path.basename(file), content }
+}
+
+/**
+ * 导入配置：content（配置文件全文）过与 loadConfig 完全同口径的解析校验
+ *（preprocessPatchText → 宿主 yaml 模块优先、内置 parseYamlSubset 兜底 →
+ * 顶层映射检查 → normalizeConfig），解析失败 / 顶层非映射以 statusCode=422
+ * 上抛（路由层回 { error }，不写盘）；通过后经 saveConfig 单一写盘路径落盘
+ *（0o600 + 头注释 + 规范化，与 CLI / 面板任何一次保存同一口径）。写盘即改
+ * mtime，state 缓存靠既有对账自动失效，无需手动清理。
+ *
+ * 往返取舍（有意为之）：load→normalize→serialize 会丢注释、未知键与排版，
+ * schema 字段（含 has_main_agent_extra 显式空表等「缺省 vs 显式」语义）全保留
+ * ——与面板 / CLI 每次保存的行为一致，换来落盘配置恒合法、可再解析。
+ */
+export async function importConfigContent(content) {
+  const processed = preprocessPatchText(String(content ?? ''))
+  // 宿主 yaml 模块从 state 顺路取（collectState 已探测好）；state 通道异常时
+  // 退化为仅内置解析器校验——内置解析器覆盖不了的长文法此时可能误报 422，
+  // 但绝不放过坏配置写盘，宁严勿漏。
+  let yamlMod = null
+  try {
+    yamlMod = (await getState())?.yamlMod ?? null
+  } catch { /* 校验口径降级，见上 */ }
+  let data = null
+  if (yamlMod) {
+    try { data = yamlMod.parse(processed) } catch { data = null }
+  }
+  if (data === null) {
+    try {
+      data = parseYamlSubset(processed)
+    } catch (err) {
+      const error = new Error(`配置解析失败：${err.message}`)
+      error.statusCode = 422
+      throw error
+    }
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    const error = new Error('配置解析失败：顶层必须是键值映射（mapping），不能是空文件、列表或标量')
+    error.statusCode = 422
+    throw error
+  }
+  saveConfig(resolveConfigFile(), normalizeConfig(data))
+  return { ok: true }
 }
 
 // ── 首装 / 升级后 preset 自动重生成 ─────────────────────────────────────────

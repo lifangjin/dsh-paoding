@@ -135,7 +135,7 @@ dsh plugin --profile web add link:"$PWD"
 
 The package sits directly on the repository directory; changes go live via HMR or a restart, with no reinstalls. This form cannot be upgraded in place (see §3); to switch back to the registry version, run `dsh plugin --profile web add dsh-paoding@latest`.
 
-An **in-repo fallback CLI** also exists (not advertised; for developers who cloned the repo): `node tools/install.mjs --auto` (apply the config if present, else write the base template), `--dry-run` (print the detection report and the would-be allow lists without writing anything), `--config <file>` (select a config file), `--suggest` (on a fresh install without a config file, seed smart defaults that assign host tools; the default base template leaves host tools out), `--profile <name>` (which profile's patch layer to scan, default `web`). Without `--auto` (and without the read-only `--dry-run`) it refuses to run — interactive install has been removed; visual configuration belongs to the Web panel that ships with the plugin channel.
+An **in-repo fallback CLI** also exists (not advertised; for developers who cloned the repo): `node tools/install.mjs --auto` (apply the config if present, else write the base template), `--dry-run` (print the detection report, the would-be allow lists and the config health check without writing anything), `--config <file>` (select a config file), `--suggest` (on a fresh install without a config file, seed smart defaults that assign host tools; the default base template leaves host tools out), `--profile <name>` (which profile's patch layer to scan, default `web`), `doctor` (read-only install health check — see the start of §8). Without `--auto` (and without the read-only `--dry-run` / `doctor`) it refuses to run — interactive install has been removed; visual configuration belongs to the Web panel that ships with the plugin channel.
 
 ## 5. Host patch detection
 
@@ -155,7 +155,7 @@ All layers are **included** (detection unions the enabled entries across layers)
 
 - **Enabled test**: a patch entry counts as enabled unless disabled (`enabled !== false` and no `disabled`); plugins additionally check `config.enabled`.
 - **MCP server recognition**: the entry's package-name segment **exactly equals** `dsh-mcp-client` (scoped/sub-path forms compare the last `/` segment; a name like `not-dsh-mcp-client-foo` does not match), or the config carries a `serverName` with transport `stdio` / `streamable-http` / `sse` (or has a `command`).
-- **Exact tool-name resolution** (`toolFilter.allow` matches exact names, no globs — names must be spelled out): the detection order is that **every `stdio` / `streamable-http` server gets a live JSON-RPC handshake first** (stdio spawns the process and sends `initialize` + `tools/list`; streamable-http POSTs; **15-second timeout**), and the returned tools become `mcp__<server>__<tool>` names; the static known table (`tavily` → 5 tools `tavily_search` / `tavily_crawl` / `tavily_extract` / `tavily_map` / `tavily_research`, `codegraph` → `codegraph_explore`) is only the degraded fallback when a **known** server's handshake fails — tools are kept per the table, the report flags a static table, and no tools are lost; only an unknown server that fails the handshake is skipped entirely.
+- **Exact tool-name resolution** (detection and artifacts reconcile exact names; config entries may use `*`/`?` wildcards, expanded to concrete names at generation time — see the configuration guide): the detection order is that **every `stdio` / `streamable-http` server gets a live JSON-RPC handshake first** (stdio spawns the process and sends `initialize` + `tools/list`; streamable-http POSTs; **15-second timeout**), and the returned tools become `mcp__<server>__<tool>` names; the static known table (`tavily` → 5 tools `tavily_search` / `tavily_crawl` / `tavily_extract` / `tavily_map` / `tavily_research`, `codegraph` → `codegraph_explore`) is only the degraded fallback when a **known** server's handshake fails — tools are kept per the table, the report flags a static table, and no tools are lost; only an unknown server that fails the handshake is skipped entirely.
 - **Local tool plugins**: matched against a whitelist of patch entry names, registering their tools, e.g. `magic-memory` → `memory_search` (new plugins extend the whitelist — `KNOWN_HOST_PLUGINS` in `tools/lib/host.mjs`).
 - **Skipped, not fatal**: "servers whose handshake fails, times out, or uses a transport without live discovery (`sse`) are skipped" applies to **unknown servers** only — such a server is skipped entirely, the role simply lacks those tools, and generation raises no error (the report flags `handshake failed` with the reason; URLs and keys are masked); known servers fall back to the static table on a failed handshake and keep their tools, so they never land here.
 
@@ -217,6 +217,18 @@ On a DSH ≥ 0.1.7 host, check one more place: `$DSH_HOME/cordis.patch.yml` may 
 Uninstalling touches nothing else on the host (MCP, plugins, sessions), and stays decoupled from DSH source code; "编排模式 (Orchestrator)" disappears from the preset selector for new sessions.
 
 ## 8. Troubleshooting
+
+**Run the doctor first**
+
+Most "won't install / won't show up / behaves oddly" reports can be pinned down by the read-only health check:
+
+```bash
+npx dsh-paoding@latest doctor          # or from a checkout: node tools/install.mjs doctor
+```
+
+The doctor writes nothing. It walks through each check and marks it `✔ ok / ⚠ warning / ✘ error / – skipped`: is the config file parseable, does the preset track match the host version, are there orphan or corrupted managed declaration rows, are there `orchestrator-*` preset directories no longer referenced by the config, does the installed preset drift from what the current config would regenerate, and does the `.generator-version` marker line up. A summary closes the report; any ✘ makes the exit code 1, while ⚠ and – are safe to live with (skips are normal on a fresh machine). `--config` / `--profile` mean the same as during installation.
+
+The panel runs the same checks on every save: each Preview / Save & Apply response carries a `warnings` field (configured-but-unmounted tools, zero-tool roles, role models missing from the model directory, presets behind the config, and so on) — follow the per-item hints instead of waiting for a runtime error.
 
 **pnpm missing**
 

@@ -131,7 +131,17 @@ Of the four built-in delegation roles, the installer (the `ROLES` constant) mana
 
 - `persona`: **replaces the deployment persona wholesale**. The text lands in the `dsh-tool-subagent` instance's `persona` field — the child's **deployment persona** (the identity and behavior guidance the subagent sees in its session), not an appendix. The static persona's built-in "failure-report protocol / behavior boundary" paragraphs are replaced too — if you want to keep them, include the original text (see the matching block in `presets/orchestrator/agent.cordis.yml`) in yours.
 - `tools`: **fully overrides the intent** of that role's `toolFilter.allow`. The relationship in one sentence: the allow lists in `agent.cordis.yml` are static intent that the installer rewrites against actual detection results; the `tools` you write under `roles.<name>` are the new intent — whatever survives detection is what stays.
-- Role allow lists use **exact-name matching**; globs are not supported, so tavily's five tools must each be spelled out (`mcp__tavily__tavily_search` … `mcp__tavily__tavily_research`).
+- Tool entries accept `*` and `?` wildcards (`*` matches any run of characters including none, `?` exactly one). Expansion happens at **generation time**: the generator expands pattern entries against the candidate tool surface (the preset's built-in surface ∪ the detection inventory) into concrete names in the generated preset, so runtime whitelist semantics are identical to spelling every name out — matched names still go through the regular filtering (an undetected MCP tool is not resurrected by a pattern), and a pattern that matches nothing warns and is dropped. The five tavily tools therefore fit on one line:
+
+  ```yaml
+  roles:
+    search_external:
+      tools:
+        - web_search
+        - mcp__tavily__tavily_*   # expanded at generation to search/crawl/extract/map/research (per actual detection)
+  ```
+
+  `main_agent_extra` and custom-role `tools` support them too. Pattern entries are stored and read back verbatim in the config file (the config panel renders them fine); only the generated preset contains the expanded concrete names.
 
 Example — replacing `implement`'s persona and tools. The `tools` below match the static default — note that it does **not** contain `str_replace_editor` (why: see 8.2). Writing `tools` out explicitly freezes the intent: later changes to the static source no longer affect this role:
 
@@ -649,7 +659,7 @@ Omitting `agentOptions` means inheriting the main agent's model. The config sub-
 ### 8.2 Platform / registry details
 
 - **`str_replace_editor` is deliberately not in `implement`'s allow**: some deployments' registries do not provide it, and a child created with it in the allow would be rejected by `tools.restrict()` as an unknown tool. Add it back only after confirming your deployment registers it (edit the static implement allow, or `roles.implement.tools` in the config).
-- Allow lists use **exact-name matching**; globs are not supported; tavily's five tools must each be spelled out.
+- Allow-list tool entries accept `*` / `?` wildcards, expanded to concrete names at generation time (see 2.1); spelling out exact names works as before.
 - Unmounted names in the main-agent allow never error (the waterfall matches names only against already-resolved tools).
 
 ### 8.3 Syncing after disabling MCPs / plugins
@@ -705,3 +715,50 @@ Skill candidates do not follow the directory the GUI was launched from: the **gl
 - A skill installed only inside one project (say `bento-slides` living in a knowledge-base repo) is invisible — and unassignable — in the global config; select that workspace and it appears in the skill grid with a "project" badge, assignable to that workspace preset's main agent or roles.
 - Generation resolves skills through the same lens: a workspace preset can emit the absolute SKILL.md path of a project-local skill (the main agent reads it on demand with `read` — any on-disk path is readable); the global preset resolves user roots only and warns-and-skips project-local skill names — a global preset travels across all projects and should not reference a single project's skill anyway.
 - The fallback CLI has no workspace concept and scans the two user roots only (same as the global default).
+
+## 10. Scenario templates (Lite / Research / Full)
+
+The top of the "Roles & tools" group carries a row of **scenario template** quick buttons. The three presets map to three typical workflows; clicking one edits the local draft of the current config view (**nothing is saved automatically** — the preview is invalidated as usual and a toast reminds you that it takes effect after "save & apply"):
+
+| Preset | `roles_remove` | `main_agent_extra` | Typical use |
+| --- | --- | --- | --- |
+| Lite | `search_external`, `design` | cleared | Pure coding: keep only the implement role, no extra main-agent tools |
+| Research | `design`, `implement` | cleared | Look things up, build nothing: keep the search role (deep search included), drop design and implement |
+| Full | `[]` (keep all) | check every inventoried tool | Full orchestration: all four built-in roles, fully armed main agent |
+
+A template deliberately touches **only these two keys** and nothing else:
+
+- Role tool surfaces, display names, personas, per-role models, session/start modes, `main_agent_remove`, and skill assignments are all left as they are;
+- Custom roles are unaffected;
+- `search_internal_deep` is a static delegation tool, outside the reach of `roles_remove` (see §2.2); all three presets keep it — the Research preset's "deep search stays" leans on exactly that, no config action needed;
+- A preset is a **determined state**, not a delta on top of the current draft: clicking the same preset twice is idempotent, and switching Lite/Research back to Full restores the personas / models / tool surfaces you tuned for the previously removed roles (removed roles keep their entry keys; the cards are merely hidden).
+
+## 11. Exporting and importing the config
+
+The header "More" menu offers export and import of the whole config file (the §1 `dsh-paoding.config.yml`; point `DSH_PAODING_CONFIG` elsewhere to relocate it).
+
+**Export** downloads the config file **verbatim** (byte-for-byte — hand-written comments and formatting travel with it). When the file does not exist, the export falls back to the base-template text — the same content a fresh install would write, so an export is always a faithful snapshot of "what is in effect". The download name follows the actual config file name (default `dsh-paoding.config.yml`).
+
+**Import** picks a YAML config file and, after a confirmation dialog with a red confirm button, **overwrites the entire config file** — the workspace view is no exception: the `workspaces` section (§9) is replaced together with the rest of the file, and the confirmation copy says so explicitly. Flow and boundaries:
+
+- Validation follows the same rules as `loadConfig`: unparsable content or a non-mapping top level (empty file, list, scalar) is rejected with 422 and **nothing is written**; the panel shows a failure toast and the previous config stays untouched.
+- Content that passes validation is written through the same single save path used by every panel / CLI save (normalized + header comment + `0600` mode).
+- **Round-trip tradeoff (by design)**: import normalizes before writing — comments, unknown keys, and formatting are not preserved; every schema field survives, including the "absent vs explicitly empty" semantics (e.g. the explicit-empty marker for `main_agent_extra: []`, see §3).
+- Writing changes the file's mtime, so the panel's detection-state cache invalidates automatically through the existing reconciliation, and the view rebuilds from the new config.
+- Import shares the same in-flight write gate as "save & apply": applying during an import (or the reverse) answers 409 — retry shortly.
+
+## 12. Check messages (health review)
+
+After a preview or an apply, if the server-side health review finds problems, a **check messages** card appears above the preview area: one row per finding, color-coded red (error) / amber (warn) / neutral (info), with the check code available on hover for troubleshooting. No findings — no card, zero footprint.
+
+Entries come from the structured health review (`tools/lib/health.mjs`); codes and levels:
+
+| Code | Level | Meaning |
+| --- | --- | --- |
+| `zero_tool_role` | error | A role ends up with no usable tools after filtering — zero-tool roles are refused at install time, so apply will fail; add tools or remove the role via `roles_remove` |
+| `unmounted_tool` | warn | A configured tool is currently not mounted (e.g. its MCP server is down); it is filtered out at generation |
+| `unknown_model` | warn | `roles.<tool>.model` is not in the current model directory (the list mirrors the settings-page model picker); a mismatch silently falls back |
+| `preset_drift` | info | The installed preset lags behind the current config (or is not installed yet); re-apply to sync |
+| `generation` | warn | Generator's own notices (e.g. default-value fallbacks) |
+
+Invalidation scope: messages from a **preview** are discarded together with the draft on any config edit (same rule as the preview itself); messages from an **apply** describe what has already been written and survive until the next preview or apply. When an apply fails, the error toast stays as usual and the card lists every reason; when an apply succeeds but warn/error-level findings exist, the success toast switches to the amber variant "N check messages, see below".

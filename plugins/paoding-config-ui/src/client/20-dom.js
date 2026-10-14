@@ -76,16 +76,12 @@
       return false;
     }
 
-    // 「可续」选中时的行内成本提示（定稿文案）。
-    var ROLE_BG_CONTINUABLE_HINT =
-      "可续会话跨轮保留子代理上下文：产出不满可用 send_message 就地续修；" +
-      "无自动清理，落盘与 token 成本随轮次累积，建议仅多轮打磨类角色开启。";
+    // 「可续」选中时的行内成本提示（定稿文案）。i18n：常量会在模块加载期固化
+    // 成单语字符串，切语言后就错了——包装成函数，渲染期才经 t() 取当前语言。
+    function roleBgContinuableHint() { return t("dom.bgContinuableHint"); }
 
     // persistence 后端缺失时的警告（定稿文案；只警示不拦截，预览 / 应用照常）。
-    var ROLE_BG_PERSISTENCE_WARN =
-      "未检测到会话持久化后端（sessionPersistence）。可续模式在委派时会直接报错 " +
-      "PERSISTENCE_UNAVAILABLE：需在 ~/.dsh/cordis.patch.yml 挂 " +
-      "@deepseek-ai/dsh-session-persistence-jsonl（host 层、机器级改动，详见 docs/orchestration.md）。";
+    function roleBgPersistenceWarn() { return t("dom.bgPersistenceWarn"); }
 
     // ── 启动方式（roles.<toolName>.start_mode）─────────────────────────────
     // 定稿键名 'fresh' | 'fork'，缺省 fresh。与后端序列化形状一致：config 层
@@ -103,10 +99,8 @@
     }
 
     // 「继承对话（fork）」选中且该角色配了专用模型时的行内提示（定稿文案）：
-    // fork 子代理继承主 agent 的提供方与模型，专用模型不生效。
-    var ROLE_SM_FORK_MODEL_HINT =
-      "继承对话的子代理随主 agent 的当前模型启动，上方专用模型不会生效；" +
-      "应用时会忽略该项模型配置。";
+    // fork 子代理继承主 agent 的提供方与模型，专用模型不生效。同为渲染期取文案。
+    function roleForkModelHint() { return t("dom.forkModelHint"); }
 
 
     // mcp__ 前缀判定（归「MCP 工具」组的依据，供角色工具网格分组与
@@ -138,7 +132,7 @@
       var err = String(d.runtimeError);
       if (err.length > 200) err = err.slice(0, 200) + "…";
       return h("div", { className: "omd-runtimeNote" },
-        "运行时识别不可用，已回退文件扫描（" + err + "）");
+        t("dom.runtimeFallback", { err: err }));
     }
 
     // 版本号展示归一：tag 缺前缀 v 时补上（服务端原样透传 GitHub tag_name，

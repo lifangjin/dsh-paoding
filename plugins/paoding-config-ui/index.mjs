@@ -3,7 +3,8 @@
  *
  * 把 dsh-paoding 可视化配置器整合进 DSH Web GUI（左侧栏全页配置，无独立服务端）：
  *   - Node 侧：注册 /api/paoding/* 前缀路由（state/models/workspaces/version/
- *     upgrade/preview/apply/rescan + client.css 静态样式），经
+ *     upgrade/preview/apply/rescan/config/export/config/import + client.css
+ *     静态样式），经
  *     ./api-core.mjs 复用 tools/install.mjs 的检测与生成管线；workspaces 直连
  *     宿主 workspaceRegistry 服务（list / create，幂等）；version
  *     复用 tools/lib/version.mjs 的版本检测（npm registry 优先，npmmirror
@@ -36,7 +37,8 @@ import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getState, refreshState, isStateCacheStale, serializeState, installAssignments, resolveDshHome, discoverWorkspaceCandidates, ensurePresetInstalled, pluginVersion } from './api-core.mjs'
+import { getState, refreshState, isStateCacheStale, serializeState, installAssignments, resolveDshHome, discoverWorkspaceCandidates, ensurePresetInstalled, pluginVersion, exportConfigPayload, importConfigContent } from './api-core.mjs'
+import { collectModelRefs } from '../../tools/lib/health.mjs'
 import { detectSkills } from '../../tools/lib/skills.mjs'
 import { collectRuntimeFacts } from './runtime-inventory.mjs'
 import { getVersionInfo } from '../../tools/lib/version.mjs'
@@ -255,6 +257,38 @@ async function stateWithRuntimeFacts(ctx, { force = false } = {}) {
 // apply in-flight 闸（模块级）：apply 落盘期间再来的 apply 直接 409，防并发写配置。
 let applyInFlight = false
 
+/**
+ * 模型目录（面板 models 路由与 preview/apply 的模型体检共用同一份映射，防两处
+ * 漂移）：ctx.llm（DSH ≥ 0.1.6 的宿主模型运行时）listProviders() 给已注册
+ * 适配器的 provider 路由（{ id, ... }），listModels(provider) 给该路由的目录
+ *（{ provider, id, name, ... }）。逐 provider 并发实调映射成客户端的 groups
+ * 形状（group.id = provider 路由 id）；单路由失败隔离记入 failures 不抛错，
+ * 与旧 apiProxy 时代的容错语义一致。ctx.llm 缺失（老宿主 / 测试假 ctx）时
+ * listProviders 直接 TypeError，由调用方自捕降级。
+ */
+async function modelDirectoryOf(ctx) {
+  const providers = ctx.llm.listProviders()
+  const failures = []
+  const results = await Promise.all((Array.isArray(providers) ? providers : []).map(async (provider) => {
+    const id = provider && typeof provider.id === 'string' ? provider.id : null
+    if (!id) return null
+    try {
+      const models = await ctx.llm.listModels(id)
+      return {
+        id,
+        name: provider.name || provider.displayName || id,
+        models: (Array.isArray(models) ? models : [])
+          .filter((m) => m && typeof m.id === 'string' && m.id !== '')
+          .map((m) => ({ id: m.id, name: m.name || m.id })),
+      }
+    } catch (err) {
+      failures.push(`${id}: ${err.message}`)
+      return null
+    }
+  }))
+  return { groups: results.filter(Boolean), failures }
+}
+
 // —— 宿主热切换竞态兜底 ————————————————————————————————————————————
 // dsh 0.1.7-rc.2 / 0.2.0-rc.x 插件列表「禁用→启用」会重建条目纤维：新 apply()
 // 先执行，旧 incarnation 的路由注销走异步结算，注册瞬间旧路由常仍在表里，
@@ -339,31 +373,8 @@ export async function apply(ctx) {
           // 目录发现可能稍慢，属正常。失败组在 failures 里，不抛错；这里自捕
           // 一层，保证错误也走 { ok: false, error } 形状（外层 catch 是 { error }）。
           try {
-            // ctx.llm（DSH ≥ 0.1.6 的宿主模型运行时）：listProviders() 给已注册
-            // 适配器的 provider 路由（{ id, ... }），listModels(provider) 给该
-            // 路由的目录（{ provider, id, name, ... }）。逐 provider 并发实调
-            // 映射成客户端的 groups 形状（group.id = provider 路由 id）；单路由
-            // 失败隔离记入 failures 不抛错，与旧 apiProxy 时代的容错语义一致。
-            const providers = ctx.llm.listProviders()
-            const failures = []
-            const results = await Promise.all((Array.isArray(providers) ? providers : []).map(async (provider) => {
-              const id = provider && typeof provider.id === 'string' ? provider.id : null
-              if (!id) return null
-              try {
-                const models = await ctx.llm.listModels(id)
-                return {
-                  id,
-                  name: provider.name || provider.displayName || id,
-                  models: (Array.isArray(models) ? models : [])
-                    .filter((m) => m && typeof m.id === 'string' && m.id !== '')
-                    .map((m) => ({ id: m.id, name: m.name || m.id })),
-                }
-              } catch (err) {
-                failures.push(`${id}: ${err.message}`)
-                return null
-              }
-            }))
-            json(res, 200, { ok: true, groups: results.filter(Boolean), failures })
+            const { groups, failures } = await modelDirectoryOf(ctx)
+            json(res, 200, { ok: true, groups, failures })
           } catch (err) {
             json(res, 500, { ok: false, error: err.message })
           }
@@ -516,11 +527,23 @@ export async function apply(ctx) {
             // 必须走原始 state 通道（Set/Map/dstDir/yamlMod 齐全）——序列化视图
             // 喂生成管线会炸 TypeError（契约由 tests/api-apply.test.mjs 钉死）。
             const s = await rawStateWithRuntimeFacts(ctx)
+            // 模型目录按需取（unknown_model 体检的比对名单）：配置里没有任何
+            // 角色专用模型时不做目录发现（发现可能稍慢，别拖慢每次预览）；
+            // 拿不到（老宿主无 ctx.llm / 全路由失败）传 null，体检自动跳过该项。
+            let models = null
+            if (collectModelRefs(body.assignments).length > 0) {
+              try {
+                models = (await modelDirectoryOf(ctx)).groups
+              } catch {
+                models = null
+              }
+            }
             try {
               const result = installAssignments(s, body.assignments, {
                 dryRun,
                 saveConfigOnWrite: !dryRun,
                 workspacePath,
+                models,
               })
               // apply 落盘后必须重刷状态缓存：stateCache 仍是应用前的快照（existing
               // 还是旧 config 的 roles），浏览器刷新读到的就是它——角色专用模型 /
@@ -544,12 +567,54 @@ export async function apply(ctx) {
                 // 本次落点：全局 orchestrator 或工作区专属 orchestrator-<slug>。
                 presetId: result.presetId,
                 configFile: s.configFile,
+                // 结构化体检结果（tools/lib/health.mjs）：未挂载工具 / 零工具角色 /
+                // 未知模型 / 预设漂移 / 生成期告警。纯增量字段，客户端批次负责渲染。
+                warnings: result.warnings,
               })
             } catch (err) {
-              json(res, 422, { error: err.message })
+              // 422 保持既有 { error } 形状；体检结果（如零工具角色的可读说明）
+              // 挂在 error.warnings 上时一并透传（同样纯增量）。
+              json(res, 422, {
+                error: err.message,
+                ...(Array.isArray(err?.warnings) ? { warnings: err.warnings } : {}),
+              })
             }
           } finally {
             if (!dryRun) applyInFlight = false
+          }
+          return
+        }
+
+        if (route === 'config/export' && req.method === 'GET') {
+          // 导出配置：配置文件原文（不存在时回落基础模板文本，同首装自愈写入
+          // 的内容，见 exportConfigPayload）。只读不写、不碰 state 缓存；失败
+          // 走外层 catch（500 + 脱敏 message）。
+          json(res, 200, await exportConfigPayload())
+          return
+        }
+
+        if (route === 'config/import' && req.method === 'POST') {
+          // 导入配置 = 用提交文本整体覆盖配置文件（含 workspaces 段——工作区
+          // 条目随整份文件一起被替换，客户端确认文案里已明说）。与 apply 共用
+          // 同一把 in-flight 闸：apply 落盘期间导入 409，导入落盘期间 apply 409，
+          // 防两条写盘路径并发交错。空文本先拦（语义是「没选内容」，不该报成
+          // 「顶层不是映射」）；解析不合法由 importConfigContent 抛 422（外层
+          // catch 按 statusCode 回 { error }，不写盘）。
+          const body = await readBody(req)
+          const content = typeof body.content === 'string' ? body.content : ''
+          if (content.trim() === '') {
+            json(res, 422, { error: '缺少配置文本（body.content）' })
+            return
+          }
+          if (applyInFlight) {
+            json(res, 409, { error: '已有一次应用（apply）正在进行，请稍后重试' })
+            return
+          }
+          applyInFlight = true
+          try {
+            json(res, 200, await importConfigContent(content))
+          } finally {
+            applyInFlight = false
           }
           return
         }

@@ -23,9 +23,9 @@
           role: "tab",
           "aria-selected": activeWs === null ? "true" : "false",
           className: "omd-tab" + (activeWs === null ? " omd-tabActive" : ""),
-          title: "全局默认：写入共享的 orchestrator 预设",
+          title: t("ws.globalTabTip"),
           onClick: function () { switchWorkspace(null); },
-        }, h("span", { className: "omd-tabText" }, "全局默认"))];
+        }, h("span", { className: "omd-tabText" }, t("ws.globalTab")))];
         tabs = tabs.concat(visible.map(function (row) {
           var kind = wsTagOf(existingWs, meta, row.path);
           var tip = wsTabTipOf(row, meta, existingWs);
@@ -41,7 +41,7 @@
             h("span", { className: "omd-tabText" }, wsLabelOf(row)),
             h("span", { className: "omd-tabTag omd-tabTag" + kind.charAt(0).toUpperCase() + kind.slice(1) },
               wsTagTextOf(kind)),
-            row.sessionCount != null ? h("span", { className: "omd-tabCount" }, row.sessionCount + " 会话") : null);
+            row.sessionCount != null ? h("span", { className: "omd-tabCount" }, t("ws.sessionCount", { n: row.sessionCount })) : null);
         }));
         // 「更多」入口：仅在确有收进来的工作区时出现。正常路径激活项按显示
         // 顺序排最前、必然可见，这里仍兜底判一次——首帧 wsFitCount 还是兜底
@@ -56,12 +56,12 @@
             key: "__more__",
             type: "button",
             className: "omd-tab omd-tabMore" + (hiddenActive ? " omd-tabMoreActive omd-tabActive" : ""),
-            title: "其余 " + hidden.length + " 个工作区",
+            title: t("ws.moreTip", { n: hidden.length }),
             "aria-haspopup": "listbox",
             "aria-expanded": wsMenuOpen ? "true" : "false",
             onClick: function () { setWsMenuOpen(!wsMenuOpen); },
           },
-            h("span", { className: "omd-tabText" }, "更多"),
+            h("span", { className: "omd-tabText" }, t("ws.more")),
             h("span", { className: "omd-tabMoreCount" }, String(hidden.length))));
         }
         // 末尾「＋ 添加工作区」：与 tab 同尺寸的弱化按钮（ghost），点击打开输入弹窗。
@@ -69,12 +69,12 @@
           key: "__add__",
           type: "button",
           className: "omd-tab omd-tabAdd",
-          title: "注册新的工作区目录",
+          title: t("ws.addTabTip"),
           disabled: busy,
           onClick: function () { setWsAddOpen(true); setWsAddErr(""); },
         },
           h("span", { className: "omd-groupIcon" }, ic(P.IconPlusOutline16, 14)),
-          h("span", { className: "omd-tabText" }, "添加工作区")));
+          h("span", { className: "omd-tabText" }, t("ws.addTab"))));
         // 测量层单件：与真实 tab 同款 .omd-tab 类，自然宽度因此一致；不进
         // a11y 树、不可聚焦，只负责被装填算法 offsetWidth 量。
         function measureTabOf(key, label) {
@@ -86,12 +86,12 @@
         // 下拉恰好贴着标签行的下边框展开。
         return h("div", { className: "omd-wsTabs" },
           h("div", { className: "omd-tabsRow" },
-          h("div", { className: "omd-tabs", role: "tablist", "aria-label": "配置对象", ref: tabsRowRef }, tabs),
+          h("div", { className: "omd-tabs", role: "tablist", "aria-label": t("ws.tablistLabel"), ref: tabsRowRef }, tabs),
           // 宽度测量层：常驻渲染（不随 wsFitCount 变），挪出视口且不可见，只把
           // 各 tab 的自然宽度喂给装填算法。「更多」原型计数固定写 99 按两位数
           // 算宽，与装填里的 SAFETY 余量搭配。
           h("div", { className: "omd-tabsMeasure", ref: tabsMeasureRef, "aria-hidden": "true" },
-            measureTabOf("__global__", "全局默认"),
+            measureTabOf("__global__", t("ws.globalTab")),
             order.map(function (row) {
               var m = meta[row.path];
               var mk = wsTagOf(existingWs, meta, row.path);
@@ -99,19 +99,19 @@
                 h("span", { className: "omd-tabText" }, wsLabelOf(row)),
                 h("span", { className: "omd-tabTag omd-tabTag" + mk.charAt(0).toUpperCase() + mk.slice(1) },
                   wsTagTextOf(mk)),
-                row.sessionCount != null ? h("span", { className: "omd-tabCount" }, row.sessionCount + " 会话") : null);
+                row.sessionCount != null ? h("span", { className: "omd-tabCount" }, t("ws.sessionCount", { n: row.sessionCount })) : null);
             }),
             h("button", { type: "button", "data-ws-key": "__more__", className: "omd-tab omd-tabMore", tabIndex: -1 },
-              h("span", { className: "omd-tabText" }, "更多"),
+              h("span", { className: "omd-tabText" }, t("ws.more")),
               h("span", { className: "omd-tabMoreCount" }, "99")),
             h("button", { type: "button", "data-ws-key": "__add__", className: "omd-tab omd-tabAdd", tabIndex: -1 },
               h("span", { className: "omd-groupIcon" }, ic(P.IconPlusOutline16, 14)),
-              h("span", { className: "omd-tabText" }, "添加工作区"))),
+              h("span", { className: "omd-tabText" }, t("ws.addTab")))),
           // 「更多」下拉：菜单项信息结构与 tab 同款（小圆点 / 名称 / 会话数，
           // title 拼法也一致），点击直接切过去。role=listbox/option 表达
           // 「从清单里选一个配置对象」的语义，aria-selected 标当前项。
           wsMenuOpen && hidden.length > 0
-            ? h("div", { className: "omd-tabMenu", role: "listbox", "aria-label": "更多工作区" },
+            ? h("div", { className: "omd-tabMenu", role: "listbox", "aria-label": t("ws.menuLabel") },
                 hidden.map(function (row) {
                   var kind = wsTagOf(existingWs, meta, row.path);
                   var tip = wsTabTipOf(row, meta, existingWs);
@@ -127,11 +127,11 @@
                     h("span", { className: "omd-tabText" }, wsLabelOf(row)),
                     h("span", { className: "omd-tabTag omd-tabTag" + kind.charAt(0).toUpperCase() + kind.slice(1) },
                       wsTagTextOf(kind)),
-                    row.sessionCount != null ? h("span", { className: "omd-tabCount" }, row.sessionCount + " 会话") : null);
+                    row.sessionCount != null ? h("span", { className: "omd-tabCount" }, t("ws.sessionCount", { n: row.sessionCount })) : null);
                 }))
             : null),
           h("div", { className: "omd-hint" },
-            "「全局默认」写入共享的 orchestrator 预设；选中某个工作区后，预览 / 应用会生成该工作区专属预设（orchestrator-<目录名>），两者互不影响。"));
+            t("ws.barHint")));
       }
 
       // 「添加工作区」弹窗：旧版是 tab 条下方的内联展开行，改为模态框输入。
@@ -146,19 +146,19 @@
         return h("div", { className: "pd-modalMask",
             // 只点遮罩空白处才收（mousedown 真正落在遮罩上），在卡片内按下拖选不误关
             onMouseDown: function (e) { if (e.target === e.currentTarget) closeWsModal(); } },
-          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": "添加工作区" },
+          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": t("ws.addTitle") },
             h("div", { className: "pd-modalHeader" },
-              h("h2", { className: "pd-modalTitle" }, "添加工作区"),
-              h("button", { type: "button", className: "pd-modalClose", "aria-label": "关闭", onClick: closeWsModal },
+              h("h2", { className: "pd-modalTitle" }, t("ws.addTitle")),
+              h("button", { type: "button", className: "pd-modalClose", "aria-label": t("common.close"), onClick: closeWsModal },
                 h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
             h("div", { className: "pd-modalBody" },
-              h("label", { className: "pd-modalLabel" }, "工作区目录绝对路径"),
+              h("label", { className: "pd-modalLabel" }, t("ws.pathLabel")),
               h("div", { className: "omd-wsSuggestWrap" },
                 h("input", {
                   type: "text",
                   className: "omd-nameInput omd-wsAddInput",
                   value: wsAddPath,
-                  placeholder: "输入工作区目录绝对路径，如 /Users/me/code/project-a",
+                  placeholder: t("ws.pathPlaceholder"),
                   spellCheck: false,
                   autoFocus: true,
                   onFocus: function () { loadWsCands(); setWsSuggestOpen(true); },
@@ -195,15 +195,15 @@
                       }))
                   : null),
               wsAddErr ? statusRow("omd-statusError", ic(P.IconWarningOutline16, 16), wsAddErr) : null,
-              h("div", { className: "omd-hint" }, "目录需已存在；已注册的目录重复提交幂等返回。")),
+              h("div", { className: "omd-hint" }, t("ws.pathHint"))),
             h("div", { className: "pd-modalFooter" },
-              h(P.Button, { variant: "outline", size: "md", disabled: busy, onClick: closeWsModal }, "取消"),
+              h(P.Button, { variant: "outline", size: "md", disabled: busy, onClick: closeWsModal }, t("common.cancel")),
               h(P.Button, {
                 variant: "primary",
                 size: "md",
                 disabled: busy || String(wsAddPath).trim() === "",
                 onClick: submitWorkspace,
-              }, busyOp === "wsadd" ? "添加中…" : "确认添加"))));
+              }, busyOp === "wsadd" ? t("ws.adding") : t("ws.addConfirm")))));
       }
 
       // 「新建自定义 agent 角色」弹窗：结构 / 关闭路径与「添加工作区」弹窗
@@ -217,18 +217,18 @@
         return h("div", { className: "pd-modalMask",
             // 只点遮罩空白处才收（mousedown 真正落在遮罩上），在卡片内按下拖选不误关
             onMouseDown: function (e) { if (e.target === e.currentTarget) closeRoleAddModal(); } },
-          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": "新建自定义 agent 角色" },
+          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": t("panel.roleAddTitle") },
             h("div", { className: "pd-modalHeader" },
-              h("h2", { className: "pd-modalTitle" }, "新建自定义 agent 角色"),
-              h("button", { type: "button", className: "pd-modalClose", "aria-label": "关闭", onClick: closeRoleAddModal },
+              h("h2", { className: "pd-modalTitle" }, t("panel.roleAddTitle")),
+              h("button", { type: "button", className: "pd-modalClose", "aria-label": t("common.close"), onClick: closeRoleAddModal },
                 h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
             h("div", { className: "pd-modalBody" },
-              h("label", { className: "pd-modalLabel" }, "角色 toolName（主 agent 的委派调用名）"),
+              h("label", { className: "pd-modalLabel" }, t("panel.roleAddToolNameLabel")),
               h("input", {
                 type: "text",
                 className: "omd-nameInput",
                 value: roleAddName,
-                placeholder: "输入英文小写角色名，如 reviewer",
+                placeholder: t("panel.roleAddNamePlaceholder"),
                 spellCheck: false,
                 autoFocus: true,
                 onChange: function (e) { setRoleAddName(e.target.value); },
@@ -243,14 +243,14 @@
                   }
                 },
               }),
-              h("label", { className: "pd-modalLabel" }, "显示名（可选）"),
+              h("label", { className: "pd-modalLabel" }, t("panel.dispNameLabel")),
               h("input", {
                 ref: roleAddDispRef,
                 type: "text",
                 className: "omd-nameInput",
                 value: roleAddDispName,
                 // 占位语义与 roleTitleBlock 的 subject=toolName 一致：留空 = 事件流标题回落 toolName
-                placeholder: "如 代码评审，留空 = 用 toolName",
+                placeholder: t("panel.dispNamePlaceholder"),
                 spellCheck: false,
                 onChange: function (e) { setRoleAddDispName(e.target.value); },
                 // 第二段的 Enter 才是提交：第一段已把焦点送到这里，用户在此按
@@ -261,7 +261,7 @@
               }),
               // 「会话模式」单选（与角色卡 roleBgModeBlock 同款语义）：缺省一次性，
               // 选「可续」才写 background_mode: 'continuable'；提示 / 警告行内联。
-              h("label", { className: "pd-modalLabel" }, "会话模式"),
+              h("label", { className: "pd-modalLabel" }, t("panel.bgModeLabel")),
               h("div", { className: "omd-nameRow" },
                 h("label", { className: "omd-toolItem" },
                   h("input", {
@@ -271,7 +271,7 @@
                     checked: roleAddBgMode !== "continuable",
                     onChange: function () { setRoleAddBgMode("one-shot"); },
                   }),
-                  h("span", { className: "omd-toolName" }, "一次性（one-shot）")),
+                  h("span", { className: "omd-toolName" }, t("panel.bgOneshot"))),
                 h("label", { className: "omd-toolItem" },
                   h("input", {
                     type: "radio",
@@ -280,16 +280,16 @@
                     checked: roleAddBgMode === "continuable",
                     onChange: function () { setRoleAddBgMode("continuable"); },
                   }),
-                  h("span", { className: "omd-toolName" }, "可续（continuable）"))),
+                  h("span", { className: "omd-toolName" }, t("panel.bgContinuable")))),
               roleAddBgMode === "continuable"
-                ? h("div", { className: "omd-hint" }, ROLE_BG_CONTINUABLE_HINT)
+                ? h("div", { className: "omd-hint" }, roleBgContinuableHint())
                 : null,
               roleAddBgMode === "continuable" && data && data.persistenceAvailable === false
-                ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_BG_PERSISTENCE_WARN)
+                ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), roleBgPersistenceWarn())
                 : null,
               // 「启动方式」单选（与角色卡 roleStartModeBlock 同款语义）：缺省全新，
               // 选「继承对话」才写 start_mode: 'fork'（委派块块级 provider 行）。
-              h("label", { className: "pd-modalLabel" }, "启动方式"),
+              h("label", { className: "pd-modalLabel" }, t("panel.startModeLabel")),
               h("div", { className: "omd-nameRow" },
                 h("label", { className: "omd-toolItem" },
                   h("input", {
@@ -299,7 +299,7 @@
                     checked: roleAddStartMode !== "fork",
                     onChange: function () { setRoleAddStartMode("fresh"); },
                   }),
-                  h("span", { className: "omd-toolName" }, "全新（fresh）")),
+                  h("span", { className: "omd-toolName" }, t("panel.smFresh"))),
                 h("label", { className: "omd-toolItem" },
                   h("input", {
                     type: "radio",
@@ -308,22 +308,22 @@
                     checked: roleAddStartMode === "fork",
                     onChange: function () { setRoleAddStartMode("fork"); },
                   }),
-                  h("span", { className: "omd-toolName" }, "继承对话（fork）"))),
+                  h("span", { className: "omd-toolName" }, t("panel.smFork")))),
               roleAddStartMode === "fork"
                 ? h("div", { className: "omd-hint" },
-                    "继承对话的子代理以主 agent 已完成的对话轮次为初始内容启动（一次性快照，之后两边各自推进）；工具面仍以本角色配置为准。")
+                    t("panel.forkStartHint"))
                 : null,
               roleAddErr ? statusRow("omd-statusError", ic(P.IconWarningOutline16, 16), roleAddErr) : null,
               h("div", { className: "omd-hint" },
-                "角色名须为 2-32 位小写字母/数字/下划线/连字符，小写字母开头；内置名不可新建。显示名可选，不能换行，trim 后最多 60 字符，留空用 toolName 当标题。新角色工具面默认放开全部检测到的工具，可在卡片里再收窄。会话模式缺省一次性（one-shot），选「可续」后仍可在角色卡里改。启动方式缺省全新（fresh），选「继承对话」后仍可在角色卡里改。")),
+                t("panel.roleAddHint"))),
             h("div", { className: "pd-modalFooter" },
-              h(P.Button, { variant: "outline", size: "md", onClick: closeRoleAddModal }, "取消"),
+              h(P.Button, { variant: "outline", size: "md", onClick: closeRoleAddModal }, t("common.cancel")),
               h(P.Button, {
                 variant: "primary",
                 size: "md",
                 disabled: String(roleAddName).trim() === "",
                 onClick: submitRoleAdd,
-              }, "确认新建"))));
+              }, t("panel.roleAddConfirm")))));
       }
 
       // 「重命名自定义角色」弹窗：结构 / 关闭路径与 roleAddModalOf 一致——
@@ -336,13 +336,13 @@
         return h("div", { className: "pd-modalMask",
             // 只点遮罩空白处才收（mousedown 真正落在遮罩上），在卡片内按下拖选不误关
             onMouseDown: function (e) { if (e.target === e.currentTarget) closeRoleRenameModal(); } },
-          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": "重命名自定义角色" },
+          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": t("panel.roleRenameTitle") },
             h("div", { className: "pd-modalHeader" },
-              h("h2", { className: "pd-modalTitle" }, "重命名自定义角色"),
-              h("button", { type: "button", className: "pd-modalClose", "aria-label": "关闭", onClick: closeRoleRenameModal },
+              h("h2", { className: "pd-modalTitle" }, t("panel.roleRenameTitle")),
+              h("button", { type: "button", className: "pd-modalClose", "aria-label": t("common.close"), onClick: closeRoleRenameModal },
                 h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
             h("div", { className: "pd-modalBody" },
-              h("label", { className: "pd-modalLabel" }, "新 toolName（主 agent 的委派调用名）"),
+              h("label", { className: "pd-modalLabel" }, t("panel.roleRenameLabel")),
               h("input", {
                 type: "text",
                 className: "omd-nameInput",
@@ -360,9 +360,9 @@
               }),
               roleRenameErr ? statusRow("omd-statusError", ic(P.IconWarningOutline16, 16), roleRenameErr) : null,
               h("div", { className: "omd-hint" },
-                "2-32 位小写字母/数字/下划线/连字符，小写字母开头；不可改成内置名或已存在的名字。skills 里的引用自动迁移；改名后需重启 / 新会话生效。")),
+                t("panel.roleRenameHint"))),
             h("div", { className: "pd-modalFooter" },
-              h(P.Button, { variant: "outline", size: "md", onClick: closeRoleRenameModal }, "取消"),
+              h(P.Button, { variant: "outline", size: "md", onClick: closeRoleRenameModal }, t("common.cancel")),
               h(P.Button, {
                 variant: "primary",
                 size: "md",
@@ -370,7 +370,7 @@
                 // 让按钮状态与「确实改了名」对齐。
                 disabled: String(roleRenameVal).trim() === "" || String(roleRenameVal).trim() === roleRenameFor,
                 onClick: submitRoleRename,
-              }, "确认重命名"))));
+              }, t("panel.roleRenameConfirm")))));
       }
 
       if (!data || !assign) {
@@ -381,7 +381,7 @@
             ? statusRow("omd-statusError", ic(P.IconWarningOutline16, 16), error)
             : h("div", { className: "omd-loading" },
                 h("span", { className: "omd-spin" }, ic(P.IconLoadingOutline16, 16)),
-                h("span", null, "加载检测状态…")));
+                h("span", null, t("panel.loading"))));
       }
 
       // 技能网格数据源（主 agent 软引导/内联 + 下方角色 skills 分组共用）：
@@ -395,7 +395,7 @@
       // 全局 = 仅用户级技能；工作区 = 用户级 + 该工作区项目级技能。
       function skillScopeNote() {
         return h("span", { className: "omd-skillScope" },
-          activeWs !== null ? "用户级 + 该工作区项目级技能" : "仅用户级技能");
+          activeWs !== null ? t("panel.scopeWs") : t("panel.scopeGlobal"));
       }
 
       // 角色工具候选（三组网格共用数据源）：所有角色（内置 + 自定义）= SRC
@@ -420,14 +420,14 @@
             onClick: function () { togglePersona(name); },
           },
             h("span", { className: open ? "omd-chevron omd-chevronOpen" : "omd-chevron" }, ic(P.IconChevronDownOutline14, 14)),
-            h("span", null, "persona（可选，覆盖默认角色说明）"),
+            h("span", null, t("panel.personaToggle")),
             h("span", { className: "omd-personaEdit" }, ic(P.IconEditOutline16, 14))),
           open ? h("div", { className: "omd-personaBody" },
             h("textarea", {
               key: "omd-persona-" + name + "-" + switchRev, // 切视角重挂：defaultValue 显示新目标的 persona
               className: "omd-textarea",
               defaultValue: assign.roles[name].persona || "",
-              placeholder: "输入该角色的 persona 说明…",
+              placeholder: t("panel.personaPlaceholder"),
               spellCheck: false,
               disabled: busy,
               onBlur: function (e) {
@@ -438,7 +438,7 @@
                 });
               },
             }),
-            h("div", { className: "omd-hint" }, "技能引导会自动追加到 persona 末尾；自定义角色必填此说明。"))
+            h("div", { className: "omd-hint" }, t("panel.personaHint")))
           : null);
       }
 
@@ -456,14 +456,14 @@
             onClick: function () { setExtraOpen(!extraOpen); },
           },
             h("span", { className: extraOpen ? "omd-chevron omd-chevronOpen" : "omd-chevron" }, ic(P.IconChevronDownOutline14, 14)),
-            h("span", null, "人设追加（主 agent 提示词尾部，可编辑）"),
+            h("span", null, t("panel.extraToggle")),
             h("span", { className: "omd-personaEdit" }, ic(P.IconEditOutline16, 14))),
           extraOpen ? h("div", { className: "omd-personaBody" },
             h("textarea", {
               key: "omd-extra-" + extraRev + "-" + switchRev,
               className: "omd-textarea omd-extraArea",
               defaultValue: val,
-              placeholder: "留空并保存 = 不追加任何内容（默认 codegraph 规则将被移除）…",
+              placeholder: t("panel.extraPlaceholder"),
               spellCheck: false,
               disabled: busy,
               onBlur: function (e) { setMainPersonaExtra(e.target.value); },
@@ -474,10 +474,10 @@
                 className: "omd-extraRestore",
                 disabled: busy,
                 onClick: restoreMainPersonaExtra,
-              }, "恢复默认"),
+              }, t("common.restoreDefault")),
               h("span", { className: "omd-extraHint" },
-                "保存并应用时按此追加到主 agent persona 末尾（顺序：SRC 本体 → 技能行 → 此处）。改动需重启 GUI / 新会话生效。")),
-            h("div", { className: "omd-hint" }, "清空保存 = 移除默认 codegraph 规则（配置键 main_agent_persona_extra 记为 ''）。"))
+                t("panel.extraActionHint"))),
+            h("div", { className: "omd-hint" }, t("panel.extraClearHint")))
           : null);
       }
 
@@ -494,18 +494,18 @@
         function commitDisplayName(raw) {
           var s = String(raw == null ? "" : raw);
           if (/[\r\n]/.test(s)) {
-            toast.warn("主 agent 显示名（仅 preset 显示名）不能包含换行（\\r / \\n），未保存");
+            toast.warn(t("panel.mainNameNewline"));
             setDisplayNameRev(displayNameRev + 1); // 重挂 input，回到上次生效值
             return;
           }
           var v = s.trim();
           if (s !== "" && v === "") {
-            toast.warn("主 agent 显示名（仅 preset 显示名）不能为纯空白（清空字段或点「恢复默认」= 默认显示名），未保存");
+            toast.warn(t("panel.mainNameBlank"));
             setDisplayNameRev(displayNameRev + 1);
             return;
           }
           if (v.length > 60) {
-            toast.warn("主 agent 显示名（仅 preset 显示名）过长：trim 后最多 60 字符，未保存");
+            toast.warn(t("panel.mainNameTooLong"));
             setDisplayNameRev(displayNameRev + 1);
             return;
           }
@@ -525,7 +525,7 @@
           setDisplayNameRev(displayNameRev + 1);
         }
         return h("div", { className: "omd-mainName" },
-          h("div", { className: "omd-glabel" }, "主 agent 显示名（仅 preset 显示名）"),
+          h("div", { className: "omd-glabel" }, t("panel.mainNameLabel")),
           h("div", { className: "omd-nameRow" },
             h("input", {
               key: "omd-displayName-" + displayNameRev + "-" + switchRev,
@@ -537,9 +537,9 @@
               disabled: busy,
               onBlur: function (e) { commitDisplayName(e.target.value); },
             }),
-            h("button", { type: "button", className: "omd-extraRestore", disabled: busy, onClick: restoreMainDisplayName }, "恢复默认")),
+            h("button", { type: "button", className: "omd-extraRestore", disabled: busy, onClick: restoreMainDisplayName }, t("common.restoreDefault"))),
           h("div", { className: "omd-hint" },
-            "仅替换预设显示名，persona 身份行（You are the …）不动；留空 = 默认「编排模式 (Orchestrator)」（工作区预设用派生名）。改动需重启 GUI / 新会话生效。"));
+            t("panel.mainNameHint")));
       }
 
       // 内置角色「显示名」input 重挂（key 技巧）：写回校验失败 / 清空回默认时
@@ -577,13 +577,13 @@
         function commitRoleName(raw) {
           var s = String(raw == null ? "" : raw);
           if (/[\r\n]/.test(s)) {
-            toast.warn('角色 "' + name + '" 显示名不能包含换行（\\r / \\n），未保存');
+            toast.warn(t("panel.roleNameNewline", { name: name }));
             bumpRoleNameRev(name); // 重挂 input，回到上次生效值
             return;
           }
           var v = s.trim();
           if (v.length > 60) {
-            toast.warn('角色 "' + name + '" 显示名过长：trim 后最多 60 字符，未保存');
+            toast.warn(t("panel.roleNameTooLong", { name: name }));
             bumpRoleNameRev(name);
             return;
           }
@@ -596,7 +596,7 @@
         }
         return h("div", { className: "omd-mainName" },
           h("div", { className: "omd-glabel" },
-            isCustom ? "角色显示名（事件流委派行标题；不动 toolName / persona）" : "角色显示名（persona 身份句主语 + 事件流委派行标题；不动工具名/调用名）"),
+            isCustom ? t("panel.roleNameLabelCustom") : t("panel.roleNameLabelBuiltin")),
           h("div", { className: "omd-nameRow" },
             h("input", {
               key: "omd-roleName-" + name + "-" + ((roleNameRev && roleNameRev[name]) || 0) + "-" + switchRev,
@@ -610,8 +610,8 @@
             })),
           h("div", { className: "omd-hint" },
             isCustom
-              ? '留空 = 事件流显示 toolName（' + name + '）；保存并应用后生效（仅 GUI 展示，不影响生成产物与调用名）。'
-              : '留空 = 默认身份（如 "You are the ' + subject + ' agent."）；已为该角色自定义 persona 时仅作事件流标题。'));
+              ? t("panel.roleNameHintCustom", { name: name })
+              : t("panel.roleNameHintBuiltin", { subject: subject })));
       }
 
       // 角色「专用模型」行（内置与自定义角色通用同一组件，签名不变）：
@@ -630,17 +630,17 @@
         // ── 降级模式：目录不可用 → 现状双 input ───────────────────────────
         if (!modelGroupsOk) {
           var rev = (roleModelRev && roleModelRev[name]) || 0;
-          function labelOf(key) { return key === "provider" ? "provider" : "专用模型"; }
+          function labelOf(key) { return key === "provider" ? "provider" : t("panel.modelField"); }
           function commitRoleModel(key, raw) {
             var s = String(raw == null ? "" : raw);
             if (/[\r\n]/.test(s)) {
-              toast.warn('角色 "' + name + '" ' + labelOf(key) + "不能包含换行（\\r / \\n），未保存");
+              toast.warn(t("panel.roleModelNewline", { name: name, field: labelOf(key) }));
               bumpRoleModelRev(name); // 重挂 input，回到上次生效值
               return;
             }
             var v = s.trim();
             if (v.length > 120) {
-              toast.warn('角色 "' + name + '" ' + labelOf(key) + "过长：trim 后最多 120 字符，未保存");
+              toast.warn(t("panel.roleModelTooLong", { name: name, field: labelOf(key) }));
               bumpRoleModelRev(name);
               return;
             }
@@ -656,12 +656,12 @@
             });
             // provider 非空而 model 为空 → 允许保存（后端原样落盘），但明确提示会被忽略
             if (provider && !model) {
-              toast.warn('角色 "' + name + '"：provider 仅在同时配置模型时生效（后端将忽略），已保存');
+              toast.warn(t("panel.providerIgnored", { name: name }));
             }
             if (v === "") bumpRoleModelRev(name); // 清空 = 跟随主 agent：重挂显示占位
           }
           return h("div", { className: "omd-mainName" },
-            h("div", { className: "omd-glabel" }, "专用模型（可选；留空 = 跟随主 agent 当前模型）"),
+            h("div", { className: "omd-glabel" }, t("panel.roleModelLabel")),
             h("div", { className: "omd-nameRow" },
               h("input", {
                 key: "omd-roleModel-" + name + "-" + rev + "-" + switchRev,
@@ -678,22 +678,22 @@
                 type: "text",
                 className: "omd-nameInput",
                 defaultValue: role.provider || "",
-                placeholder: "provider（留空=跟随主 agent）",
+                placeholder: t("panel.providerPlaceholder"),
                 spellCheck: false,
                 disabled: busy,
                 onBlur: function (e) { commitRoleModel("provider", e.target.value); },
               })),
             h("div", { className: "omd-hint" },
-              "模型目录不可用（" + (modelGroupsErr || "未知错误") + "），已回退手输。写入该角色委派块的 agentOptions；含冷恢复在内，子 agent 固定用该模型。provider 需与模型成对（如 deepseek-official）。"));
+              t("panel.modelFallbackHint", { err: modelGroupsErr || t("panel.unknownError") })));
         }
 
         // ── 下拉模式：选项来自 /api/paoding/models ────────────────────────
         var options = modelOptionsOf(modelGroups);
         var sel = roleModelSelectionOf(options, role.provider || null, role.model || null);
-        var children = [h("option", { key: "follow", value: "" }, "跟随主 agent 当前模型")];
+        var children = [h("option", { key: "follow", value: "" }, t("models.followMain"))];
         options.forEach(function (opt) {
           children.push(h("option", { key: opt.value, value: opt.value },
-            opt.modelName + "（" + opt.providerName + "）"));
+            t("models.option", { model: opt.modelName, provider: opt.providerName })));
         });
         if (sel.extra) children.push(h("option", { key: "current", value: sel.extra.value }, sel.extra.label));
         function commitRoleModelOption(value) {
@@ -717,7 +717,7 @@
           });
         }
         return h("div", { className: "omd-mainName" },
-          h("div", { className: "omd-glabel" }, "专用模型（可选；留空 = 跟随主 agent 当前模型）"),
+          h("div", { className: "omd-glabel" }, t("panel.roleModelLabel")),
           h("div", { className: "omd-nameRow" },
             h("select", {
               key: "omd-roleModel-" + name, // 每角色独立实例；模式 / 选项集切换可整体重挂
@@ -727,7 +727,7 @@
               onChange: function (e) { commitRoleModelOption(e.target.value); },
             }, children)),
           h("div", { className: "omd-hint" },
-            "选项来自 DSH 已注册的模型路由；留空 = 跟随主 agent，主 agent 换模型时未固定的角色跟着变。"));
+            t("panel.modelSelectHint")));
       }
 
       // 角色「会话模式」行（内置与自定义角色通用，同 roleModelBlock 的定位）：
@@ -759,13 +759,13 @@
             h("span", { className: "omd-toolName" }, label));
         }
         return h("div", { className: "omd-mainName" },
-          h("div", { className: "omd-glabel" }, "会话模式"),
+          h("div", { className: "omd-glabel" }, t("panel.bgModeLabel")),
           h("div", { className: "omd-nameRow" },
-            bgOption("one-shot", "一次性（one-shot）", !continuable, false),
-            bgOption("continuable", "可续（continuable）", continuable, true)),
-          continuable ? h("div", { className: "omd-hint" }, ROLE_BG_CONTINUABLE_HINT) : null,
+            bgOption("one-shot", t("panel.bgOneshot"), !continuable, false),
+            bgOption("continuable", t("panel.bgContinuable"), continuable, true)),
+          continuable ? h("div", { className: "omd-hint" }, roleBgContinuableHint()) : null,
           continuable && data.persistenceAvailable === false
-            ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_BG_PERSISTENCE_WARN)
+            ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), roleBgPersistenceWarn())
             : null);
       }
 
@@ -800,22 +800,22 @@
             h("span", { className: "omd-toolName" }, label));
         }
         return h("div", { className: "omd-mainName" },
-          h("div", { className: "omd-glabel" }, "启动方式"),
+          h("div", { className: "omd-glabel" }, t("panel.startModeLabel")),
           h("div", { className: "omd-nameRow" },
-            smOption("fresh", "全新（fresh）", !fork, false),
-            smOption("fork", "继承对话（fork）", fork, true)),
+            smOption("fresh", t("panel.smFresh"), !fork, false),
+            smOption("fork", t("panel.smFork"), fork, true)),
           fork
             ? h("div", { className: "omd-hint" },
-                "继承对话的子代理以主 agent 已完成的对话轮次为初始内容启动（一次性快照，之后两边各自推进）；工具面仍以本角色配置为准。")
+                t("panel.forkStartHint"))
             : null,
           fork && hasModel
-            ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_SM_FORK_MODEL_HINT)
+            ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), roleForkModelHint())
             : null);
       }
 
       function roleCard(name) {
         var isMain = name === "__main__";
-        var display = isMain ? "主 agent" : name;
+        var display = isMain ? t("role.mainAgent") : name;
         var isCustom = !isMain && DEFAULT_ROLES.indexOf(name) === -1;
         var open = name in openMap ? openMap[name] : defaultOpenOf(name);
 
@@ -831,16 +831,18 @@
           },
             h("span", { className: open ? "omd-chevron omd-chevronOpen" : "omd-chevron" }, ic(P.IconChevronDownOutline14, 14)),
             h("span", { className: "omd-roleName" }, display),
-            h("span", { className: "omd-roleBadge" }, isMain ? "固定" : (isCustom ? "自定义" : "内置")),
+            h("span", { className: "omd-roleBadge" }, isMain ? t("role.badgeFixed") : (isCustom ? t("role.badgeCustom") : t("role.badgeBuiltin"))),
             h("span", { className: "omd-roleCount" },
-              (isMain ? ((data.restrictBase || []).length + a.main_agent_extra.length - (a.main_agent_remove || []).length) : a.roles[name].tools.length) + " 个工具")),
+              t("role.toolCount", { n: isMain
+                ? ((data.restrictBase || []).length + a.main_agent_extra.length - (a.main_agent_remove || []).length)
+                : a.roles[name].tools.length }))),
           // 自定义角色改名按钮：toolName 是身份键（委派调用名 / skills 引用），
           // 与内置角色的「显示名」不是一回事——那个只改 persona 主语。
           isCustom
             ? h("button", {
                 type: "button",
                 className: "omd-roleEdit",
-                title: '重命名角色 "' + name + '"（toolName = 委派调用名）',
+                title: t("role.renameTitle", { name: name }),
                 onClick: function (e) {
                   e.stopPropagation();
                   renameRole(name);
@@ -854,7 +856,7 @@
             ? h("button", {
                 type: "button",
                 className: "omd-roleDel",
-                title: isCustom ? '删除角色 "' + name + '"' : '删除内置角色 "' + name + '"（可在下方恢复）',
+                title: isCustom ? t("role.delCustomTitle", { name: name }) : t("role.delBuiltinTitle", { name: name }),
                 onClick: function (e) {
                   e.stopPropagation();
                   if (isCustom) removeRole(name);
@@ -866,7 +868,7 @@
         var body = [];
         if (isMain) {
           body.push(mainNameBlock());
-          body.push(h("div", { className: "omd-glabel" }, "基础工具（取消勾选即从主 agent 移除——写入 main_agent_remove）"));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.baseToolsMain")));
           body.push(h("div", { className: "omd-toolGrid" },
             (data.restrictBase || []).map(function (t) {
               return toolItem(t, "base", (a.main_agent_remove || []).indexOf(t) === -1, busy,
@@ -878,37 +880,37 @@
           var mainInv = data.inventory || [];
           var mainMcpTools = mainInv.filter(function (t) { return hostTool(t); });
           var mainPluginTools = mainInv.filter(function (t) { return !hostTool(t); });
-          body.push(h("div", { className: "omd-glabel" }, "MCP 工具（可加入主 agent）"));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.mcpToolsMain")));
           body.push(h("div", { className: "omd-toolGrid" },
             mainMcpTools.length
               ? mainMcpTools.map(function (t) {
                   return toolItem(t, "mcp", a.main_agent_extra.indexOf(t) !== -1, busy,
                     function (e) { setMainExtra(t, e.target.checked); }, t);
                 })
-              : h("div", { className: "omd-empty" }, "未检测到 MCP 工具")));
-          body.push(h("div", { className: "omd-glabel" }, "插件工具（可加入主 agent）"));
+              : h("div", { className: "omd-empty" }, t("panel.noMcp"))));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.pluginToolsMain")));
           body.push(h("div", { className: "omd-toolGrid" },
             mainPluginTools.length
               ? mainPluginTools.map(function (t) {
                   return toolItem(t, "plugin", a.main_agent_extra.indexOf(t) !== -1, busy,
                     function (e) { setMainExtra(t, e.target.checked); }, t);
                 })
-              : h("div", { className: "omd-empty" }, "未检测到插件工具")));
-          body.push(h("div", { className: "omd-glabel" }, "技能分配（read 按需：勾选 = persona 写入技能行，主 agent 用 read 加载正文）", skillScopeNote()));
+              : h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.skillsMain")));
           body.push(gridSkills.length
             ? h("div", null,
                 h("div", { className: "omd-toolGrid" }, gridSkills.map(function (s) {
-                  return toolItem(s, "read按需", a.main_agent_skills.indexOf(s) !== -1, busy,
+                  return toolItem(s, t("panel.tagReadOnDemand"), a.main_agent_skills.indexOf(s) !== -1, busy,
                     function (e) { setMainSkill(s, e.target.checked); }, s + "s",
-                    gridProj && gridProj.has(s) ? "项目" : null);
+                    gridProj && gridProj.has(s) ? t("common.projectBadge") : null);
                 })),
-                h("div", { className: "omd-glabel" }, "内联全文（硬生效，每轮固定 persona 开销，适合 caveman 等风格技能）"),
+                h("div", { className: "omd-glabel" }, t("panel.skillsInline")),
                 h("div", { className: "omd-toolGrid" }, gridSkills.map(function (s) {
-                  return toolItem(s, "内联全文", a.main_agent_skills_inline.indexOf(s) !== -1, busy,
+                  return toolItem(s, t("panel.tagInline"), a.main_agent_skills_inline.indexOf(s) !== -1, busy,
                     function (e) { setMainSkillInline(s, e.target.checked); }, s + "i",
-                    gridProj && gridProj.has(s) ? "项目" : null);
+                    gridProj && gridProj.has(s) ? t("common.projectBadge") : null);
                 })))
-            : h("div", { className: "omd-empty" }, "未检测到技能目录"));
+            : h("div", { className: "omd-empty" }, t("panel.noSkills")));
           body.push(mainPersonaExtraBlock());
         } else {
           // 模型行位置：内置角色卡在「显示名」之后、工具面区之前；自定义角色卡
@@ -935,30 +937,30 @@
           var pluginTools = candidates.filter(function (t) { return !hostTool(t) && inv.indexOf(t) !== -1; });
           var baseTools = candidates.filter(function (t) { return !hostTool(t) && inv.indexOf(t) === -1; });
           var checked = a.roles[name].tools;
-          body.push(h("div", { className: "omd-glabel" }, "基础工具"));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.baseTools")));
           body.push(h("div", { className: "omd-toolGrid" },
             baseTools.length
               ? baseTools.map(function (t) {
                   return toolItem(t, "base", checked.indexOf(t) !== -1, busy,
                     function (e) { setRoleTools(name, t, e.target.checked); }, t);
                 })
-              : h("div", { className: "omd-empty" }, "无")));
-          body.push(h("div", { className: "omd-glabel" }, "MCP 工具"));
+              : h("div", { className: "omd-empty" }, t("panel.none"))));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.mcpTools")));
           body.push(h("div", { className: "omd-toolGrid" },
             mcpTools.length
               ? mcpTools.map(function (t) {
                   return toolItem(t, "mcp", checked.indexOf(t) !== -1, busy,
                     function (e) { setRoleTools(name, t, e.target.checked); }, t);
                 })
-              : h("div", { className: "omd-empty" }, "未检测到 MCP 工具")));
-          body.push(h("div", { className: "omd-glabel" }, "插件工具"));
+              : h("div", { className: "omd-empty" }, t("panel.noMcp"))));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.pluginTools")));
           body.push(h("div", { className: "omd-toolGrid" },
             pluginTools.length
               ? pluginTools.map(function (t) {
                   return toolItem(t, "plugin", checked.indexOf(t) !== -1, busy,
                     function (e) { setRoleTools(name, t, e.target.checked); }, t);
                 })
-              : h("div", { className: "omd-empty" }, "未检测到插件工具")));
+              : h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
           body.push(personaBlock(name));
         }
 
@@ -975,7 +977,7 @@
           var picked = assign.skills[s] || [];
           return h("div", { className: "omd-skillRow", key: s },
             h("span", { className: "omd-skillName", title: s }, s),
-            gridProj && gridProj.has(s) ? h("span", { className: "omd-skillProj" }, "项目") : null,
+            gridProj && gridProj.has(s) ? h("span", { className: "omd-skillProj" }, t("common.projectBadge")) : null,
             h("div", { className: "omd-skillRoles" }, roleNames.map(function (r) {
               return h("label", { className: "omd-skillRole", key: r },
                 h("input", {
@@ -988,10 +990,16 @@
                 h("span", null, r));
             })));
         });
-        return rows.length ? rows : h("div", { className: "omd-empty" }, "未检测到技能目录");
+        return rows.length ? rows : h("div", { className: "omd-empty" }, t("panel.noSkills"));
       }
 
       var customRoles = Object.keys(assign.roles).filter(function (n) { return DEFAULT_ROLES.indexOf(n) === -1; });
+      // 内置角色可见名单：条目键存在且未被 roles_remove 删除（场景模板切到
+      // 轻量/调研档后条目键仍保留——为的是切回全开档时 persona / 模型 / 工具面
+      // 原样复原——卡片显隐一律按 roles_remove 判定；标题计数同口径）。
+      var visibleBuiltinRoles = DEFAULT_ROLES.filter(function (n) {
+        return !!assign.roles[n] && (assign.roles_remove || []).indexOf(n) === -1;
+      });
 
       // persistence 警告横幅：host 层会话持久化后端缺失（state.persistenceAvailable
       // === false；字段缺失的老版服务端视为可用，不误报）且当前视角的任意角色
@@ -1006,7 +1014,7 @@
         icon: busyOp === "apply"
           ? h("span", { className: "omd-spin" }, ic(P.IconLoadingOutline16, 16))
           : ic(P.IconCheckOutline16, 16),
-      }, busyOp === "apply" ? "处理中…" : "保存并应用");
+      }, busyOp === "apply" ? t("panel.applying") : t("panel.applyBtn"));
 
       var previewBtn = h(P.Button, {
         variant: "outline",
@@ -1016,7 +1024,7 @@
         icon: busyOp === "preview"
           ? h("span", { className: "omd-spin" }, ic(P.IconLoadingOutline16, 16))
           : ic(P.IconCordisPluginOutline14, 14),
-      }, busyOp === "preview" ? "生成中…" : "预览生成");
+      }, busyOp === "preview" ? t("panel.previewing") : t("panel.previewBtn"));
 
       var rescanBtn = h(P.Button, {
         variant: "ghost",
@@ -1026,7 +1034,7 @@
         icon: busyOp === "rescan"
           ? h("span", { className: "omd-spin" }, ic(P.IconLoadingOutline16, 16))
           : ic(P.IconRefreshOutline16, 16),
-      }, busyOp === "rescan" ? "检测中…" : "重新检测");
+      }, busyOp === "rescan" ? t("panel.scanning") : t("panel.rescanBtn"));
 
       return h("div", { className: "pd-page", ref: rootRef },
         // 运行时识别降级：持续状态（不是事件），内联一行小字贴标签行上方，
@@ -1036,7 +1044,7 @@
         // persistence 警告横幅：仅当前视角确有可续角色且 host 层持久化后端
         // 缺失时出现（判定见上方 persistenceWarn），其余场合零占位
         persistenceWarn
-          ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_BG_PERSISTENCE_WARN)
+          ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), roleBgPersistenceWarn())
           : null,
 
         // 配置对象（全局默认 / 各工作区，标签页）
@@ -1066,37 +1074,51 @@
         h("div", { className: "omd-group" },
           h("div", { className: "omd-groupHeading" },
             h("span", { className: "omd-groupIcon" }, ic(P.IconUserOutline16, 14)),
-            h("span", null, "角色与工具"),
-            h("span", { className: "omd-count" }, Object.keys(assign.roles).length)),
+            h("span", null, t("panel.rolesToolsHeading")),
+            h("span", { className: "omd-count" }, visibleBuiltinRoles.length + customRoles.length)),
+          // 场景模板行：三档快捷预设（只动 roles_remove + main_agent_extra），
+          // 贴工具配置区上方；说明进 title 悬浮，不占版面。仅改本地 assign，
+          // 保存仍走「保存并应用」。
+          h("div", { className: "omd-chips" },
+            h("span", { className: "omd-restoreTitle" }, t("panel.tplHeading")),
+            PAODING_SCENARIO_TEMPLATES.map(function (tpl) {
+              return h("button", {
+                type: "button",
+                key: tpl.id,
+                className: "omd-restorePill",
+                title: t(tpl.desc),
+                disabled: busy,
+                onClick: function () { applyTemplateClick(tpl); },
+              }, t(tpl.label));
+            })),
           roleCard("__main__"),
-          // 内置角色卡只渲染 assign.roles 里存在的（roles_remove 中的已删名不重建、不渲染）
-          DEFAULT_ROLES.filter(function (n) { return !!assign.roles[n]; }).map(function (n) { return roleCard(n); }),
+          visibleBuiltinRoles.map(function (n) { return roleCard(n); }),
           customRoles.map(function (n) { return roleCard(n); }),
           // 已删除的内置角色恢复区（仅删除过内置角色时出现）
           (assign.roles_remove || []).length
             ? h("div", { className: "omd-restoreRow" },
-                h("div", { className: "omd-restoreTitle" }, "已删除的内置角色"),
+                h("div", { className: "omd-restoreTitle" }, t("panel.removedHeading")),
                 h("div", { className: "omd-chips" }, (assign.roles_remove || []).map(function (n) {
                   return h("button", {
                     type: "button",
                     key: n,
                     className: "omd-restorePill",
-                    title: '恢复内置角色 "' + n + '"（工具面重建为内置默认 allow）',
+                    title: t("role.restoreTitle", { name: n }),
                     onClick: function () { restoreBuiltinRole(n); },
-                  }, "恢复 " + n);
+                  }, t("role.restorePill", { name: n }));
                 })),
                 h("div", { className: "omd-hint" },
-                  "恢复后卡片回到上方内置列表；工具面取内置默认（不沿用删前自定义配置）。"))
+                  t("panel.restoreHint")))
             : null,
           h("button", { type: "button", className: "omd-addRole", onClick: openRoleAddModal },
             h("span", { className: "omd-addRoleIcon" }, ic(P.IconPlusOutline16, 16)),
-            h("span", null, "新建自定义 agent 角色"))),
+            h("span", null, t("panel.roleAddBtn")))),
 
         // 技能分配
         h("div", { className: "omd-group" },
           h("div", { className: "omd-groupHeading" },
             h("span", { className: "omd-groupIcon" }, ic(P.IconSkillOutline16, 14)),
-            h("span", null, "技能分配（软约束：写入对应 agent 的 persona 引导）"),
+            h("span", null, t("panel.skillsHeading")),
             skillScopeNote(),
             h("span", { className: "omd-count" }, gridSkills.length)),
           // 工作区技能拉取失败的降级提示（一句话）：此刻网格数据源已回落用户级。
@@ -1105,14 +1127,19 @@
             : null,
           skillsBlock()),
 
+        // 检查提示卡（预览 / 应用的结构化体检结果；无条目零占位）：
+        // preview 源贴着预览区上方，assign 一变即随预览作废；apply 源描述已
+        // 落盘结果，保留到下一次预览 / 应用（失效口径见 warnState 注释）。
+        warningsCardOf(warnState),
+
         // 预览生成（预览成功后才出现）
         preview ? h("div", { className: "omd-group", ref: previewRef },
           h("div", { className: "omd-groupHeading" },
             h("span", { className: "omd-groupIcon" }, ic(P.IconDataOutline16, 14)),
-            h("span", null, "预览生成")),
+            h("span", null, t("panel.previewBtn"))),
           h("div", { className: "omd-previewSummary" },
-            "✅ 生成成功（未写盘）" +
-            (preview.presetId ? " · 预设 " + preview.presetId : "") +
+            t("panel.previewOk") +
+            (preview.presetId ? t("panel.previewPreset", { id: preview.presetId }) : "") +
             (preview.roleResults || []).map(function (r) {
               return " · " + r.role + ": " + r.intent.length + " → " + r.kept.length;
             }).join("")),

@@ -30,21 +30,23 @@
       if (!verInfo || !verInfo.latest) return;
       var isDev = verInfo.layout === "dev";
       var msg = isDev
-        ? "当前为开发 link 直连形态：无法就地升级，请手动执行 dsh plugin add dsh-paoding@latest 切换到 registry 版本。仍要继续尝试吗？"
-        : "确定升级到 " + versionTagOf(verInfo.latest) + "？升级将通过插件通道原地换版本，完成后需重启 DSH 生效。";
+        ? t("menu.upgradeDevBody")
+        : t("menu.upgradeBody", { v: versionTagOf(verInfo.latest) });
       confirmCtrl.ask({
-        title: "升级 dsh-paoding",
+        title: t("menu.upgradeTitle"),
         body: msg,
         danger: false,
-        confirmText: "升级",
+        confirmText: t("menu.upgradeConfirm"),
         onConfirm: function () {
           setUpgBusy(true);
           setUpgNote("");
           setUpgErr("");
           paodingApi("upgrade", {}).then(function (r) {
-            if (r && r.upToDate) { setUpgNote("已是最新版本"); return; }
+            if (r && r.upToDate) { setUpgNote(t("menu.upToDate")); return; }
             var done = versionTagOf((r && r.version) || verInfo.latest);
-            setUpgNote((r && r.message) || ("✅ 已升级到 " + done + "，重启 DSH 后新版本生效（preset 会自动按新版重生成）"));
+            // 服务端返回了 message 就原文透传（服务端消息不做客户端翻译），
+            // 没有才落本地化兜底文案。
+            setUpgNote((r && r.message) || t("menu.upgraded", { v: done }));
             // 重拉版本信息：服务端有 1 小时缓存且本进程挂的还是旧代码，重启前
             // 更新卡可能仍在（重启后自然消失），以此处的生效提示为准。
             paodingApi("version").then(function (d) {
@@ -53,7 +55,7 @@
           }).catch(function (err) {
             // 失败要醒目：截服务端透传的子进程输出尾部 ~300 字符并入 err，方便
             // 定位 pnpm 缓存权限（EPERM）之类环境问题，不用翻服务端日志。
-            var tail = typeof err.output === "string" && err.output ? "：" + err.output.slice(-300) : "";
+            var tail = typeof err.output === "string" && err.output ? t("menu.errTail", { tail: err.output.slice(-300) }) : "";
             setUpgErr(err.message + tail);
           }).finally(function () {
             setUpgBusy(false);
@@ -105,6 +107,122 @@
       // 版本检测重试进行中（页头失败行的「重试」按钮禁用态）：与升级三态分开，
       // 检测失败重试不该锁升级（升级预检在服务端另做一次，不依赖这份 verInfo）。
       var _vb = useState(false), verRetryBusy = _vb[0], setVerRetryBusy = _vb[1];
+      // 语言切换 tick：页头文案（标题 / 副标题 / 菜单 / 语言项）走 t()，切换后
+      // 需整体重渲染一次；ConfigPanel 内部另有 registerReload 整页重拉。
+      var _lg = useState(0), langTick = _lg[0], setLangTick = _lg[1];
+      useEffect(function () {
+        return onLangChange(function () { setLangTick(function (n) { return n + 1; }); });
+      }, []);
+
+      // ── 页头「更多」菜单：配置导出 / 导入 ────────────────────────────────
+      // 低频的整文件级操作收进菜单，页头保持一行动静。导出 / 导入写的是整份
+      // 配置文件（非面板视图的局部编辑），与面板 busy 互不相干，独立 busy 态。
+      var _mo = useState(false), moreOpen = _mo[0], setMoreOpen = _mo[1];
+      var _eb = useState(false), expBusy = _eb[0], setExpBusy = _eb[1];
+      var _ib = useState(false), impBusy = _ib[0], setImpBusy = _ib[1];
+      var importFileRef = useRef(null); // 隐藏 file input（菜单项点击 → 程序化触发选文件）
+      var reloadRef = useRef(null); // ConfigPanel 注册进来的 load（导入成功后整体刷新）
+
+      // 导出：GET config/export 拿配置文件原文（服务端不存在时回基础模板），
+      // Blob + a[download] 落盘，文件名以服务端给的为准（= 实际配置文件名）。
+      function doExportConfig() {
+        setMoreOpen(false);
+        setExpBusy(true);
+        paodingApi("config/export").then(function (r) {
+          var name = r && typeof r.filename === "string" && r.filename ? r.filename : "dsh-paoding.config.yml";
+          var blob = new Blob([r && typeof r.content === "string" ? r.content : ""], { type: "text/yaml;charset=utf-8" });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          // revoke 留一拍：点击派发的下载任务未必当场读完 blob URL
+          setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+          toast.ok(t("menu.exported", { name: name }));
+        }).catch(function (err) {
+          toast.err(t("menu.exportFail", { msg: err.message }));
+        }).finally(function () {
+          setExpBusy(false);
+        });
+      }
+
+      // 导入：选文件 → 读文本 → 确认弹窗（整体覆盖，danger 红钮）→ POST。
+      // file input 复用同一个小众路径：每次先清 value，选同一个文件也能再触发。
+      function pickImportFile() {
+        setMoreOpen(false);
+        if (!importFileRef.current) return;
+        importFileRef.current.value = "";
+        importFileRef.current.click();
+      }
+
+      function onImportFilePicked(e) {
+        var file = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!file) return;
+        // File.text() 现代环境都有；老环境回落 FileReader，读不出只 toast 不打扰面板
+        var reading = typeof file.text === "function"
+          ? file.text()
+          : new Promise(function (resolve, reject) {
+              var reader = new FileReader();
+              reader.onload = function () { resolve(String(reader.result)); };
+              reader.onerror = function () { reject(new Error(t("menu.readFail"))); };
+              reader.readAsText(file);
+            });
+        reading.then(function (text) {
+          confirmCtrl.ask({
+            title: t("menu.importTitle"),
+            // 多行文案由 pd-modalText 的 pre-line 保留换行；工作区段会被整份
+            // 替换这点必须说清（面板视图只显示一个配置对象，导入却是全文件）。
+            body: t("menu.importBody", { name: file.name }),
+            danger: true,
+            confirmText: t("menu.importConfirm"),
+            onConfirm: function () {
+              setImpBusy(true);
+              paodingApi("config/import", { content: text }).then(function () {
+                toast.ok(t("menu.imported"));
+                // 服务端 saveConfig 已改 mtime → state 缓存自动失效；这里触发
+                // 面板重拉 state 并按新配置重建 assign（预览 / 提示卡一并作废）。
+                if (typeof reloadRef.current === "function") reloadRef.current();
+              }).catch(function (err) {
+                toast.err(t("menu.importFail", { msg: err.message }));
+              }).finally(function () {
+                setImpBusy(false);
+              });
+            },
+          });
+        }).catch(function (err) {
+          toast.err(t("menu.readFailPrefix", { msg: err.message }));
+        });
+      }
+
+      // 菜单开着时 Esc 只收菜单（捕获级先于 PageShell 的关页监听，与
+      // ConfigPanel 弹窗的 Esc 分层同款）；点菜单外空白处收菜单。
+      useEffect(function () {
+        if (!moreOpen) return;
+        var onKey = function (e) {
+          if (e && e.key === "Escape") {
+            e.stopPropagation();
+            setMoreOpen(false);
+          }
+        };
+        var onClick = function (e) {
+          var t = e && e.target;
+          if (t && typeof t.closest === "function" &&
+              (t.closest("[data-pd-more-menu]") || t.closest("[data-pd-more-btn]"))) return;
+          setMoreOpen(false);
+        };
+        document.addEventListener("keydown", onKey, true);
+        document.addEventListener("mousedown", onClick, true);
+        return function () {
+          document.removeEventListener("keydown", onKey, true);
+          document.removeEventListener("mousedown", onClick, true);
+        };
+      }, [moreOpen]);
+
+      // 稳定的注册函数（ConfigPanel effect 依赖它）：导入成功后的整体刷新入口
+      var registerReload = useCallback(function (fn) { reloadRef.current = fn; }, []);
 
       // 一键升级逻辑在共享的 runUpgradeFlow（页头更新卡统一走这一份）。
       function doUpgrade() {
@@ -135,21 +253,72 @@
             // 标题行：标题 + 版本号 + （有新版时的）更新卡并排；窄屏放不下时
             // 换行收纳，副标题独占下一行
             h("div", { className: "pd-titleRow" },
-              h("h1", { className: "pd-pageTitle" }, "庖丁配置",
+              h("h1", { className: "pd-pageTitle" }, t("nav.entryTitle"),
                 verInfo && typeof verInfo.current === "string" && verInfo.current
                   ? h("span", { className: "pd-versionTag" }, versionTagOf(verInfo.current))
                   : null),
               versionRowOf(verInfo, { busy: upgBusy, onUpgrade: doUpgrade, note: upgNote, error: upgErr, onRetry: doRetryVersion, retryBusy: verRetryBusy })),
             h("p", { className: "pd-pageSubtitle" },
-              "为主 agent 与子 agent 编排工具、技能与角色，预览并应用生成的 agent.cordis.yml。")),
+              t("menu.subtitle"))),
+          // 页头「更多」菜单：整份配置文件的导出 / 导入（低频操作收进来，页头
+          // 不添第二排按钮）。定位锚点用相对定位的薄包裹层，下拉复用工作区
+          // 「更多」的 omd-tabMenu / omd-tabMenuItem 既有样式；靠右对齐（inline
+          // style 压掉类里的 left:2px），避免从页头右缘向右溢出。
+          h("div", { style: { position: "relative", flex: "none" } },
+            h("button", {
+              type: "button",
+              className: "omd-restorePill",
+              "data-pd-more-btn": "1",
+              "aria-haspopup": "menu",
+              "aria-expanded": moreOpen ? "true" : "false",
+              title: t("menu.moreBtnTip"),
+              onClick: function () { setMoreOpen(!moreOpen); },
+            }, t("menu.moreBtn")),
+            moreOpen ? h("div", {
+                className: "omd-tabMenu",
+                role: "menu",
+                "aria-label": t("menu.menuLabel"),
+                "data-pd-more-menu": "1",
+                style: { left: "auto", right: "0", top: "calc(100% + 6px)", minWidth: "180px" },
+              },
+              h("button", {
+                type: "button", role: "menuitem", className: "omd-tabMenuItem",
+                disabled: expBusy || impBusy,
+                onClick: doExportConfig,
+              }, h("span", { className: "omd-tabText" }, expBusy ? t("menu.exporting") : t("menu.exportItem"))),
+              h("button", {
+                type: "button", role: "menuitem", className: "omd-tabMenuItem",
+                disabled: expBusy || impBusy,
+                onClick: pickImportFile,
+              }, h("span", { className: "omd-tabText" }, impBusy ? t("menu.importing") : t("menu.importItem"))),
+              // 语言切换项：label 刻意不进字典——按当前语言显示「另一端」的叫法，
+              // 中文界面显示 English，英文界面显示中文（语言名用母语写才认得出）。
+              h("button", {
+                type: "button", role: "menuitem", className: "omd-tabMenuItem",
+                title: t("menu.langTip"),
+                onClick: function () {
+                  setMoreOpen(false);
+                  setLang(pdLang() === "zh" ? "en" : "zh");
+                  if (typeof reloadRef.current === "function") reloadRef.current();
+                },
+              }, h("span", { className: "omd-tabText" }, pdLang() === "zh" ? "English" : "中文")))
+              : null,
+            // 隐藏选文件 input：导入入口的程序化触发器（样式零占位）
+            h("input", {
+              ref: importFileRef,
+              type: "file",
+              accept: ".yml,.yaml,text/yaml,text/plain",
+              style: { display: "none" },
+              onChange: onImportFilePicked,
+            })),
           h("button", {
             type: "button",
             className: "pd-closeBtn",
-            "aria-label": "关闭庖丁配置",
-            title: "关闭（Esc）",
+            "aria-label": t("nav.closeAria"),
+            title: t("nav.closeTip"),
             onClick: function () { if (typeof onClose === "function") onClose(); },
           }, h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
-        h(ConfigPanel, { setVerInfo: setVerInfo }),
+        h(ConfigPanel, { setVerInfo: setVerInfo, registerReload: registerReload }),
         // 反馈 toast 宿主：订阅模块级 toast 控制器，悬浮于操作坞上方
         h(ToastHost),
         // 通用确认弹窗层：订阅 confirmCtrl（发起方见各 confirmCtrl.ask 调用点），

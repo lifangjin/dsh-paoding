@@ -19,7 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { collectState, generateAndInstall } from '../tools/install.mjs'
-import { serializeState } from '../plugins/paoding-config-ui/api-core.mjs'
+import { installAssignments, serializeState } from '../plugins/paoding-config-ui/api-core.mjs'
 
 /** 空白隔离环境：临时 dshHome（无 patch 文件 → 不握手），无既有配置文件。 */
 function freshEnv() {
@@ -53,4 +53,38 @@ test('对照组：原始 state 喂 generateAndInstall(dryRun) 正常返回，差
   assert.ok(Array.isArray(result.roleResults), 'roleResults 应为数组')
   assert.equal(typeof result.text, 'string')
   assert.equal(result.presetId, 'orchestrator')
+})
+
+// ── 0.3.10 增量：installAssignments 的 warnings 字段（结构化体检）──────────────
+// 只做增量断言：既有字段形状一概不动（上方两组测试继续钉死原始契约）。
+
+test('增量：installAssignments 正常路径返回 warnings 数组（preview/apply 响应新字段）', async () => {
+  const { dshHome, configFile } = freshEnv()
+  const state = await collectState({ dshHome, configFile, cwd: dshHome })
+  const result = installAssignments(state, structuredClone(state.suggested), { dryRun: true })
+  assert.equal(result.wrote, false, '既有字段不变：dryRun 仍不落盘')
+  assert.equal(result.presetId, 'orchestrator')
+  assert.ok(Array.isArray(result.warnings), 'warnings 应为数组（healthCheck items）')
+  assert.ok(
+    result.warnings.every((w) => ['error', 'warn', 'info'].includes(w.level) && typeof w.code === 'string' && typeof w.message === 'string'),
+    '条目形状：{ level, code, message }',
+  )
+})
+
+test('增量：installAssignments 失败路径原样 throw，err.warnings 携带体检 items（422 透传用）', async () => {
+  const { dshHome, configFile } = freshEnv()
+  const state = await collectState({ dshHome, configFile, cwd: dshHome })
+  const assignments = {
+    ...structuredClone(state.suggested),
+    roles: { ...state.suggested.roles, implement: { tools: ['mcp__ghost__nope'] } },
+  }
+  let caught = null
+  try {
+    installAssignments(state, assignments, { dryRun: true })
+  } catch (err) {
+    caught = err
+  }
+  assert.ok(caught, '零工具角色照旧 throw（既有错误行为不变）')
+  assert.ok(Array.isArray(caught.warnings), 'error.warnings 应挂体检 items')
+  assert.ok(caught.warnings.some((w) => w.code === 'zero_tool_role'), '体检项应点名零工具角色')
 })

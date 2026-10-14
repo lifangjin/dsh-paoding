@@ -59,10 +59,12 @@
         }
       }
       var rtValue = encodeModelOption(provider || null, model || null);
-      // 文案照实：模型缺失（只配 provider，后端会忽略）时按约定不带空格接全角括号
+      // 文案照实：模型缺失（只配 provider，后端会忽略）时按约定不带空格接全角括号。
+      // i18n：provider 缺省文案也随语言走，占位符拼进完整句子。
+      var providerLabel = provider || t("models.followRouting");
       var label = model
-        ? "当前配置：" + (provider || "（跟随主 agent 路由）") + " · " + model
-        : "当前配置：" + (provider || "（跟随主 agent 路由）") + " ·（无模型，后端忽略）";
+        ? t("models.current", { provider: providerLabel, model: model })
+        : t("models.currentNoModel", { provider: providerLabel });
       return {
         value: rtValue,
         extra: { value: rtValue, label: label },

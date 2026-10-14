@@ -8,11 +8,13 @@
     // 边界：只管工具调用行；子 agent 会话树 / 面包屑标题来自服务端会话摘要，
     // 不在客户端控制面。标题取全局配置的显示名（行渲染时不知道会话属于哪个
     // 工作区，工作区级显示名够不着）。
+    // 标题回落表：值是 i18n 字典 key（role.title.*），取文案须过 t()——
+    // 语言切换后 refreshDelegateRows 会重算 titles（见模块尾的订阅）。
     var DELEGATE_TITLE_FALLBACK = {
-      search_external: "外部检索",
-      design: "设计",
-      implement: "实现",
-      search_internal_deep: "深搜",
+      search_external: "role.title.search_external",
+      design: "role.title.design",
+      implement: "role.title.implement",
+      search_internal_deep: "role.title.search_internal_deep",
     };
     // 静态委派工具：不在 roles 键里（无条目、不可删不可改名），恒注册。
     var DELEGATE_STATIC_TOOLS = ["search_internal_deep"];
@@ -23,12 +25,16 @@
       var removed = Array.isArray(cfg.roles_remove) ? cfg.roles_remove : [];
       var titles = {};
       var tools = DELEGATE_STATIC_TOOLS.slice();
-      DELEGATE_STATIC_TOOLS.forEach(function (n) { titles[n] = DELEGATE_TITLE_FALLBACK[n] || n; });
+      DELEGATE_STATIC_TOOLS.forEach(function (n) {
+        var tk = DELEGATE_TITLE_FALLBACK[n];
+        titles[n] = tk ? t(tk) : n;
+      });
       Object.keys(roles).forEach(function (n) {
         if (removed.indexOf(n) !== -1) return; // 已删内置角色：委派工具不存在，键命中不了，不注册
         if (tools.indexOf(n) === -1) tools.push(n);
         var nm = roles[n] && typeof roles[n].name === "string" ? roles[n].name.trim() : "";
-        titles[n] = nm !== "" ? nm : (DELEGATE_TITLE_FALLBACK[n] || n);
+        var tk = DELEGATE_TITLE_FALLBACK[n];
+        titles[n] = nm !== "" ? nm : (tk ? t(tk) : n);
       });
       return { titles: titles, tools: tools };
     }
@@ -87,7 +93,7 @@
       var status = delegateStatusOf(block);
       var stateCls = status === "running" ? "pd-delegateRunning" : (status === "error" ? "pd-delegateFailed" : (status === "stopped" ? "pd-delegateStopped" : "pd-delegateDone"));
       var stateGlyph = status === "running" ? "◌" : (status === "error" ? "✕" : (status === "stopped" ? "⊘" : "✓"));
-      var title = delegateMeta.titles[toolName] || DELEGATE_TITLE_FALLBACK[toolName] || toolName;
+      var title = delegateMeta.titles[toolName] || (tHas(DELEGATE_TITLE_FALLBACK[toolName]) ? t(DELEGATE_TITLE_FALLBACK[toolName]) : "") || toolName;
       return h("div", { className: "pd-delegateRow" + (status === "error" ? " pd-delegateErr" : "") },
         h("button", {
           type: "button",
@@ -147,6 +153,10 @@
       if (typeof document === "undefined") return function () {};
       delegateRowsCtx = ctx;
       refreshDelegateRows();
+      // 语言切换：titles 里的 t() 值已过期，整表重算；比对串含 titles 值，
+      // 变了就重注册（无需理会 controller 是否已挂载——未挂载时 ctx.slots
+      // 注入照常，行组件只在事件流渲染时才取值）。
+      onLangChange(function () { refreshDelegateRows(); });
       var offReset = null;
       if (ctx && typeof ctx.on === "function") {
         try {

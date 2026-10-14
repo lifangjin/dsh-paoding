@@ -69,21 +69,27 @@
       return function FooterEntry(props) {
         var wide = !!(props && props.wide);
         var _st = useState(controller.getSnapshot().open), open = _st[0], setOpenState = _st[1];
+        var _lt = useState(0), langTick = _lt[0], setLangTick = _lt[1];
         useEffect(function () {
           return controller.subscribe(function () { setOpenState(controller.getSnapshot().open); });
+        }, []);
+        // 语言切换时整体重渲染入口（label / aria / title 全走 t() 取新文案）；
+        // tick 只为触发重渲染，无业务含义。
+        useEffect(function () {
+          return onLangChange(function () { setLangTick(function (n) { return n + 1; }); });
         }, []);
         return h("button", {
           type: "button",
           className: "pd-footerBtn" + (wide ? "" : " pd-footerRail"),
           "data-active": open ? "true" : undefined,
-          "aria-label": "庖丁配置",
+          "aria-label": t("nav.entryTitle"),
           "aria-haspopup": "dialog",
           "aria-expanded": open ? "true" : "false",
-          title: wide ? undefined : "庖丁配置",
+          title: wide ? undefined : t("nav.entryTitle"),
           onClick: function () { controller.toggle(); },
         },
           h(P.IconSkillOutline16, { size: wide ? 16 : 18 }),
-          wide ? h("span", { className: "pd-footerLabel" }, "庖丁配置") : null);
+          wide ? h("span", { className: "pd-footerLabel" }, t("nav.entryTitle")) : null);
       };
     }
 
@@ -94,7 +100,7 @@
       }
       var Entry = makeFooterEntry(controller);
       var dispose = ctx.slots.inject("sidebar.footer.action", function () {
-        return ctx.slots.register({ name: "sidebar.footer.action", id: "paoding-config", order: 10, label: "庖丁配置" }, Entry);
+        return ctx.slots.register({ name: "sidebar.footer.action", id: "paoding-config", order: 10, label: t("nav.entryTitle") }, Entry);
       });
       return typeof dispose === "function" ? dispose : function () {};
     }

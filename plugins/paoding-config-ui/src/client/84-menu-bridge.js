@@ -70,14 +70,15 @@
         var inner = mine.querySelectorAll ? mine.querySelectorAll("[id]") : [];
         for (var i = 0; i < inner.length; i++) inner[i].removeAttribute("id");
         mine.setAttribute("data-paoding-ws-menu", "1");
-        mine.setAttribute("aria-label", "庖丁配置");
-        mine.setAttribute("title", "打开庖丁配置并切到该工作区");
+        mine.setAttribute("aria-label", t("nav.entryTitle"));
+        mine.setAttribute("title", t("nav.openToWs"));
         var walker = document.createTreeWalker(mine, NodeFilter.SHOW_TEXT, null);
         var node;
         while ((node = walker.nextNode())) {
-          var t = node.nodeValue;
-          if (t.indexOf("重命名") !== -1 || t.toLowerCase().indexOf("rename") !== -1) {
-            node.nodeValue = t.replace(/重命名|Rename/gi, "庖丁配置");
+          var txt = node.nodeValue;
+          // 注意局部名用 txt：全局 t() 是 i18n 取词函数，不能被文本值遮蔽
+          if (txt.indexOf("重命名") !== -1 || txt.toLowerCase().indexOf("rename") !== -1) {
+            node.nodeValue = txt.replace(/重命名|Rename/gi, t("nav.entryTitle"));
           }
         }
         mine.addEventListener("click", function (e) {
@@ -121,11 +122,11 @@
             if (hit) controller.open(hit);
             else {
               controller.open();
-              toast.warn("宿主工作区「" + title + "」还没在庖丁注册，已打开全局默认");
+              toast.warn(t("menu.wsNotRegistered", { title: title }));
             }
           }).catch(function () {
             controller.open();
-            toast.warn("工作区列表拉取失败，已打开全局默认");
+            toast.warn(t("menu.listFail"));
           });
         }, 80);
       }

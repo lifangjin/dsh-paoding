@@ -52,14 +52,14 @@
         var retryBusy = !!(opts && opts.retryBusy);
         return h("span", { className: "omd-versionRow omd-versionFail", title: v.error },
           h("span", { className: "omd-versionIcon" }, "⚠"),
-          h("span", { className: "omd-versionText" }, "版本检测失败"),
+          h("span", { className: "omd-versionText" }, t("ver.checkFailed")),
           typeof (opts && opts.onRetry) === "function"
             ? h("button", {
                 type: "button",
                 className: "omd-retryBtn",
                 disabled: retryBusy,
                 onClick: opts.onRetry,
-              }, retryBusy ? "检测中…" : "重试")
+              }, retryBusy ? t("ver.checking") : t("ver.retry"))
             : null);
       }
       var busy = !!opts && !!opts.busy;
@@ -68,7 +68,7 @@
       return h("div", { className: "omd-versionRow omd-versionNew" },
         h("span", { className: "omd-versionIcon" }, "🆙"),
         h("span", { className: "omd-versionText" },
-          "新版本 " + versionTagOf(v.latest) + " 可用 · ",
+          t("ver.newAvailable", { v: versionTagOf(v.latest) }),
           // 只信 https://github.com/ 的 release 链接；其余取值一律不渲染 <a>。
           v.releaseUrl && /^https:\/\/github\.com\//.test(v.releaseUrl)
             ? h("a", {
@@ -76,7 +76,7 @@
                 href: v.releaseUrl,
                 target: "_blank",
                 rel: "noreferrer",
-              }, "查看更新")
+              }, t("ver.viewUpdate"))
             : null),
         typeof (opts && opts.onUpgrade) === "function"
           ? h("button", {
@@ -84,9 +84,9 @@
               className: "omd-upgradeBtn",
               disabled: busy,
               onClick: opts.onUpgrade,
-            }, busy ? "升级中…" : "升级")
+            }, busy ? t("ver.upgrading") : t("ver.upgrade"))
           : null,
-        busy ? h("span", { className: "omd-upgradeHint" }, "下载安装中，最长约 2 分钟") : null,
+        busy ? h("span", { className: "omd-upgradeHint" }, t("ver.downloadHint")) : null,
         error
           ? h("span", { className: "omd-versionNote omd-versionNoteErr" }, error)
           : (note ? h("span", { className: "omd-versionNote" }, note) : null));
@@ -114,7 +114,7 @@
             h("button", {
               type: "button",
               className: "pd-toastClose",
-              "aria-label": "关闭提示",
+              "aria-label": t("common.closeToast"),
               onClick: function () { toast.dismiss(it.id); },
             }, h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×")));
         }));

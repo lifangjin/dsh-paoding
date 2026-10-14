@@ -83,6 +83,341 @@ window.__ModuleLoader__.load({
       });
     })();
 
+    // ── i18n（zh / en 双语）───────────────────────────────────────────────
+    //
+    // 机制：
+    //  - 字典 PAODING_I18N_DICT 是「纯数据字面量」——对象里只有字符串值，无
+    //    函数、无外部变量引用，便于 tests/i18n.test.mjs 用 node:vm 直接执行本
+    //    片段提取字典，做 zh/en key 对账、占位符校验与「文案 key 必须在字典」
+    //    的静态扫描。key 按片段/功能分命名空间：dom.*（渲染助手）/ api.* /
+    //    ver.*（版本更新卡）/ models.* / tpl.*（场景模板）/ ws.*（工作区）/
+    //    panel.*（配置面板正文）/ role.*（角色卡与委派行标题）/ warn.*（体检
+    //    告警卡）/ nav.*（侧栏入口与页头壳）/ menu.*（页头「更多」菜单与升级）/
+    //    common.*（跨片段复用的短词）。
+    //  - t(key, params)：按当前语言取文案，params 做 {name} 插值（split/join
+    //    而非 replace，避免替换串里的 $ 模式被二次解释）。缺 key 原样返回 key
+    //    本身——线上宁可露出 key 也不静默吞掉，测试侧保证不会发生。
+    //  - 语言解析：localStorage "paoding-lang"（"zh"/"en"）显式优先 →
+    //    navigator.language 以 zh 开头 → zh，否则 en（首次使用者多半是中文
+    //    文档进来的，缺省 en 但 zh 环境自动命中）。
+    //  - 切语言：setLang(lang) 写 localStorage + 同步广播 onLangChange；
+    //    监听方各自刷新（86 PageShell 整页重渲染、82 委派行重建标题），面板
+    //    数据重拉复用既有 registerReload 通道，不另造机制。
+    //  - 取舍：服务端下发的文案（API error message、体检 items 的 message、
+    //    升级 note/message）本轮保持原文展示（服务端仅中文），字典只补本地化
+    //    的标题/框架文案；warn.title.<code> 按 code 给行级标题，服务端 message
+    //    原文作正文。
+
+    var PAODING_LANG_KEY = "paoding-lang";
+
+    // 语言探测：localStorage 显式值优先；其余按 navigator.language 首缀猜 zh，
+    // 兜底 en。全程 try/catch——非浏览器/受限环境（vm 测试、老内核）不炸，逐层回落。
+    function paodingDetectLang() {
+      try {
+        var saved = window.localStorage.getItem(PAODING_LANG_KEY);
+        if (saved === "zh" || saved === "en") return saved;
+      } catch (err) { /* localStorage 不可用：继续探测 */ }
+      try {
+        if (typeof navigator !== "undefined" && navigator.language
+          && String(navigator.language).toLowerCase().indexOf("zh") === 0) return "zh";
+      } catch (err) { /* navigator 不可用：落兜底 */ }
+      return "en";
+    }
+
+    var paodingLang = paodingDetectLang();
+
+    // 当前语言（组件渲染期读；setLang 后经广播触发重渲染再读到新值）。
+    function pdLang() { return paodingLang; }
+
+    // 取文案 + {name} 插值。缺 key 原样返回 key（显式暴露，防静默错文案）。
+    function t(key, params) {
+      var entry = PAODING_I18N_DICT[key];
+      var s = entry ? (entry[paodingLang] != null ? entry[paodingLang] : entry.zh) : key;
+      if (params) {
+        Object.keys(params).forEach(function (name) {
+          s = s.split("{" + name + "}").join(String(params[name]));
+        });
+      }
+      return s;
+    }
+
+    // key 是否在字典（动态拼 key 时防「缺 key 露 key 串」的守卫，如 warn.title.<code>）。
+    function tHas(key) {
+      return Object.prototype.hasOwnProperty.call(PAODING_I18N_DICT, key);
+    }
+
+    // 语言变更广播：setLang 同步通知；返回反注册函数（组件卸载时退订）。
+    var paodingLangListeners = [];
+    function onLangChange(fn) {
+      paodingLangListeners.push(fn);
+      return function () {
+        var i = paodingLangListeners.indexOf(fn);
+        if (i !== -1) paodingLangListeners.splice(i, 1);
+      };
+    }
+
+    // 切语言：只认 zh/en（其余一律归 zh，与探测兜底口径一致）；写盘失败只降级
+    // 为「本次会话生效」（隐私模式等场景不炸）。
+    function setLang(lang) {
+      var next = lang === "en" ? "en" : "zh";
+      if (next === paodingLang) return;
+      paodingLang = next;
+      try { window.localStorage.setItem(PAODING_LANG_KEY, next); } catch (err) { /* 写不进就只换内存态 */ }
+      paodingLangListeners.slice().forEach(function (fn) {
+        try { fn(); } catch (err) { /* 单个监听失败不阻断其余刷新 */ }
+      });
+    }
+
+    // ── 字典（纯数据字面量：无函数、无外部引用，测试按整个片段 vm 执行提取）──
+    var PAODING_I18N_DICT = {
+      // common.*：跨片段复用的短词
+      "common.confirm": { zh: "确认", en: "Confirm" },
+      "common.cancel": { zh: "取消", en: "Cancel" },
+      "common.close": { zh: "关闭", en: "Close" },
+      "common.closeToast": { zh: "关闭提示", en: "Dismiss notification" },
+      "common.confirmDelete": { zh: "确认删除", en: "Delete" },
+      "common.restoreDefault": { zh: "恢复默认", en: "Restore default" },
+      "common.listSep": { zh: "；", en: "; " },
+      "common.period": { zh: "。", en: "." },
+      "common.projectBadge": { zh: "项目", en: "Project" },
+
+      // dom.*：20 片段渲染助手的定稿文案
+      "dom.runtimeFallback": { zh: "运行时识别不可用，已回退文件扫描（{err}）", en: "Runtime detection unavailable — fell back to file scanning ({err})" },
+      "dom.bgContinuableHint": { zh: "可续会话跨轮保留子代理上下文：产出不满可用 send_message 就地续修；无自动清理，落盘与 token 成本随轮次累积，建议仅多轮打磨类角色开启。", en: "Continuable sessions keep the child conversation across turns: when a result falls short, the main agent can refine it in place via send_message. Nothing is cleaned up automatically — disk and token costs accumulate per turn, so enable it only for iterate-and-polish roles." },
+      "dom.bgPersistenceWarn": { zh: "未检测到会话持久化后端（sessionPersistence）。可续模式在委派时会直接报错 PERSISTENCE_UNAVAILABLE：需在 ~/.dsh/cordis.patch.yml 挂 @deepseek-ai/dsh-session-persistence-jsonl（host 层、机器级改动，详见 docs/orchestration.md）。", en: "No session persistence backend (sessionPersistence) detected. Delegating to a continuable role fails outright with PERSISTENCE_UNAVAILABLE: mount @deepseek-ai/dsh-session-persistence-jsonl in ~/.dsh/cordis.patch.yml (a host-level, machine-wide change — see docs/orchestration.md)." },
+      "dom.forkModelHint": { zh: "继承对话的子代理随主 agent 的当前模型启动，上方专用模型不会生效；应用时会忽略该项模型配置。", en: "A forked child starts with the main agent's current model — the dedicated model above has no effect and is ignored on apply." },
+
+      // api.*：30 片段请求助手的可读错误
+      "api.notJson": { zh: "HTTP {status}（响应不是 JSON）", en: "HTTP {status} (response was not JSON)" },
+      "api.timeout": { zh: "请求超时（{s}s 无响应）", en: "Request timed out (no response for {s}s)" },
+
+      // ver.*：40 片段页头版本更新卡
+      "ver.checkFailed": { zh: "版本检测失败", en: "Version check failed" },
+      "ver.checking": { zh: "检测中…", en: "Checking…" },
+      "ver.retry": { zh: "重试", en: "Retry" },
+      "ver.newAvailable": { zh: "新版本 {v} 可用 · ", en: "New version {v} available · " },
+      "ver.viewUpdate": { zh: "查看更新", en: "View release" },
+      "ver.upgrade": { zh: "升级", en: "Upgrade" },
+      "ver.upgrading": { zh: "升级中…", en: "Upgrading…" },
+      "ver.downloadHint": { zh: "下载安装中，最长约 2 分钟", en: "Downloading and installing — may take up to 2 minutes" },
+
+      // models.*：50 片段模型选项与 70/72 的目录降级文案
+      "models.followRouting": { zh: "（跟随主 agent 路由）", en: "follows main agent routing" },
+      "models.current": { zh: "当前配置：{provider} · {model}", en: "Current config: {provider} · {model}" },
+      "models.currentNoModel": { zh: "当前配置：{provider} ·（无模型，后端忽略）", en: "Current config: {provider} · (no model — ignored by the backend)" },
+      "models.followMain": { zh: "跟随主 agent 当前模型", en: "Follow the main agent's current model" },
+      "models.option": { zh: "{model}（{provider}）", en: "{model} ({provider})" },
+      "models.listBadResponse": { zh: "模型目录响应格式异常", en: "Unexpected model catalog response format" },
+
+      // tpl.*：55 片段场景模板（档位名 + 场景说明；55 的 label/desc 字段存的就是这里的 key）
+      "tpl.lite.label": { zh: "轻量档", en: "Lite" },
+      "tpl.lite.desc": { zh: "只留实现角色（implement），主 agent 不额外带工具。适合纯写代码。", en: "Keeps only the implement role; the main agent carries no extra tools. For pure coding sessions." },
+      "tpl.research.label": { zh: "调研档", en: "Research" },
+      "tpl.research.desc": { zh: "只留检索角色（search_external + 深搜），去掉设计与实现。", en: "Keeps only the research roles (search_external + deep search); drops design and implement." },
+      "tpl.full.label": { zh: "全开档", en: "Full" },
+      "tpl.full.desc": { zh: "四个内置角色全留，主 agent 额外工具勾上检测到的全部库存。", en: "Keeps all four built-in roles; the main agent's extra tools cover the full detected inventory." },
+
+      // ws.*：60 片段工作区助手 + 72 的标签条 / 添加工作区弹窗
+      "ws.tag.project": { zh: "项目", en: "Project" },
+      "ws.tag.pending": { zh: "待应用", en: "Pending" },
+      "ws.tag.global": { zh: "全局", en: "Global" },
+      "ws.sessionCount": { zh: "{n} 会话", en: "{n} sessions" },
+      "ws.tip.sessions": { zh: " · {n} 会话", en: " · {n} sessions" },
+      "ws.tip.project": { zh: " · 项目配置（预设 {id}）", en: " · project config (preset {id})" },
+      "ws.tip.pending": { zh: " · 已保存项目配置、预设未生成（点「保存并应用」生效）", en: " · project config saved, preset not generated yet (click Save & Apply to apply it)" },
+      "ws.tip.global": { zh: " · 跟随全局配置", en: " · follows the global config" },
+      "ws.globalTab": { zh: "全局默认", en: "Global default" },
+      "ws.globalTabTip": { zh: "全局默认：写入共享的 orchestrator 预设", en: "Global default: writes the shared orchestrator preset" },
+      "ws.more": { zh: "更多", en: "More" },
+      "ws.moreTip": { zh: "其余 {n} 个工作区", en: "{n} more workspaces" },
+      "ws.addTab": { zh: "添加工作区", en: "Add workspace" },
+      "ws.addTabTip": { zh: "注册新的工作区目录", en: "Register a new workspace directory" },
+      "ws.tablistLabel": { zh: "配置对象", en: "Config target" },
+      "ws.menuLabel": { zh: "更多工作区", en: "More workspaces" },
+      "ws.barHint": { zh: "「全局默认」写入共享的 orchestrator 预设；选中某个工作区后，预览 / 应用会生成该工作区专属预设（orchestrator-<目录名>），两者互不影响。", en: "\"Global default\" writes the shared orchestrator preset; with a workspace selected, preview/apply generates that workspace's own preset (orchestrator-<directory name>). The two never interfere." },
+      "ws.addTitle": { zh: "添加工作区", en: "Add workspace" },
+      "ws.pathLabel": { zh: "工作区目录绝对路径", en: "Absolute path of the workspace directory" },
+      "ws.pathPlaceholder": { zh: "输入工作区目录绝对路径，如 /Users/me/code/project-a", en: "Enter an absolute directory path, e.g. /Users/me/code/project-a" },
+      "ws.pathHint": { zh: "目录需已存在；已注册的目录重复提交幂等返回。", en: "The directory must already exist; re-submitting a registered path is an idempotent no-op." },
+      "ws.addConfirm": { zh: "确认添加", en: "Add" },
+      "ws.adding": { zh: "添加中…", en: "Adding…" },
+      "ws.addedToast": { zh: "已注册工作区：{path}；配置后点「保存并应用」生成专属预设", en: "Workspace registered: {path}. Configure it, then hit Save & Apply to generate its preset" },
+      "ws.existsToast": { zh: "工作区已在列表里：{path}；配置后点「保存并应用」生成专属预设", en: "Workspace already listed: {path}. Configure it, then hit Save & Apply to generate its preset" },
+      "ws.listBadResponse": { zh: "工作区列表响应格式异常", en: "Unexpected workspace list response format" },
+      "ws.listFailHint": { zh: "宿主工作区列表拉取失败，仅显示配置文件中的工作区；重启 DSH 后通常可恢复", en: "Failed to fetch the host workspace list — showing only workspaces from the config file; usually recovers after restarting DSH" },
+      "ws.listFailDetail": { zh: "（{msg}）", en: " ({msg})" },
+      "ws.notInList": { zh: "工作区 {path} 不在列表里，未切换 tab", en: "Workspace {path} is not in the list — tab not switched" },
+      "ws.skillsFail": { zh: "该工作区技能列表拉取失败，技能网格已回退用户级技能", en: "Failed to fetch this workspace's skill list — the skill grid fell back to user-level skills" },
+
+      // panel.*：70/72 配置面板正文（表单标签 / 占位符 / 提示 / toast / 按钮）
+      "panel.loading": { zh: "加载检测状态…", en: "Loading detection state…" },
+      "panel.scopeGlobal": { zh: "仅用户级技能", en: "User-level skills only" },
+      "panel.scopeWs": { zh: "用户级 + 该工作区项目级技能", en: "User-level + this workspace's project-level skills" },
+      "panel.applyBtn": { zh: "保存并应用", en: "Save & Apply" },
+      "panel.applying": { zh: "处理中…", en: "Working…" },
+      "panel.previewBtn": { zh: "预览生成", en: "Generate preview" },
+      "panel.previewing": { zh: "生成中…", en: "Generating…" },
+      "panel.rescanBtn": { zh: "重新检测", en: "Rescan" },
+      "panel.scanning": { zh: "检测中…", en: "Scanning…" },
+      "panel.rolesToolsHeading": { zh: "角色与工具", en: "Roles & tools" },
+      "panel.tplHeading": { zh: "场景模板", en: "Scenario templates" },
+      "panel.removedHeading": { zh: "已删除的内置角色", en: "Removed built-in roles" },
+      "panel.restoreHint": { zh: "恢复后卡片回到上方内置列表；工具面取内置默认（不沿用删前自定义配置）。", en: "Restored cards return to the built-in list above; the toolset is rebuilt from the built-in default (pre-deletion customizations are not kept)." },
+      "panel.roleAddBtn": { zh: "新建自定义 agent 角色", en: "New custom role" },
+      "panel.skillsHeading": { zh: "技能分配（软约束：写入对应 agent 的 persona 引导）", en: "Skill assignment (soft constraint: written into each agent's persona guidance)" },
+      "panel.skillsMain": { zh: "技能分配（read 按需：勾选 = persona 写入技能行，主 agent 用 read 加载正文）", en: "Skill assignment (read on demand: checking writes a skill line into the persona; the main agent loads the body with read)" },
+      "panel.skillsInline": { zh: "内联全文（硬生效，每轮固定 persona 开销，适合 caveman 等风格技能）", en: "Inline full text (hard effect, fixed persona cost every turn — for style skills like caveman)" },
+      "panel.baseToolsMain": { zh: "基础工具（取消勾选即从主 agent 移除——写入 main_agent_remove）", en: "Base tools (unchecking removes them from the main agent — written to main_agent_remove)" },
+      "panel.mcpToolsMain": { zh: "MCP 工具（可加入主 agent）", en: "MCP tools (can join the main agent)" },
+      "panel.pluginToolsMain": { zh: "插件工具（可加入主 agent）", en: "Plugin tools (can join the main agent)" },
+      "panel.baseTools": { zh: "基础工具", en: "Base tools" },
+      "panel.mcpTools": { zh: "MCP 工具", en: "MCP tools" },
+      "panel.pluginTools": { zh: "插件工具", en: "Plugin tools" },
+      "panel.noMcp": { zh: "未检测到 MCP 工具", en: "No MCP tools detected" },
+      "panel.noPlugin": { zh: "未检测到插件工具", en: "No plugin tools detected" },
+      "panel.noSkills": { zh: "未检测到技能目录", en: "No skill directories detected" },
+      "panel.none": { zh: "无", en: "None" },
+      "panel.tagReadOnDemand": { zh: "read按需", en: "read on demand" },
+      "panel.tagInline": { zh: "内联全文", en: "Inline" },
+      "panel.previewOk": { zh: "✅ 生成成功（未写盘）", en: "✅ Generated (nothing written to disk)" },
+      "panel.previewPreset": { zh: " · 预设 {id}", en: " · preset {id}" },
+      // 「编排模式 (Orchestrator)」是后端默认 preset 显示名的「值」，不是界面标签——
+      // 占位符展示的就是生效值本身，不本地化（英文文档也沿用中文名）。
+      "panel.mainNameLabel": { zh: "主 agent 显示名（仅 preset 显示名）", en: "Main agent display name (preset display name only)" },
+      "panel.mainNameHint": { zh: "仅替换预设显示名，persona 身份行（You are the …）不动；留空 = 默认「编排模式 (Orchestrator)」（工作区预设用派生名）。改动需重启 GUI / 新会话生效。", en: "Replaces only the preset display name — the persona identity line (You are the …) is untouched; leave empty for the default \"编排模式 (Orchestrator)\" (workspace presets use a derived name). Takes effect after a GUI restart or in new sessions." },
+      "panel.mainNameNewline": { zh: "主 agent 显示名（仅 preset 显示名）不能包含换行（\\r / \\n），未保存", en: "Main agent display name (preset display name only) cannot contain line breaks (\\r / \\n) — not saved" },
+      "panel.mainNameBlank": { zh: "主 agent 显示名（仅 preset 显示名）不能为纯空白（清空字段或点「恢复默认」= 默认显示名），未保存", en: "Main agent display name (preset display name only) cannot be whitespace-only (clear the field or click Restore default for the default name) — not saved" },
+      "panel.mainNameTooLong": { zh: "主 agent 显示名（仅 preset 显示名）过长：trim 后最多 60 字符，未保存", en: "Main agent display name (preset display name only) is too long: at most 60 characters after trim — not saved" },
+      "panel.personaToggle": { zh: "persona（可选，覆盖默认角色说明）", en: "Persona (optional, overrides the default role description)" },
+      "panel.personaPlaceholder": { zh: "输入该角色的 persona 说明…", en: "Enter this role's persona description…" },
+      "panel.personaHint": { zh: "技能引导会自动追加到 persona 末尾；自定义角色必填此说明。", en: "Skill guidance is appended to the end of the persona automatically; custom roles must fill this in." },
+      "panel.extraToggle": { zh: "人设追加（主 agent 提示词尾部，可编辑）", en: "Persona addendum (tail of the main agent prompt, editable)" },
+      "panel.extraPlaceholder": { zh: "留空并保存 = 不追加任何内容（默认 codegraph 规则将被移除）…", en: "Leave empty and save to append nothing (the default codegraph rules will be removed)…" },
+      "panel.extraActionHint": { zh: "保存并应用时按此追加到主 agent persona 末尾（顺序：SRC 本体 → 技能行 → 此处）。改动需重启 GUI / 新会话生效。", en: "Appended to the end of the main agent persona on Save & Apply (order: SRC body → skill lines → this). Takes effect after a GUI restart or in new sessions." },
+      "panel.extraClearHint": { zh: "清空保存 = 移除默认 codegraph 规则（配置键 main_agent_persona_extra 记为 ''）。", en: "Save while empty to remove the default codegraph rules (config key main_agent_persona_extra is stored as \'\')." },
+      "panel.roleNameLabelCustom": { zh: "角色显示名（事件流委派行标题；不动 toolName / persona）", en: "Role display name (title of the delegation row in the event stream; does not touch toolName / persona)" },
+      "panel.roleNameLabelBuiltin": { zh: "角色显示名（persona 身份句主语 + 事件流委派行标题；不动工具名/调用名）", en: "Role display name (subject of the persona identity line + delegation row title; does not touch tool names / call names)" },
+      "panel.roleNameHintCustom": { zh: "留空 = 事件流显示 toolName（{name}）；保存并应用后生效（仅 GUI 展示，不影响生成产物与调用名）。", en: "Leave empty to show the toolName ({name}) in the event stream; takes effect on Save & Apply (GUI display only — no effect on generated artifacts or call names)." },
+      "panel.roleNameHintBuiltin": { zh: "留空 = 默认身份（如 \"You are the {subject} agent.\"）；已为该角色自定义 persona 时仅作事件流标题。", en: "Leave empty for the default identity (e.g. \"You are the {subject} agent.\"); serves only as the event-stream title when this role has a custom persona." },
+      "panel.roleNameNewline": { zh: "角色 \"{name}\" 显示名不能包含换行（\\r / \\n），未保存", en: "Display name of role \"{name}\" cannot contain line breaks (\\r / \\n) — not saved" },
+      "panel.roleNameTooLong": { zh: "角色 \"{name}\" 显示名过长：trim 后最多 60 字符，未保存", en: "Display name of role \"{name}\" is too long: at most 60 characters after trim — not saved" },
+      "panel.roleModelLabel": { zh: "专用模型（可选；留空 = 跟随主 agent 当前模型）", en: "Dedicated model (optional; leave empty to follow the main agent's current model)" },
+      "panel.roleModelNewline": { zh: "角色 \"{name}\" {field}不能包含换行（\\r / \\n），未保存", en: "{field} of role \"{name}\" cannot contain line breaks (\\r / \\n) — not saved" },
+      "panel.roleModelTooLong": { zh: "角色 \"{name}\" {field}过长：trim 后最多 120 字符，未保存", en: "{field} of role \"{name}\" is too long: at most 120 characters after trim — not saved" },
+      "panel.modelField": { zh: "专用模型", en: "Dedicated model" },
+      "panel.providerIgnored": { zh: "角色 \"{name}\"：provider 仅在同时配置模型时生效（后端将忽略），已保存", en: "Role \"{name}\": provider takes effect only when a model is also set (ignored by the backend) — saved" },
+      "panel.providerPlaceholder": { zh: "provider（留空=跟随主 agent）", en: "provider (empty = follow main agent)" },
+      "panel.modelFallbackHint": { zh: "模型目录不可用（{err}），已回退手输。写入该角色委派块的 agentOptions；含冷恢复在内，子 agent 固定用该模型。provider 需与模型成对（如 deepseek-official）。", en: "Model catalog unavailable ({err}) — fell back to manual input. Written into the agentOptions of this role's delegation block; the child agent pins this model, cold restore included. provider must pair with a model (e.g. deepseek-official)." },
+      "panel.unknownError": { zh: "未知错误", en: "unknown error" },
+      "panel.modelSelectHint": { zh: "选项来自 DSH 已注册的模型路由；留空 = 跟随主 agent，主 agent 换模型时未固定的角色跟着变。", en: "Options come from the model routes registered in DSH; leave empty to follow the main agent — roles without a pinned model follow along when the main agent switches models." },
+      "panel.bgModeLabel": { zh: "会话模式", en: "Session mode" },
+      "panel.bgOneshot": { zh: "一次性（one-shot）", en: "One-shot" },
+      "panel.bgContinuable": { zh: "可续（continuable）", en: "Continuable" },
+      "panel.startModeLabel": { zh: "启动方式", en: "Start mode" },
+      "panel.smFresh": { zh: "全新（fresh）", en: "Fresh" },
+      "panel.smFork": { zh: "继承对话（fork）", en: "Inherit conversation (fork)" },
+      "panel.forkStartHint": { zh: "继承对话的子代理以主 agent 已完成的对话轮次为初始内容启动（一次性快照，之后两边各自推进）；工具面仍以本角色配置为准。", en: "A forked child starts from the main agent's already-completed turns (a one-time snapshot; from then on both sides move on independently); the toolset still follows this role's own configuration." },
+      "panel.roleAddTitle": { zh: "新建自定义 agent 角色", en: "New custom role" },
+      "panel.roleAddToolNameLabel": { zh: "角色 toolName（主 agent 的委派调用名）", en: "Role toolName (the main agent's delegation call name)" },
+      "panel.roleAddNamePlaceholder": { zh: "输入英文小写角色名，如 reviewer", en: "Enter a lowercase role name, e.g. reviewer" },
+      "panel.dispNameLabel": { zh: "显示名（可选）", en: "Display name (optional)" },
+      "panel.dispNamePlaceholder": { zh: "如 代码评审，留空 = 用 toolName", en: "e.g. Code review — leave empty to use the toolName" },
+      "panel.roleAddHint": { zh: "角色名须为 2-32 位小写字母/数字/下划线/连字符，小写字母开头；内置名不可新建。显示名可选，不能换行，trim 后最多 60 字符，留空用 toolName 当标题。新角色工具面默认放开全部检测到的工具，可在卡片里再收窄。会话模式缺省一次性（one-shot），选「可续」后仍可在角色卡里改。启动方式缺省全新（fresh），选「继承对话」后仍可在角色卡里改。", en: "Role names are 2-32 chars of lowercase letters/digits/underscores/hyphens, starting with a letter; built-in names cannot be recreated. Display name is optional: no line breaks, at most 60 chars after trim; leave empty to use the toolName as the title. A new role's toolset opens up every detected tool by default — narrow it down in the role card later. Session mode defaults to one-shot and can still be changed in the role card after picking Continuable. Start mode defaults to fresh and can still be changed in the role card after picking Inherit conversation." },
+      "panel.roleAddConfirm": { zh: "确认新建", en: "Create" },
+      "panel.roleRenameTitle": { zh: "重命名自定义角色", en: "Rename custom role" },
+      "panel.roleRenameLabel": { zh: "新 toolName（主 agent 的委派调用名）", en: "New toolName (the main agent's delegation call name)" },
+      "panel.roleRenameHint": { zh: "2-32 位小写字母/数字/下划线/连字符，小写字母开头；不可改成内置名或已存在的名字。skills 里的引用自动迁移；改名后需重启 / 新会话生效。", en: "2-32 chars of lowercase letters/digits/underscores/hyphens, starting with a letter; cannot be a built-in or an existing name. References in skills are migrated automatically; takes effect after a restart / in new sessions." },
+      "panel.roleRenameConfirm": { zh: "确认重命名", en: "Rename" },
+      "panel.roleNameInvalid": { zh: "角色名须为 2-32 位小写字母/数字/下划线/连字符", en: "Role name must be 2-32 chars of lowercase letters/digits/underscores/hyphens" },
+      "panel.roleNameBuiltin": { zh: "内置角色不可新建（\"{name}\"如已删除，请在下方「已删除的内置角色」区恢复）", en: "\"{name}\" is a built-in role and cannot be recreated (if deleted, restore it from the Removed built-in roles section below)" },
+      "panel.roleExists": { zh: "角色 \"{name}\" 已存在", en: "Role \"{name}\" already exists" },
+      "panel.dispNameNewline": { zh: "显示名不能包含换行（\\r / \\n）", en: "Display name cannot contain line breaks (\\r / \\n)" },
+      "panel.dispNameTooLong": { zh: "显示名过长：trim 后最多 60 字符", en: "Display name is too long: at most 60 characters after trim" },
+      "panel.roleAddedToast": { zh: "已新建角色 \"{name}\"，记得「保存并应用」", en: "Created role \"{name}\" — remember to Save & Apply" },
+      "panel.roleRenameBuiltin": { zh: "不可改成内置角色名 \"{name}\"", en: "Cannot rename to the built-in role name \"{name}\"" },
+      "panel.roleRenamedToast": { zh: "已重命名 \"{old}\" → \"{new}\"，记得「保存并应用」", en: "Renamed \"{old}\" → \"{new}\" — remember to Save & Apply" },
+      "panel.delCustomRoleTitle": { zh: "删除自定义角色", en: "Delete custom role" },
+      "panel.delCustomRoleBody": { zh: "删除自定义角色 \"{name}\"？", en: "Delete custom role \"{name}\"?" },
+      "panel.delBuiltinRoleTitle": { zh: "删除内置角色", en: "Delete built-in role" },
+      "panel.delBuiltinRoleBody": { zh: "删除内置角色 \"{name}\"？\n该角色的委派工具、工具面、persona 与主 agent 的委派指引将一并移除；\n可在下方「已删除的内置角色」区一键恢复。", en: "Delete built-in role \"{name}\"?\nIts delegation tool, toolset, persona and the main agent's delegation guidance are removed with it;\nyou can restore it anytime from the Removed built-in roles section below." },
+      "panel.applyTitle": { zh: "保存并应用", en: "Save & Apply" },
+      "panel.applyBodyWs": { zh: "确认应用当前配置？将为该工作区生成专属预设（orchestrator-<slug>）并保存到 dsh-paoding.config.yml 的 workspaces 段，全局 orchestrator 预设不受影响。", en: "Apply the current configuration? This generates a dedicated preset for this workspace (orchestrator-<slug>) and saves it to the workspaces section of dsh-paoding.config.yml — the global orchestrator preset is untouched." },
+      "panel.applyBodyGlobal": { zh: "确认应用当前配置？将写入 preset 并覆盖 ~/.dsh/.agent-presets/orchestrator，且保存到 dsh-paoding.config.yml。", en: "Apply the current configuration? This writes the preset, overwriting ~/.dsh/.agent-presets/orchestrator, and saves it to dsh-paoding.config.yml." },
+      "panel.applyConfirm": { zh: "确认应用", en: "Apply" },
+      "panel.warnTail": { zh: "有 {n} 条检查提示，见下方。", en: "{n} check messages below." },
+      "panel.appliedWs": { zh: "已生成预设 {id}：{summary}新建会话时在预设选择器选它。", en: "Generated preset {id}: {summary} Pick it in the preset selector when starting a new session." },
+      "panel.appliedGlobal": { zh: "已安装：{summary}", en: "Installed: {summary}" },
+      "panel.staleReapply": { zh: " ⚠️ patch 较新，重新应用后生效。", en: " ⚠️ The patch is newer — apply again to take effect." },
+      "panel.staleRestart": { zh: " ⚠️ patch 较新，重启后生效。", en: " ⚠️ The patch is newer — restart to take effect." },
+      "panel.effectiveRestart": { zh: " 重启 DSH 或新建会话后生效。", en: " Takes effect after restarting DSH or in a new session." },
+      "panel.rescanned": { zh: "已重新检测：{n} 个 MCP / 插件工具 · {m} 个技能", en: "Rescan complete: {n} MCP/plugin tools · {m} skills" },
+      "panel.tplAppliedToast": { zh: "已切换到「{label}」，保存并应用后生效", en: "Switched to \"{label}\" — takes effect after Save & Apply" },
+
+      // role.*：角色卡通用词 + 82 片段委派行标题缺省映射（值 = 字典 key）
+      "role.mainAgent": { zh: "主 agent", en: "Main agent" },
+      "role.badgeFixed": { zh: "固定", en: "Fixed" },
+      "role.badgeCustom": { zh: "自定义", en: "Custom" },
+      "role.badgeBuiltin": { zh: "内置", en: "Built-in" },
+      "role.toolCount": { zh: "{n} 个工具", en: "{n} tools" },
+      "role.renameTitle": { zh: "重命名角色 \"{name}\"（toolName = 委派调用名）", en: "Rename role \"{name}\" (toolName = delegation call name)" },
+      "role.delCustomTitle": { zh: "删除角色 \"{name}\"", en: "Delete role \"{name}\"" },
+      "role.delBuiltinTitle": { zh: "删除内置角色 \"{name}\"（可在下方恢复）", en: "Delete built-in role \"{name}\" (restorable below)" },
+      "role.restoreTitle": { zh: "恢复内置角色 \"{name}\"（工具面重建为内置默认 allow）", en: "Restore built-in role \"{name}\" (toolset rebuilt from the built-in default allow)" },
+      "role.restorePill": { zh: "恢复 {name}", en: "Restore {name}" },
+      "role.title.search_external": { zh: "外部检索", en: "External research" },
+      "role.title.design": { zh: "设计", en: "Design" },
+      "role.title.implement": { zh: "实现", en: "Implement" },
+      "role.title.search_internal_deep": { zh: "深搜", en: "Deep search" },
+
+      // warn.*：70 片段体检告警卡。heading 是卡片标题；title.<code> 是按服务端
+      // code 给的行级本地化标题（进悬浮提示）。取舍：服务端 message 原文作正文
+      // 展示，本轮不译（服务端仅中文）——只把「这是什么类别的检查」本地化。
+      "warn.heading.apply": { zh: "应用检查提示", en: "Apply checks" },
+      "warn.heading.preview": { zh: "预览检查提示", en: "Preview checks" },
+      "warn.itemTitle": { zh: "检查项：{code}", en: "Check: {code}" },
+      "warn.title.unmounted_tool": { zh: "已配置但未挂载的工具", en: "Configured but unmounted tool" },
+      "warn.title.zero_tool_role": { zh: "零工具角色", en: "Role with no tools" },
+      "warn.title.unknown_model": { zh: "未知的专用模型", en: "Unknown dedicated model" },
+      "warn.title.preset_drift": { zh: "预设与配置漂移", en: "Preset drift" },
+      "warn.title.generation": { zh: "生成期告警", en: "Generation warning" },
+      "warn.title.generation_error": { zh: "生成预演失败", en: "Generation dry-run failed" },
+
+      // nav.*：80 侧栏入口 + 86 页头壳（庖丁为品牌名，英文文档沿用 Paoding Config 译名）
+      "nav.entryTitle": { zh: "庖丁配置", en: "Paoding Config" },
+      "nav.openToWs": { zh: "打开庖丁配置并切到该工作区", en: "Open Paoding Config for this workspace" },
+      "nav.closeAria": { zh: "关闭庖丁配置", en: "Close Paoding Config" },
+      "nav.closeTip": { zh: "关闭（Esc）", en: "Close (Esc)" },
+
+      // menu.*：86 页头「更多」菜单 / 导入导出 / 升级流程（服务端 r.message 原文
+      // 优先展示，本地化串只作缺省兜底——同 warn 的取舍）。
+      "menu.subtitle": { zh: "为主 agent 与子 agent 编排工具、技能与角色，预览并应用生成的 agent.cordis.yml。", en: "Orchestrate tools, skills and roles for the main agent and its sub-agents; preview and apply the generated agent.cordis.yml." },
+      "menu.moreBtn": { zh: "更多", en: "More" },
+      "menu.moreBtnTip": { zh: "配置文件导出 / 导入", en: "Export / import the config file" },
+      "menu.menuLabel": { zh: "配置文件操作", en: "Config file actions" },
+      "menu.exportItem": { zh: "导出配置", en: "Export config" },
+      "menu.exporting": { zh: "导出中…", en: "Exporting…" },
+      "menu.exported": { zh: "已导出配置文件 {name}", en: "Exported config file {name}" },
+      "menu.exportFail": { zh: "导出失败：{msg}", en: "Export failed: {msg}" },
+      "menu.importItem": { zh: "导入配置", en: "Import config" },
+      "menu.importing": { zh: "导入中…", en: "Importing…" },
+      "menu.importTitle": { zh: "导入配置", en: "Import config" },
+      "menu.importBody": { zh: "将用文件「{name}」整体覆盖当前配置文件：\n角色、工具、技能分配与 workspaces（工作区）段全部以文件内容为准，现有配置被替换，此操作不可撤销。", en: "The file \"{name}\" will overwrite the whole config file:\nroles, tools, skill assignment and the workspaces section are all replaced with the file's content. The existing configuration is replaced — this cannot be undone." },
+      "menu.importConfirm": { zh: "覆盖导入", en: "Overwrite & import" },
+      "menu.imported": { zh: "配置已导入并覆盖原文件，视图已按新配置刷新", en: "Config imported and the original file overwritten — the view has been refreshed" },
+      "menu.importFail": { zh: "导入失败：{msg}", en: "Import failed: {msg}" },
+      "menu.readFail": { zh: "文件读取失败", en: "Failed to read file" },
+      "menu.readFailPrefix": { zh: "读取文件失败：{msg}", en: "Failed to read the file: {msg}" },
+      "menu.wsNotRegistered": { zh: "宿主工作区「{title}」还没在庖丁注册，已打开全局默认", en: "Host workspace \"{title}\" is not registered in Paoding yet — opened the global default" },
+      "menu.listFail": { zh: "工作区列表拉取失败，已打开全局默认", en: "Failed to fetch the workspace list — opened the global default" },
+      "menu.upgradeTitle": { zh: "升级 dsh-paoding", en: "Upgrade dsh-paoding" },
+      "menu.upgradeConfirm": { zh: "升级", en: "Upgrade" },
+      "menu.upgradeDevBody": { zh: "当前为开发 link 直连形态：无法就地升级，请手动执行 dsh plugin add dsh-paoding@latest 切换到 registry 版本。仍要继续尝试吗？", en: "This is a dev link checkout: it cannot be upgraded in place. Run dsh plugin add dsh-paoding@latest manually to switch to the registry version. Continue anyway?" },
+      "menu.upgradeBody": { zh: "确定升级到 {v}？升级将通过插件通道原地换版本，完成后需重启 DSH 生效。", en: "Upgrade to {v}? The upgrade swaps the version in place through the plugin channel; restart DSH afterwards to apply it." },
+      "menu.upToDate": { zh: "已是最新版本", en: "Already up to date" },
+      "menu.upgraded": { zh: "✅ 已升级到 {v}，重启 DSH 后新版本生效（preset 会自动按新版重生成）", en: "✅ Upgraded to {v} — restart DSH to apply the new version (the preset regenerates itself against it)" },
+      "menu.errTail": { zh: "：{tail}", en: ": {tail}" },
+      "menu.langTip": { zh: "切换界面语言", en: "Switch UI language" },
+    };
     // ── 样式注入（幂等）─────────────────────────────────────────────────
     //
     // 样式正文在 lib/base.css，由 Node 半经 GET /api/paoding/client.css 下发
@@ -185,16 +520,12 @@ window.__ModuleLoader__.load({
       return false;
     }
 
-    // 「可续」选中时的行内成本提示（定稿文案）。
-    var ROLE_BG_CONTINUABLE_HINT =
-      "可续会话跨轮保留子代理上下文：产出不满可用 send_message 就地续修；" +
-      "无自动清理，落盘与 token 成本随轮次累积，建议仅多轮打磨类角色开启。";
+    // 「可续」选中时的行内成本提示（定稿文案）。i18n：常量会在模块加载期固化
+    // 成单语字符串，切语言后就错了——包装成函数，渲染期才经 t() 取当前语言。
+    function roleBgContinuableHint() { return t("dom.bgContinuableHint"); }
 
     // persistence 后端缺失时的警告（定稿文案；只警示不拦截，预览 / 应用照常）。
-    var ROLE_BG_PERSISTENCE_WARN =
-      "未检测到会话持久化后端（sessionPersistence）。可续模式在委派时会直接报错 " +
-      "PERSISTENCE_UNAVAILABLE：需在 ~/.dsh/cordis.patch.yml 挂 " +
-      "@deepseek-ai/dsh-session-persistence-jsonl（host 层、机器级改动，详见 docs/orchestration.md）。";
+    function roleBgPersistenceWarn() { return t("dom.bgPersistenceWarn"); }
 
     // ── 启动方式（roles.<toolName>.start_mode）─────────────────────────────
     // 定稿键名 'fresh' | 'fork'，缺省 fresh。与后端序列化形状一致：config 层
@@ -212,10 +543,8 @@ window.__ModuleLoader__.load({
     }
 
     // 「继承对话（fork）」选中且该角色配了专用模型时的行内提示（定稿文案）：
-    // fork 子代理继承主 agent 的提供方与模型，专用模型不生效。
-    var ROLE_SM_FORK_MODEL_HINT =
-      "继承对话的子代理随主 agent 的当前模型启动，上方专用模型不会生效；" +
-      "应用时会忽略该项模型配置。";
+    // fork 子代理继承主 agent 的提供方与模型，专用模型不生效。同为渲染期取文案。
+    function roleForkModelHint() { return t("dom.forkModelHint"); }
 
 
     // mcp__ 前缀判定（归「MCP 工具」组的依据，供角色工具网格分组与
@@ -247,7 +576,7 @@ window.__ModuleLoader__.load({
       var err = String(d.runtimeError);
       if (err.length > 200) err = err.slice(0, 200) + "…";
       return h("div", { className: "omd-runtimeNote" },
-        "运行时识别不可用，已回退文件扫描（" + err + "）");
+        t("dom.runtimeFallback", { err: err }));
     }
 
     // 版本号展示归一：tag 缺前缀 v 时补上（服务端原样透传 GitHub tag_name，
@@ -295,13 +624,17 @@ window.__ModuleLoader__.load({
           if (!r.ok) {
             var err = new Error((d && d.error) || ("HTTP " + r.status));
             if (d && typeof d.output === "string" && d.output) err.output = d.output;
+            // 结构化体检结果（preview/apply 的 422 会把 warnings 一并带回，如
+            // 零工具角色的可读说明）：message 装不下多条，挂 error.warnings，
+            // 调用方 catch 侧渲染成检查提示卡（见 ConfigPanel 的 warnState）。
+            if (d && Array.isArray(d.warnings)) err.warnings = d.warnings;
             throw err;
           }
-          if (!d) throw new Error("HTTP " + r.status + "（响应不是 JSON）");
+          if (!d) throw new Error(t("api.notJson", { status: r.status }));
           return d;
         });
       }).catch(function (err) {
-        if (ctrl && err && err.name === "AbortError") throw new Error("请求超时（" + (PAODING_API_TIMEOUT_MS / 1000) + "s 无响应）");
+        if (ctrl && err && err.name === "AbortError") throw new Error(t("api.timeout", { s: PAODING_API_TIMEOUT_MS / 1000 }));
         throw err;
       }).finally(function () {
         if (timer !== null) clearTimeout(timer);
@@ -362,14 +695,14 @@ window.__ModuleLoader__.load({
         var retryBusy = !!(opts && opts.retryBusy);
         return h("span", { className: "omd-versionRow omd-versionFail", title: v.error },
           h("span", { className: "omd-versionIcon" }, "⚠"),
-          h("span", { className: "omd-versionText" }, "版本检测失败"),
+          h("span", { className: "omd-versionText" }, t("ver.checkFailed")),
           typeof (opts && opts.onRetry) === "function"
             ? h("button", {
                 type: "button",
                 className: "omd-retryBtn",
                 disabled: retryBusy,
                 onClick: opts.onRetry,
-              }, retryBusy ? "检测中…" : "重试")
+              }, retryBusy ? t("ver.checking") : t("ver.retry"))
             : null);
       }
       var busy = !!opts && !!opts.busy;
@@ -378,7 +711,7 @@ window.__ModuleLoader__.load({
       return h("div", { className: "omd-versionRow omd-versionNew" },
         h("span", { className: "omd-versionIcon" }, "🆙"),
         h("span", { className: "omd-versionText" },
-          "新版本 " + versionTagOf(v.latest) + " 可用 · ",
+          t("ver.newAvailable", { v: versionTagOf(v.latest) }),
           // 只信 https://github.com/ 的 release 链接；其余取值一律不渲染 <a>。
           v.releaseUrl && /^https:\/\/github\.com\//.test(v.releaseUrl)
             ? h("a", {
@@ -386,7 +719,7 @@ window.__ModuleLoader__.load({
                 href: v.releaseUrl,
                 target: "_blank",
                 rel: "noreferrer",
-              }, "查看更新")
+              }, t("ver.viewUpdate"))
             : null),
         typeof (opts && opts.onUpgrade) === "function"
           ? h("button", {
@@ -394,9 +727,9 @@ window.__ModuleLoader__.load({
               className: "omd-upgradeBtn",
               disabled: busy,
               onClick: opts.onUpgrade,
-            }, busy ? "升级中…" : "升级")
+            }, busy ? t("ver.upgrading") : t("ver.upgrade"))
           : null,
-        busy ? h("span", { className: "omd-upgradeHint" }, "下载安装中，最长约 2 分钟") : null,
+        busy ? h("span", { className: "omd-upgradeHint" }, t("ver.downloadHint")) : null,
         error
           ? h("span", { className: "omd-versionNote omd-versionNoteErr" }, error)
           : (note ? h("span", { className: "omd-versionNote" }, note) : null));
@@ -424,7 +757,7 @@ window.__ModuleLoader__.load({
             h("button", {
               type: "button",
               className: "pd-toastClose",
-              "aria-label": "关闭提示",
+              "aria-label": t("common.closeToast"),
               onClick: function () { toast.dismiss(it.id); },
             }, h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×")));
         }));
@@ -491,16 +824,73 @@ window.__ModuleLoader__.load({
         }
       }
       var rtValue = encodeModelOption(provider || null, model || null);
-      // 文案照实：模型缺失（只配 provider，后端会忽略）时按约定不带空格接全角括号
+      // 文案照实：模型缺失（只配 provider，后端会忽略）时按约定不带空格接全角括号。
+      // i18n：provider 缺省文案也随语言走，占位符拼进完整句子。
+      var providerLabel = provider || t("models.followRouting");
       var label = model
-        ? "当前配置：" + (provider || "（跟随主 agent 路由）") + " · " + model
-        : "当前配置：" + (provider || "（跟随主 agent 路由）") + " ·（无模型，后端忽略）";
+        ? t("models.current", { provider: providerLabel, model: model })
+        : t("models.currentNoModel", { provider: providerLabel });
       return {
         value: rtValue,
         extra: { value: rtValue, label: label },
       };
     }
 
+    // ── 场景模板（三档快捷预设）────────────────────────────────────────────────
+    // 纯数据 + 纯函数，与面板解耦（便于 i18n / 单测）。label / desc 存字典 key
+    // （tpl.*，见 04-i18n 字典），渲染侧经 t() 取当前语言文案——数据本身保持
+    // 无语文。模板只动两个键：
+    //   - roles_remove：删哪些内置角色；
+    //   - main_agent_extra：主 agent 在基础白名单之外额外带哪些工具。
+    // 工具面（roles.*.tools / main_agent_remove）、自定义角色、显示名、persona、
+    // 角色专用模型、会话/启动方式、skills 一概不碰——「换班底」的语义收窄到
+    // 「谁在场 + 主 agent 额外带什么」，切档永远不会悄悄改掉用户精调过的配置。
+    //
+    // 注意 search_internal_deep 是静态委派工具（不在配置层 ROLES 里，写进
+    // roles_remove 会被后端 warn 并忽略，见 docs/configuration.md §2.2），三档
+    // 都不写它；调研档「留深搜」正是靠它兜底，无需任何配置动作。
+    var PAODING_SCENARIO_TEMPLATES = [
+      {
+        id: "lite",
+        label: "tpl.lite.label",
+        desc: "tpl.lite.desc",
+        rolesRemove: ["search_external", "design"],
+        extraAll: false,
+      },
+      {
+        id: "research",
+        label: "tpl.research.label",
+        desc: "tpl.research.desc",
+        rolesRemove: ["design", "implement"],
+        extraAll: false,
+      },
+      {
+        id: "full",
+        label: "tpl.full.label",
+        desc: "tpl.full.desc",
+        rolesRemove: [],
+        extraAll: true,
+      },
+    ];
+
+    // 应用模板：深拷贝 assign 后只改 roles_remove 与 main_agent_extra，返回新
+    // 对象（与面板其他 setter 的 JSON 克隆口径一致——新引用才会触发「assign 一变
+    // 预览作废」等既有失效逻辑）。roles_remove 去重保序，只收内置角色名（与后端
+    // parseRolesRemove 口径一致）；全开档 main_agent_extra = 检测库存全量副本，
+    // 其余档位清空（档位 = 确定态而非「在现状上增减」，重复点击同档幂等）。
+    // 不删 roles 里被删角色的条目：键保留，卡片显隐由渲染层按 roles_remove 过滤
+    // ——这样「轻量/调研 → 全开」切回来时，此前的 persona / 模型 / 工具面原样
+    // 复原，正是「模板不碰这些字段」要保的效果。
+    function applyScenarioTemplate(assign, tpl, inventory) {
+      var next = JSON.parse(JSON.stringify(assign));
+      var remove = [];
+      (tpl.rolesRemove || []).forEach(function (n) {
+        if (remove.indexOf(n) === -1) remove.push(n);
+      });
+      next.roles_remove = remove;
+      next.main_agent_extra = tpl.extraAll ? (inventory || []).slice() : [];
+      return next;
+    }
     // ── 工作区选择（配置对象）助手 ───────────────────────────────────────
 
     // 剥掉两个非目标字段容器键后的全局配置副本：existing 里现在还带 workspaces /
@@ -563,9 +953,9 @@ window.__ModuleLoader__.load({
       return "global";
     }
 
-    // 三态 → 标签文案（中文，与 tooltip 口径一致）
+    // 三态 → 标签文案（i18n：tab 小徽标与「更多」菜单共用，与 tooltip 口径一致）
     function wsTagTextOf(kind) {
-      return kind === "project" ? "项目" : kind === "pending" ? "待应用" : "全局";
+      return kind === "project" ? t("ws.tag.project") : kind === "pending" ? t("ws.tag.pending") : t("ws.tag.global");
     }
 
     // 角色卡「默认展开」判定单一来源（toggleRole / roleCard 共用）：主 agent
@@ -580,12 +970,12 @@ window.__ModuleLoader__.load({
       var m = meta && meta[row.path];
       var kind = wsTagOf(existingWs, meta, row.path);
       return row.path +
-        (row.sessionCount != null ? " · " + row.sessionCount + " 会话" : "") +
+        (row.sessionCount != null ? t("ws.tip.sessions", { n: row.sessionCount }) : "") +
         (kind === "project"
-          ? " · 项目配置（预设 " + (m && m.presetId) + "）"
+          ? t("ws.tip.project", { id: m && m.presetId })
           : kind === "pending"
-            ? " · 已保存项目配置、预设未生成（点「保存并应用」生效）"
-            : " · 跟随全局配置");
+            ? t("ws.tip.pending")
+            : t("ws.tip.global"));
     }
 
     // 工作区 tab 的显示顺序：按会话数降序（缺失沉底、同分保持注册表顺序），
@@ -657,8 +1047,8 @@ window.__ModuleLoader__.load({
             req: {
               title: opts.title,
               body: opts.body,
-              confirmText: opts.confirmText || "确认",
-              cancelText: opts.cancelText || "取消",
+              confirmText: opts.confirmText || t("common.confirm"),
+              cancelText: opts.cancelText || t("common.cancel"),
               danger: !!opts.danger,
               onConfirm: opts.onConfirm,
             },
@@ -687,7 +1077,7 @@ window.__ModuleLoader__.load({
             "aria-label": req.title, "aria-describedby": "pd-confirmBody" },
           h("div", { className: "pd-modalHeader" },
             h("h2", { className: "pd-modalTitle" }, req.title),
-            h("button", { type: "button", className: "pd-modalClose", "aria-label": "关闭", onClick: close },
+            h("button", { type: "button", className: "pd-modalClose", "aria-label": t("common.close"), onClick: close },
               h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
           h("div", { className: "pd-modalBody" },
             h("div", { className: "pd-modalText", id: "pd-confirmBody" }, req.body)),
@@ -696,7 +1086,7 @@ window.__ModuleLoader__.load({
             // 取消，与原生 confirm 的键盘习惯对齐；danger 反向落焦是让破坏性
             // 操作多一道显式点击的门槛。弹窗关闭即整体卸载，重开重新自动聚焦。
             h(P.Button, { variant: "outline", size: "md", autoFocus: !!req.danger, onClick: close },
-              req.cancelText || "取消"),
+              req.cancelText || t("common.cancel")),
             h(P.Button, {
               variant: "primary",
               size: "md",
@@ -708,7 +1098,40 @@ window.__ModuleLoader__.load({
                 close();
                 if (typeof req.onConfirm === "function") req.onConfirm();
               },
-            }, req.confirmText || "确认"))));
+            }, req.confirmText || t("common.confirm")))));
+    }
+
+    // ── 检查提示卡（结构化体检结果的渲染）──────────────────────────────────
+    // warnState = { source: "preview" | "apply", items: [{level, code, message}] }
+    // （items 即 tools/lib/health.mjs healthCheck 的 items 原样）。无 items 不渲染
+    // （零占位）；逐条一行，按 level 分色（error 红 / warn 琥珀 / info 中性，复用
+    // statusRow 同款 omd-status* 类），code 收进悬浮提示（面向排障，不占版面）。
+    // 行不放 role=alert：卡片随响应常驻展示而非突发警报，读屏按普通内容播报即可。
+    function warningsCardOf(warnState) {
+      if (!warnState || !Array.isArray(warnState.items) || warnState.items.length === 0) return null;
+      var rows = warnState.items.map(function (w, i) {
+        var level = w && (w.level === "error" || w.level === "warn") ? w.level : "info";
+        var cls = level === "error" ? "omd-statusError" : level === "warn" ? "omd-statusWarn" : "omd-status";
+        var icon = level === "error" ? "⛔" : level === "warn" ? "⚠️" : "ℹ️";
+        // 悬浮提示：已知 code（tools/lib/health.mjs 的固定集）给本地化标题
+        // （warn.title.<code>），未知 code 沿用「检查项：<code>」；服务端 message
+        // 原文作正文（服务端体检文案仅中文，本轮不译——取舍见 04 字典注释）。
+        var title = undefined;
+        if (w && w.code) {
+          title = tHas("warn.title." + w.code)
+            ? t("warn.title." + w.code) + "（" + w.code + "）"
+            : t("warn.itemTitle", { code: w.code });
+        }
+        return h("div", { className: cls, key: i, title: title },
+          h("span", { className: "omd-statusIcon" }, icon),
+          h("span", { className: "omd-statusText" }, (w && w.message) || ""));
+      });
+      return h("div", { className: "omd-group" },
+        h("div", { className: "omd-groupHeading" },
+          h("span", { className: "omd-groupIcon" }, ic(P.IconWarningOutline16, 14)),
+          h("span", null, warnState.source === "apply" ? t("warn.heading.apply") : t("warn.heading.preview")),
+          h("span", { className: "omd-count" }, warnState.items.length)),
+        h("div", { className: "omd-section" }, rows));
     }
 
     // ── 主面板 ─────────────────────────────────────────────────────────────
@@ -720,6 +1143,10 @@ window.__ModuleLoader__.load({
       var _b = useState(false), busy = _b[0], setBusy = _b[1];
       var _op = useState(null), busyOp = _op[0], setBusyOp = _op[1];
       var _p = useState(null), preview = _p[0], setPreview = _p[1];
+      // 检查提示卡状态（形状见 warningsCardOf）：preview 源随 assign 变更作废
+      //（与预览同一失效逻辑），apply 源描述的是「已落盘结果」——应用成功后
+      // 服务端回拉 state 重建 assign 不算编辑，不作废，直到下一次预览/应用。
+      var _wn = useState(null), warnState = _wn[0], setWarnState = _wn[1];
       var _o = useState({}), openMap = _o[0], setOpenMap = _o[1];
       var _m = useState({}), personaMap = _m[0], setPersonaMap = _m[1];
       var _x = useState(false), extraOpen = _x[0], setExtraOpen = _x[1];
@@ -734,6 +1161,10 @@ window.__ModuleLoader__.load({
       // 状态挂在页头 PageShell（版本号展示在标题旁），经 props 下发：
       // setVerInfo 供 loadVersion 回写页头（版本号与更新卡都在 PageShell）。
       var setVerInfo = props && props.setVerInfo;
+      // 导入配置后的整体刷新入口：ConfigPanel 把 load 注册给页头（PageShell 的
+      // 「更多 → 导入配置」成功后调用）。面板与页头分属两棵子树，props 只能
+      // 单向传「注册函数」，刷新动作反过来经 ref 回调触达。
+      var registerReload = props && props.registerReload;
       var _ws = useState(null), activeWs = _ws[0], setActiveWs = _ws[1]; // 当前配置对象：null = 全局默认；否则工作区绝对路径
       // 视角切换计数：switchWorkspace 每次自增，拼进全部未受控（defaultValue）
       // 编辑器的 key——否则切 tab 不重挂，旧工作区输入框里未提交的文本会在
@@ -882,6 +1313,19 @@ window.__ModuleLoader__.load({
 
       useEffect(load, [load]);
 
+      // 把「整体刷新」注册给页头（「导入配置」成功后由 PageShell 调用）：load
+      // 重拉 state + 按新配置重建 assign；导入 = 整份文件被替换，两源检查提示
+      // 一并作废（旧卡描述的已落盘结果已不在盘上，留着只会误导）。load 是
+      // useCallback 稳定引用；卸载时反注册，防页头持有失效闭包。
+      useEffect(function () {
+        if (typeof registerReload !== "function") return;
+        registerReload(function () {
+          setWarnState(null);
+          load();
+        });
+        return function () { registerReload(null); };
+      }, [load, registerReload]);
+
       // 工作区列表：面板加载时拉一次宿主注册表（与 state 并行）。失败降级为
       // 空列表——workspaceRowsOf 会用 state.existing.workspaces 的键兜底出 pill，
       // 绝不阻塞面板。降级不再无声：宿主侧故障（如插件实例已 disposed 的僵尸
@@ -890,7 +1334,7 @@ window.__ModuleLoader__.load({
       // 日志定位。请求错误 / 响应格式异常都汇入同一个 catch，提示口径一致。
       var loadWorkspaces = useCallback(function () {
         api("workspaces").then(function (d) {
-          if (!d || d.ok !== true || !Array.isArray(d.items)) throw new Error("工作区列表响应格式异常");
+          if (!d || d.ok !== true || !Array.isArray(d.items)) throw new Error(t("ws.listBadResponse"));
           setWsList(d.items);
           setWsListTried(true);
           setWsListErr("");
@@ -898,8 +1342,8 @@ window.__ModuleLoader__.load({
           setWsList([]); // 静默降级：只用配置文件里已有的工作区键
           setWsListTried(true);
           var msg = err && err.message ? String(err.message) : "";
-          setWsListErr("宿主工作区列表拉取失败，仅显示配置文件中的工作区；重启 DSH 后通常可恢复"
-            + (msg ? "（" + (msg.length > 80 ? msg.slice(0, 80) + "…" : msg) + "）" : ""));
+          setWsListErr(t("ws.listFailHint")
+            + (msg ? t("ws.listFailDetail", { msg: msg.length > 80 ? msg.slice(0, 80) + "…" : msg }) : ""));
         });
       }, [api]);
 
@@ -919,7 +1363,7 @@ window.__ModuleLoader__.load({
           if (rows[i].path.replace(/[\/\\]+$/, "") === target) { hit = rows[i].path; break; }
         }
         if (hit) switchWorkspace(hit);
-        else toast.warn("工作区 " + target + " 不在列表里，未切换 tab");
+        else toast.warn(t("ws.notInList", { path: target }));
       }, [data, wsListTried]);
 
       // 「添加工作区」候选：输入框首次聚焦时拉一次服务端扫描
@@ -951,7 +1395,7 @@ window.__ModuleLoader__.load({
         if (cached !== undefined) {
           setWsSkills(cached ? cached.skills : null);
           setWsProjSkills(cached ? new Set(cached.projectSkills) : null);
-          setWsSkillsErr(cached ? "" : "该工作区技能列表拉取失败，技能网格已回退用户级技能");
+          setWsSkillsErr(cached ? "" : t("ws.skillsFail"));
           return;
         }
         api("workspaces?skills=1&path=" + encodeURIComponent(wsPath)).then(function (d) {
@@ -967,7 +1411,7 @@ window.__ModuleLoader__.load({
           if (activeWsRef.current !== wsPath) return;
           setWsSkills(null);
           setWsProjSkills(null);
-          setWsSkillsErr("该工作区技能列表拉取失败，技能网格已回退用户级技能");
+          setWsSkillsErr(t("ws.skillsFail"));
         });
       }
 
@@ -1003,7 +1447,7 @@ window.__ModuleLoader__.load({
           return api("workspaces").then(function (d) {
             if (d && d.ok === true && Array.isArray(d.items)) setWsList(d.items);
             switchWorkspace(wsPath);
-            toast.ok((r.created === false ? "工作区已在列表里：" : "已注册工作区：") + wsPath + "；配置后点「保存并应用」生成专属预设");
+            toast.ok(t(r.created === false ? "ws.existsToast" : "ws.addedToast", { path: wsPath }));
           });
         }).catch(function (err) {
           setWsAddErr(err.message);
@@ -1133,7 +1577,7 @@ window.__ModuleLoader__.load({
       var loadModels = useCallback(function () {
         api("models").then(function (d) {
           var groups = d && Array.isArray(d.groups) ? d.groups : null;
-          if (!d || d.ok !== true || !groups) throw new Error("模型目录响应格式异常");
+          if (!d || d.ok !== true || !groups) throw new Error(t("models.listBadResponse"));
           setModelGroups(groups);
           setModelGroupsOk(true);
           setModelGroupsErr("");
@@ -1263,23 +1707,23 @@ window.__ModuleLoader__.load({
         // 空名静默吞掉：确认按钮在空值时本来就 disabled，这里只兜输入框直接
         // 按 Enter 的路径（与旧 prompt 实现的 if (!name) return 同语义）。
         if (name === "") return;
-        if (!/^[a-z][a-z0-9_-]{1,31}$/.test(name)) { setRoleAddErr("角色名须为 2-32 位小写字母/数字/下划线/连字符"); return; }
+        if (!/^[a-z][a-z0-9_-]{1,31}$/.test(name)) { setRoleAddErr(t("panel.roleNameInvalid")); return; }
         // 内置名不可经「新建」再造：已删除（不在 roles、在 roles_remove）的
         // 内置名在此拦截并引导走恢复区，避免同一内置名同时出现在卡片流与
         // 「已删除的内置角色」恢复区；仍正常存在的内置名由下方「已存在」命中。
-        if (DEFAULT_ROLES.indexOf(name) !== -1) { setRoleAddErr('内置角色不可新建（"' + name + '"如已删除，请在下方「已删除的内置角色」区恢复）'); return; }
+        if (DEFAULT_ROLES.indexOf(name) !== -1) { setRoleAddErr(t("panel.roleNameBuiltin", { name: name })); return; }
         // 已存在检查从 setAssign updater 挪到外层：报错要走弹窗内错误行，
         // setState 副作用不能塞进 updater；闭包 assign 与点击时刻一致，双击
         // 极端场景下重复创建也只是同形状覆盖，幂等无害。
-        if (assign.roles[name]) { setRoleAddErr('角色 "' + name + '" 已存在'); return; }
+        if (assign.roles[name]) { setRoleAddErr(t("panel.roleExists", { name: name })); return; }
         // 显示名校验与 roleTitleBlock 的 commitRoleName 同源（不含 \r \n、
         // trim 后 ≤60、空 = null）：新建时就把显示名写进出厂形状，省得建完
         // 再去卡片里补一枪。报错走弹窗内错误行（不 toast）——此刻弹窗还开着，
         // 错误行就贴在输入框下面，比 toast 更贴输入现场。
         var dispRaw = String(roleAddDispName == null ? "" : roleAddDispName);
-        if (/[\r\n]/.test(dispRaw)) { setRoleAddErr("显示名不能包含换行（\\r / \\n）"); return; }
+        if (/[\r\n]/.test(dispRaw)) { setRoleAddErr(t("panel.dispNameNewline")); return; }
         var dispTrim = dispRaw.trim();
-        if (dispTrim.length > 60) { setRoleAddErr("显示名过长：trim 后最多 60 字符"); return; }
+        if (dispTrim.length > 60) { setRoleAddErr(t("panel.dispNameTooLong")); return; }
         var disp = dispTrim === "" ? null : dispTrim; // 空 / 纯空白 = null：事件流标题回落 toolName
         setAssign(function (prev) {
           var next = JSON.parse(JSON.stringify(prev));
@@ -1308,7 +1752,7 @@ window.__ModuleLoader__.load({
         setRoleAddBgMode("one-shot"); // 成功提交即复位出厂默认（取消重开才保留残值）
         setRoleAddStartMode("fresh"); // 成功提交即复位出厂默认（取消重开才保留残值）
         setRoleAddErr("");
-        toast.ok('已新建角色 "' + name + '"，记得「保存并应用」');
+        toast.ok(t("panel.roleAddedToast", { name: name }));
       }
 
       // 自定义角色改名（toolName = 委派调用名）：名称是身份键，改它要联动
@@ -1332,12 +1776,12 @@ window.__ModuleLoader__.load({
         var v = String(roleRenameVal || "").trim();
         // 未改动：原 prompt 下按 Enter 即关窗（只是没改名），这里对齐——直接收起。
         if (v === name) { closeRoleRenameModal(); return; }
-        if (!/^[a-z][a-z0-9_-]{1,31}$/.test(v)) { setRoleRenameErr("角色名须为 2-32 位小写字母/数字/下划线/连字符"); return; }
-        if (DEFAULT_ROLES.indexOf(v) !== -1) { setRoleRenameErr('不可改成内置角色名 "' + v + '"'); return; }
+        if (!/^[a-z][a-z0-9_-]{1,31}$/.test(v)) { setRoleRenameErr(t("panel.roleNameInvalid")); return; }
+        if (DEFAULT_ROLES.indexOf(v) !== -1) { setRoleRenameErr(t("panel.roleRenameBuiltin", { name: v })); return; }
         // 已存在检查从 setAssign updater 挪到外层（与 submitRoleAdd 同款）：
         // 报错要走弹窗内错误行，setState 副作用不能塞进 updater；闭包 assign
         // 与点击时刻一致。
-        if (assign.roles[v]) { setRoleRenameErr('角色 "' + v + '" 已存在'); return; }
+        if (assign.roles[v]) { setRoleRenameErr(t("panel.roleExists", { name: v })); return; }
         setAssign(function (prev) {
           var next = JSON.parse(JSON.stringify(prev));
           var roles = {};
@@ -1362,16 +1806,16 @@ window.__ModuleLoader__.load({
         closeRoleRenameModal();
         setRoleRenameVal("");
         setRoleRenameErr("");
-        toast.ok('已重命名 "' + name + '" → "' + v + '"，记得「保存并应用」');
+        toast.ok(t("panel.roleRenamedToast", { old: name, new: v }));
       }
 
       function removeRole(name) {
         // 原原生 confirm 改通用确认弹窗：删除属破坏性操作，danger 红底确认钮。
         confirmCtrl.ask({
-          title: "删除自定义角色",
-          body: "删除自定义角色 \"" + name + "\"？",
+          title: t("panel.delCustomRoleTitle"),
+          body: t("panel.delCustomRoleBody", { name: name }),
           danger: true,
-          confirmText: "确认删除",
+          confirmText: t("common.confirmDelete"),
           onConfirm: function () {
             setAssign(function (prev) {
               var next = JSON.parse(JSON.stringify(prev));
@@ -1392,10 +1836,10 @@ window.__ModuleLoader__.load({
         // 原原生 confirm 改通用确认弹窗；文案含恢复引导（多行由
         // pd-modalText 的 pre-line 保留换行），danger 红底确认钮。
         confirmCtrl.ask({
-          title: "删除内置角色",
-          body: "删除内置角色 \"" + name + "\"？\n该角色的委派工具、工具面、persona 与主 agent 的委派指引将一并移除；\n可在下方「已删除的内置角色」区一键恢复。",
+          title: t("panel.delBuiltinRoleTitle"),
+          body: t("panel.delBuiltinRoleBody", { name: name }),
           danger: true,
-          confirmText: "确认删除",
+          confirmText: t("common.confirmDelete"),
           onConfirm: function () {
             setAssign(function (prev) {
               var next = JSON.parse(JSON.stringify(prev));
@@ -1427,18 +1871,38 @@ window.__ModuleLoader__.load({
         });
       }
 
+      // 场景模板一键切换：只改 roles_remove 与 main_agent_extra（见
+      // applyScenarioTemplate），点的是本地 assign、不自动保存——预览随 assign
+      // 变更由既有失效逻辑自动作废，toast 明示「保存并应用后生效」。
+      function applyTemplateClick(tpl) {
+        if (!assign) return;
+        setAssign(function (prev) {
+          return applyScenarioTemplate(prev, tpl, (data && data.inventory) || []);
+        });
+        toast.ok(t("panel.tplAppliedToast", { label: t(tpl.label) }));
+      }
+
       function doPreview() {
         if (!assign) return;
         var reqAssign = assign;
         setBusy(true);
         setBusyOp("preview");
         setPreview(null);
+        setWarnState(null); // 旧一轮的提示条目随新预览请求一并清掉（失败也不留陈账）
         // workspace 透传当前配置对象（null = 全局默认），服务端据此选生成落点。
         api("preview", { assignments: reqAssign, workspace: activeWsRef.current }).then(function (r) {
           if (assignRef.current !== reqAssign) return; // 生成期间配置已改：结果过期，不挂旧预览
           setPreview(r);
+          setWarnState({ source: "preview", items: Array.isArray(r.warnings) ? r.warnings : [] });
           setScrollReq("preview"); // 预览成功后自动滚动定位到预览生成区
-        }).catch(function (err) { toast.err(err.message); }).finally(function () {
+        }).catch(function (err) {
+          toast.err(err.message);
+          // 预览失败（如零工具角色 422）通常伴随体检说明：卡片给出每条原因，
+          // 比 toast 一行错误更可行动。
+          if (Array.isArray(err.warnings) && err.warnings.length) {
+            setWarnState({ source: "preview", items: err.warnings });
+          }
+        }).finally(function () {
           setBusy(false);
           setBusyOp(null);
         });
@@ -1447,9 +1911,14 @@ window.__ModuleLoader__.load({
       // 预览时效：assign 一变即作废已挂出的预览——预览文本对应生成时刻的目标
       // 配置，继续挂着「✅ 生成成功」只会误导（switchWorkspace 自带
       // setPreview(null) 只覆盖切视角，这里兜住其余一切编辑路径；生成中的
-      // 请求由 doPreview 里的 assignRef 快照比对作废）。
+      // 请求由 doPreview 里的 assignRef 快照比对作废）。检查提示卡里 preview
+      // 源的条目描述的是同一次生成的产物，随预览一并作废；apply 源的描述的是
+      // 已落盘结果，不受编辑影响，保留到下一次预览 / 应用。
       useEffect(function () {
         setPreview(null);
+        setWarnState(function (prev) {
+          return prev && prev.source === "preview" ? null : prev;
+        });
       }, [assign]);
 
       function doApply() {
@@ -1458,14 +1927,14 @@ window.__ModuleLoader__.load({
         // 确认文案按配置对象分流（语义原样保留）：全局覆盖共享的 orchestrator
         // 预设（现状文案）；工作区落独立预设、只并进 workspaces 段，全局预设
         // 不受影响。写预设非破坏性操作，danger 不置位（主色确认钮）。
-        var applyMsg = wsPath
-          ? "确认应用当前配置？将为该工作区生成专属预设（orchestrator-<slug>）并保存到 dsh-paoding.config.yml 的 workspaces 段，全局 orchestrator 预设不受影响。"
-          : "确认应用当前配置？将写入 preset 并覆盖 ~/.dsh/.agent-presets/orchestrator，且保存到 dsh-paoding.config.yml。";
+        // 确认文案按配置对象分流（语义原样保留）：全局覆盖共享的 orchestrator
+        // 预设（现状文案）；工作区落独立预设、只并进 workspaces 段，全局预设
+        // 不受影响。写预设非破坏性操作，danger 不置位（主色确认钮）。
         confirmCtrl.ask({
-          title: "保存并应用",
-          body: applyMsg,
+          title: t("panel.applyTitle"),
+          body: wsPath ? t("panel.applyBodyWs") : t("panel.applyBodyGlobal"),
           danger: false,
-          confirmText: "确认应用",
+          confirmText: t("panel.applyConfirm"),
           onConfirm: function () {
             setBusy(true);
             setBusyOp("apply");
@@ -1473,24 +1942,46 @@ window.__ModuleLoader__.load({
               var notes = (r.roleResults || []).map(function (x) {
                 return x.role + ": " + x.intent.length + " → " + x.kept.length;
               });
-              var summary = notes.join("；") + "。";
+              var summary = notes.join(t("common.listSep")) + t("common.period");
+              // 体检结果挂卡展示；warn/error 在场时成功 toast 降为 warn 档点一句
+              // 「见下方」（成功 toast 的既有信息——preset id / 生效说明——不丢，
+              // 并进 warn 文案），全 info / 无条目保持原成功 toast。
+              var warnItems = Array.isArray(r.warnings) ? r.warnings : [];
+              setWarnState({ source: "apply", items: warnItems });
+              var badCount = warnItems.filter(function (w) {
+                return w && (w.level === "error" || w.level === "warn");
+              }).length;
+              var warnTail = t("panel.warnTail", { n: warnItems.length });
               if (wsPath) {
                 // 工作区应用：点明生成的 preset id，提示去预设选择器选用（工作区
-                // 预设不会自动成为默认，须在新建会话时显式选择）。
-                toast.ok("已生成预设 " + (r.presetId || "orchestrator-<slug>") + "：" + summary + "新建会话时在预设选择器选它。" + (r.staleNote ? " ⚠️ patch 较新，重新应用后生效。" : ""));
+                // 预设不会自动成为默认，须在新建会话时显式选择）。体检 bad 时
+                // summary 槽位换 warnTail（沿用原口径：角色明细让位给检查提示）。
+                var wsMsg = t("panel.appliedWs", { id: r.presetId || "orchestrator-<slug>", summary: badCount > 0 ? warnTail : summary })
+                  + (r.staleNote ? t("panel.staleReapply") : "");
+                if (badCount > 0) toast.warn(wsMsg); else toast.ok(wsMsg);
                 // 服务端 apply 后已重刷状态缓存：静默拉一次，让 workspaceMeta /
                 // existing.workspaces 跟上（全局路径保持旧交互，不额外拉取）。
+                // 回拉重建 assign 不清 apply 源提示卡（见 warnState 注释）。
                 api("state").then(function (d) {
                   setData(d);
                   setAssign(buildTargetAssignments(d, activeWsRef.current));
                 }).catch(function () { /* 静默：落盘已成功，仅展示层暂旧 */ });
               } else {
-                toast.ok("已安装：" + summary + (r.staleNote ? " ⚠️ patch 较新，重启后生效。" : " 重启 DSH 或新建会话后生效。"));
+                var gMsg = t("panel.appliedGlobal", { summary: badCount > 0 ? warnTail : summary })
+                  + (r.staleNote ? t("panel.staleRestart") : t("panel.effectiveRestart"));
+                if (badCount > 0) toast.warn(gMsg); else toast.ok(gMsg);
               }
               // 显示名 / 角色名单可能变了：事件流委派行键控注册跟着刷新（行组件
               // 标题读 delegateMeta，刷新即可见，无需重开会话）。
               refreshDelegateRows();
-            }).catch(function (err) { toast.err(err.message); }).finally(function () {
+            }).catch(function (err) {
+              toast.err(err.message);
+              // 失败（如零工具角色 422）也把体检说明挂卡：错误原因逐条可读，
+              // 修起来有据可依。落盘未发生，卡描述的是「这次为什么没成」。
+              if (Array.isArray(err.warnings) && err.warnings.length) {
+                setWarnState({ source: "apply", items: err.warnings });
+              }
+            }).finally(function () {
               setBusy(false);
               setBusyOp(null);
             });
@@ -1506,7 +1997,7 @@ window.__ModuleLoader__.load({
           setData(d);
           setAssign(buildTargetAssignments(d, activeWsRef.current));
           // 回调参数 d 即重扫后的新 state，直接报数字，补回原徽标条的信息量
-          toast.ok("已重新检测：" + (d.inventory || []).length + " 个 MCP / 插件工具 · " + (d.skills || []).length + " 个技能");
+          toast.ok(t("panel.rescanned", { n: (d.inventory || []).length, m: (d.skills || []).length }));
         }).catch(function (err) { toast.err(err.message); }).finally(function () {
           setBusy(false);
           setBusyOp(null);
@@ -1554,9 +2045,9 @@ window.__ModuleLoader__.load({
           role: "tab",
           "aria-selected": activeWs === null ? "true" : "false",
           className: "omd-tab" + (activeWs === null ? " omd-tabActive" : ""),
-          title: "全局默认：写入共享的 orchestrator 预设",
+          title: t("ws.globalTabTip"),
           onClick: function () { switchWorkspace(null); },
-        }, h("span", { className: "omd-tabText" }, "全局默认"))];
+        }, h("span", { className: "omd-tabText" }, t("ws.globalTab")))];
         tabs = tabs.concat(visible.map(function (row) {
           var kind = wsTagOf(existingWs, meta, row.path);
           var tip = wsTabTipOf(row, meta, existingWs);
@@ -1572,7 +2063,7 @@ window.__ModuleLoader__.load({
             h("span", { className: "omd-tabText" }, wsLabelOf(row)),
             h("span", { className: "omd-tabTag omd-tabTag" + kind.charAt(0).toUpperCase() + kind.slice(1) },
               wsTagTextOf(kind)),
-            row.sessionCount != null ? h("span", { className: "omd-tabCount" }, row.sessionCount + " 会话") : null);
+            row.sessionCount != null ? h("span", { className: "omd-tabCount" }, t("ws.sessionCount", { n: row.sessionCount })) : null);
         }));
         // 「更多」入口：仅在确有收进来的工作区时出现。正常路径激活项按显示
         // 顺序排最前、必然可见，这里仍兜底判一次——首帧 wsFitCount 还是兜底
@@ -1587,12 +2078,12 @@ window.__ModuleLoader__.load({
             key: "__more__",
             type: "button",
             className: "omd-tab omd-tabMore" + (hiddenActive ? " omd-tabMoreActive omd-tabActive" : ""),
-            title: "其余 " + hidden.length + " 个工作区",
+            title: t("ws.moreTip", { n: hidden.length }),
             "aria-haspopup": "listbox",
             "aria-expanded": wsMenuOpen ? "true" : "false",
             onClick: function () { setWsMenuOpen(!wsMenuOpen); },
           },
-            h("span", { className: "omd-tabText" }, "更多"),
+            h("span", { className: "omd-tabText" }, t("ws.more")),
             h("span", { className: "omd-tabMoreCount" }, String(hidden.length))));
         }
         // 末尾「＋ 添加工作区」：与 tab 同尺寸的弱化按钮（ghost），点击打开输入弹窗。
@@ -1600,12 +2091,12 @@ window.__ModuleLoader__.load({
           key: "__add__",
           type: "button",
           className: "omd-tab omd-tabAdd",
-          title: "注册新的工作区目录",
+          title: t("ws.addTabTip"),
           disabled: busy,
           onClick: function () { setWsAddOpen(true); setWsAddErr(""); },
         },
           h("span", { className: "omd-groupIcon" }, ic(P.IconPlusOutline16, 14)),
-          h("span", { className: "omd-tabText" }, "添加工作区")));
+          h("span", { className: "omd-tabText" }, t("ws.addTab"))));
         // 测量层单件：与真实 tab 同款 .omd-tab 类，自然宽度因此一致；不进
         // a11y 树、不可聚焦，只负责被装填算法 offsetWidth 量。
         function measureTabOf(key, label) {
@@ -1617,12 +2108,12 @@ window.__ModuleLoader__.load({
         // 下拉恰好贴着标签行的下边框展开。
         return h("div", { className: "omd-wsTabs" },
           h("div", { className: "omd-tabsRow" },
-          h("div", { className: "omd-tabs", role: "tablist", "aria-label": "配置对象", ref: tabsRowRef }, tabs),
+          h("div", { className: "omd-tabs", role: "tablist", "aria-label": t("ws.tablistLabel"), ref: tabsRowRef }, tabs),
           // 宽度测量层：常驻渲染（不随 wsFitCount 变），挪出视口且不可见，只把
           // 各 tab 的自然宽度喂给装填算法。「更多」原型计数固定写 99 按两位数
           // 算宽，与装填里的 SAFETY 余量搭配。
           h("div", { className: "omd-tabsMeasure", ref: tabsMeasureRef, "aria-hidden": "true" },
-            measureTabOf("__global__", "全局默认"),
+            measureTabOf("__global__", t("ws.globalTab")),
             order.map(function (row) {
               var m = meta[row.path];
               var mk = wsTagOf(existingWs, meta, row.path);
@@ -1630,19 +2121,19 @@ window.__ModuleLoader__.load({
                 h("span", { className: "omd-tabText" }, wsLabelOf(row)),
                 h("span", { className: "omd-tabTag omd-tabTag" + mk.charAt(0).toUpperCase() + mk.slice(1) },
                   wsTagTextOf(mk)),
-                row.sessionCount != null ? h("span", { className: "omd-tabCount" }, row.sessionCount + " 会话") : null);
+                row.sessionCount != null ? h("span", { className: "omd-tabCount" }, t("ws.sessionCount", { n: row.sessionCount })) : null);
             }),
             h("button", { type: "button", "data-ws-key": "__more__", className: "omd-tab omd-tabMore", tabIndex: -1 },
-              h("span", { className: "omd-tabText" }, "更多"),
+              h("span", { className: "omd-tabText" }, t("ws.more")),
               h("span", { className: "omd-tabMoreCount" }, "99")),
             h("button", { type: "button", "data-ws-key": "__add__", className: "omd-tab omd-tabAdd", tabIndex: -1 },
               h("span", { className: "omd-groupIcon" }, ic(P.IconPlusOutline16, 14)),
-              h("span", { className: "omd-tabText" }, "添加工作区"))),
+              h("span", { className: "omd-tabText" }, t("ws.addTab")))),
           // 「更多」下拉：菜单项信息结构与 tab 同款（小圆点 / 名称 / 会话数，
           // title 拼法也一致），点击直接切过去。role=listbox/option 表达
           // 「从清单里选一个配置对象」的语义，aria-selected 标当前项。
           wsMenuOpen && hidden.length > 0
-            ? h("div", { className: "omd-tabMenu", role: "listbox", "aria-label": "更多工作区" },
+            ? h("div", { className: "omd-tabMenu", role: "listbox", "aria-label": t("ws.menuLabel") },
                 hidden.map(function (row) {
                   var kind = wsTagOf(existingWs, meta, row.path);
                   var tip = wsTabTipOf(row, meta, existingWs);
@@ -1658,11 +2149,11 @@ window.__ModuleLoader__.load({
                     h("span", { className: "omd-tabText" }, wsLabelOf(row)),
                     h("span", { className: "omd-tabTag omd-tabTag" + kind.charAt(0).toUpperCase() + kind.slice(1) },
                       wsTagTextOf(kind)),
-                    row.sessionCount != null ? h("span", { className: "omd-tabCount" }, row.sessionCount + " 会话") : null);
+                    row.sessionCount != null ? h("span", { className: "omd-tabCount" }, t("ws.sessionCount", { n: row.sessionCount })) : null);
                 }))
             : null),
           h("div", { className: "omd-hint" },
-            "「全局默认」写入共享的 orchestrator 预设；选中某个工作区后，预览 / 应用会生成该工作区专属预设（orchestrator-<目录名>），两者互不影响。"));
+            t("ws.barHint")));
       }
 
       // 「添加工作区」弹窗：旧版是 tab 条下方的内联展开行，改为模态框输入。
@@ -1677,19 +2168,19 @@ window.__ModuleLoader__.load({
         return h("div", { className: "pd-modalMask",
             // 只点遮罩空白处才收（mousedown 真正落在遮罩上），在卡片内按下拖选不误关
             onMouseDown: function (e) { if (e.target === e.currentTarget) closeWsModal(); } },
-          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": "添加工作区" },
+          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": t("ws.addTitle") },
             h("div", { className: "pd-modalHeader" },
-              h("h2", { className: "pd-modalTitle" }, "添加工作区"),
-              h("button", { type: "button", className: "pd-modalClose", "aria-label": "关闭", onClick: closeWsModal },
+              h("h2", { className: "pd-modalTitle" }, t("ws.addTitle")),
+              h("button", { type: "button", className: "pd-modalClose", "aria-label": t("common.close"), onClick: closeWsModal },
                 h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
             h("div", { className: "pd-modalBody" },
-              h("label", { className: "pd-modalLabel" }, "工作区目录绝对路径"),
+              h("label", { className: "pd-modalLabel" }, t("ws.pathLabel")),
               h("div", { className: "omd-wsSuggestWrap" },
                 h("input", {
                   type: "text",
                   className: "omd-nameInput omd-wsAddInput",
                   value: wsAddPath,
-                  placeholder: "输入工作区目录绝对路径，如 /Users/me/code/project-a",
+                  placeholder: t("ws.pathPlaceholder"),
                   spellCheck: false,
                   autoFocus: true,
                   onFocus: function () { loadWsCands(); setWsSuggestOpen(true); },
@@ -1726,15 +2217,15 @@ window.__ModuleLoader__.load({
                       }))
                   : null),
               wsAddErr ? statusRow("omd-statusError", ic(P.IconWarningOutline16, 16), wsAddErr) : null,
-              h("div", { className: "omd-hint" }, "目录需已存在；已注册的目录重复提交幂等返回。")),
+              h("div", { className: "omd-hint" }, t("ws.pathHint"))),
             h("div", { className: "pd-modalFooter" },
-              h(P.Button, { variant: "outline", size: "md", disabled: busy, onClick: closeWsModal }, "取消"),
+              h(P.Button, { variant: "outline", size: "md", disabled: busy, onClick: closeWsModal }, t("common.cancel")),
               h(P.Button, {
                 variant: "primary",
                 size: "md",
                 disabled: busy || String(wsAddPath).trim() === "",
                 onClick: submitWorkspace,
-              }, busyOp === "wsadd" ? "添加中…" : "确认添加"))));
+              }, busyOp === "wsadd" ? t("ws.adding") : t("ws.addConfirm")))));
       }
 
       // 「新建自定义 agent 角色」弹窗：结构 / 关闭路径与「添加工作区」弹窗
@@ -1748,18 +2239,18 @@ window.__ModuleLoader__.load({
         return h("div", { className: "pd-modalMask",
             // 只点遮罩空白处才收（mousedown 真正落在遮罩上），在卡片内按下拖选不误关
             onMouseDown: function (e) { if (e.target === e.currentTarget) closeRoleAddModal(); } },
-          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": "新建自定义 agent 角色" },
+          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": t("panel.roleAddTitle") },
             h("div", { className: "pd-modalHeader" },
-              h("h2", { className: "pd-modalTitle" }, "新建自定义 agent 角色"),
-              h("button", { type: "button", className: "pd-modalClose", "aria-label": "关闭", onClick: closeRoleAddModal },
+              h("h2", { className: "pd-modalTitle" }, t("panel.roleAddTitle")),
+              h("button", { type: "button", className: "pd-modalClose", "aria-label": t("common.close"), onClick: closeRoleAddModal },
                 h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
             h("div", { className: "pd-modalBody" },
-              h("label", { className: "pd-modalLabel" }, "角色 toolName（主 agent 的委派调用名）"),
+              h("label", { className: "pd-modalLabel" }, t("panel.roleAddToolNameLabel")),
               h("input", {
                 type: "text",
                 className: "omd-nameInput",
                 value: roleAddName,
-                placeholder: "输入英文小写角色名，如 reviewer",
+                placeholder: t("panel.roleAddNamePlaceholder"),
                 spellCheck: false,
                 autoFocus: true,
                 onChange: function (e) { setRoleAddName(e.target.value); },
@@ -1774,14 +2265,14 @@ window.__ModuleLoader__.load({
                   }
                 },
               }),
-              h("label", { className: "pd-modalLabel" }, "显示名（可选）"),
+              h("label", { className: "pd-modalLabel" }, t("panel.dispNameLabel")),
               h("input", {
                 ref: roleAddDispRef,
                 type: "text",
                 className: "omd-nameInput",
                 value: roleAddDispName,
                 // 占位语义与 roleTitleBlock 的 subject=toolName 一致：留空 = 事件流标题回落 toolName
-                placeholder: "如 代码评审，留空 = 用 toolName",
+                placeholder: t("panel.dispNamePlaceholder"),
                 spellCheck: false,
                 onChange: function (e) { setRoleAddDispName(e.target.value); },
                 // 第二段的 Enter 才是提交：第一段已把焦点送到这里，用户在此按
@@ -1792,7 +2283,7 @@ window.__ModuleLoader__.load({
               }),
               // 「会话模式」单选（与角色卡 roleBgModeBlock 同款语义）：缺省一次性，
               // 选「可续」才写 background_mode: 'continuable'；提示 / 警告行内联。
-              h("label", { className: "pd-modalLabel" }, "会话模式"),
+              h("label", { className: "pd-modalLabel" }, t("panel.bgModeLabel")),
               h("div", { className: "omd-nameRow" },
                 h("label", { className: "omd-toolItem" },
                   h("input", {
@@ -1802,7 +2293,7 @@ window.__ModuleLoader__.load({
                     checked: roleAddBgMode !== "continuable",
                     onChange: function () { setRoleAddBgMode("one-shot"); },
                   }),
-                  h("span", { className: "omd-toolName" }, "一次性（one-shot）")),
+                  h("span", { className: "omd-toolName" }, t("panel.bgOneshot"))),
                 h("label", { className: "omd-toolItem" },
                   h("input", {
                     type: "radio",
@@ -1811,16 +2302,16 @@ window.__ModuleLoader__.load({
                     checked: roleAddBgMode === "continuable",
                     onChange: function () { setRoleAddBgMode("continuable"); },
                   }),
-                  h("span", { className: "omd-toolName" }, "可续（continuable）"))),
+                  h("span", { className: "omd-toolName" }, t("panel.bgContinuable")))),
               roleAddBgMode === "continuable"
-                ? h("div", { className: "omd-hint" }, ROLE_BG_CONTINUABLE_HINT)
+                ? h("div", { className: "omd-hint" }, roleBgContinuableHint())
                 : null,
               roleAddBgMode === "continuable" && data && data.persistenceAvailable === false
-                ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_BG_PERSISTENCE_WARN)
+                ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), roleBgPersistenceWarn())
                 : null,
               // 「启动方式」单选（与角色卡 roleStartModeBlock 同款语义）：缺省全新，
               // 选「继承对话」才写 start_mode: 'fork'（委派块块级 provider 行）。
-              h("label", { className: "pd-modalLabel" }, "启动方式"),
+              h("label", { className: "pd-modalLabel" }, t("panel.startModeLabel")),
               h("div", { className: "omd-nameRow" },
                 h("label", { className: "omd-toolItem" },
                   h("input", {
@@ -1830,7 +2321,7 @@ window.__ModuleLoader__.load({
                     checked: roleAddStartMode !== "fork",
                     onChange: function () { setRoleAddStartMode("fresh"); },
                   }),
-                  h("span", { className: "omd-toolName" }, "全新（fresh）")),
+                  h("span", { className: "omd-toolName" }, t("panel.smFresh"))),
                 h("label", { className: "omd-toolItem" },
                   h("input", {
                     type: "radio",
@@ -1839,22 +2330,22 @@ window.__ModuleLoader__.load({
                     checked: roleAddStartMode === "fork",
                     onChange: function () { setRoleAddStartMode("fork"); },
                   }),
-                  h("span", { className: "omd-toolName" }, "继承对话（fork）"))),
+                  h("span", { className: "omd-toolName" }, t("panel.smFork")))),
               roleAddStartMode === "fork"
                 ? h("div", { className: "omd-hint" },
-                    "继承对话的子代理以主 agent 已完成的对话轮次为初始内容启动（一次性快照，之后两边各自推进）；工具面仍以本角色配置为准。")
+                    t("panel.forkStartHint"))
                 : null,
               roleAddErr ? statusRow("omd-statusError", ic(P.IconWarningOutline16, 16), roleAddErr) : null,
               h("div", { className: "omd-hint" },
-                "角色名须为 2-32 位小写字母/数字/下划线/连字符，小写字母开头；内置名不可新建。显示名可选，不能换行，trim 后最多 60 字符，留空用 toolName 当标题。新角色工具面默认放开全部检测到的工具，可在卡片里再收窄。会话模式缺省一次性（one-shot），选「可续」后仍可在角色卡里改。启动方式缺省全新（fresh），选「继承对话」后仍可在角色卡里改。")),
+                t("panel.roleAddHint"))),
             h("div", { className: "pd-modalFooter" },
-              h(P.Button, { variant: "outline", size: "md", onClick: closeRoleAddModal }, "取消"),
+              h(P.Button, { variant: "outline", size: "md", onClick: closeRoleAddModal }, t("common.cancel")),
               h(P.Button, {
                 variant: "primary",
                 size: "md",
                 disabled: String(roleAddName).trim() === "",
                 onClick: submitRoleAdd,
-              }, "确认新建"))));
+              }, t("panel.roleAddConfirm")))));
       }
 
       // 「重命名自定义角色」弹窗：结构 / 关闭路径与 roleAddModalOf 一致——
@@ -1867,13 +2358,13 @@ window.__ModuleLoader__.load({
         return h("div", { className: "pd-modalMask",
             // 只点遮罩空白处才收（mousedown 真正落在遮罩上），在卡片内按下拖选不误关
             onMouseDown: function (e) { if (e.target === e.currentTarget) closeRoleRenameModal(); } },
-          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": "重命名自定义角色" },
+          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": t("panel.roleRenameTitle") },
             h("div", { className: "pd-modalHeader" },
-              h("h2", { className: "pd-modalTitle" }, "重命名自定义角色"),
-              h("button", { type: "button", className: "pd-modalClose", "aria-label": "关闭", onClick: closeRoleRenameModal },
+              h("h2", { className: "pd-modalTitle" }, t("panel.roleRenameTitle")),
+              h("button", { type: "button", className: "pd-modalClose", "aria-label": t("common.close"), onClick: closeRoleRenameModal },
                 h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
             h("div", { className: "pd-modalBody" },
-              h("label", { className: "pd-modalLabel" }, "新 toolName（主 agent 的委派调用名）"),
+              h("label", { className: "pd-modalLabel" }, t("panel.roleRenameLabel")),
               h("input", {
                 type: "text",
                 className: "omd-nameInput",
@@ -1891,9 +2382,9 @@ window.__ModuleLoader__.load({
               }),
               roleRenameErr ? statusRow("omd-statusError", ic(P.IconWarningOutline16, 16), roleRenameErr) : null,
               h("div", { className: "omd-hint" },
-                "2-32 位小写字母/数字/下划线/连字符，小写字母开头；不可改成内置名或已存在的名字。skills 里的引用自动迁移；改名后需重启 / 新会话生效。")),
+                t("panel.roleRenameHint"))),
             h("div", { className: "pd-modalFooter" },
-              h(P.Button, { variant: "outline", size: "md", onClick: closeRoleRenameModal }, "取消"),
+              h(P.Button, { variant: "outline", size: "md", onClick: closeRoleRenameModal }, t("common.cancel")),
               h(P.Button, {
                 variant: "primary",
                 size: "md",
@@ -1901,7 +2392,7 @@ window.__ModuleLoader__.load({
                 // 让按钮状态与「确实改了名」对齐。
                 disabled: String(roleRenameVal).trim() === "" || String(roleRenameVal).trim() === roleRenameFor,
                 onClick: submitRoleRename,
-              }, "确认重命名"))));
+              }, t("panel.roleRenameConfirm")))));
       }
 
       if (!data || !assign) {
@@ -1912,7 +2403,7 @@ window.__ModuleLoader__.load({
             ? statusRow("omd-statusError", ic(P.IconWarningOutline16, 16), error)
             : h("div", { className: "omd-loading" },
                 h("span", { className: "omd-spin" }, ic(P.IconLoadingOutline16, 16)),
-                h("span", null, "加载检测状态…")));
+                h("span", null, t("panel.loading"))));
       }
 
       // 技能网格数据源（主 agent 软引导/内联 + 下方角色 skills 分组共用）：
@@ -1926,7 +2417,7 @@ window.__ModuleLoader__.load({
       // 全局 = 仅用户级技能；工作区 = 用户级 + 该工作区项目级技能。
       function skillScopeNote() {
         return h("span", { className: "omd-skillScope" },
-          activeWs !== null ? "用户级 + 该工作区项目级技能" : "仅用户级技能");
+          activeWs !== null ? t("panel.scopeWs") : t("panel.scopeGlobal"));
       }
 
       // 角色工具候选（三组网格共用数据源）：所有角色（内置 + 自定义）= SRC
@@ -1951,14 +2442,14 @@ window.__ModuleLoader__.load({
             onClick: function () { togglePersona(name); },
           },
             h("span", { className: open ? "omd-chevron omd-chevronOpen" : "omd-chevron" }, ic(P.IconChevronDownOutline14, 14)),
-            h("span", null, "persona（可选，覆盖默认角色说明）"),
+            h("span", null, t("panel.personaToggle")),
             h("span", { className: "omd-personaEdit" }, ic(P.IconEditOutline16, 14))),
           open ? h("div", { className: "omd-personaBody" },
             h("textarea", {
               key: "omd-persona-" + name + "-" + switchRev, // 切视角重挂：defaultValue 显示新目标的 persona
               className: "omd-textarea",
               defaultValue: assign.roles[name].persona || "",
-              placeholder: "输入该角色的 persona 说明…",
+              placeholder: t("panel.personaPlaceholder"),
               spellCheck: false,
               disabled: busy,
               onBlur: function (e) {
@@ -1969,7 +2460,7 @@ window.__ModuleLoader__.load({
                 });
               },
             }),
-            h("div", { className: "omd-hint" }, "技能引导会自动追加到 persona 末尾；自定义角色必填此说明。"))
+            h("div", { className: "omd-hint" }, t("panel.personaHint")))
           : null);
       }
 
@@ -1987,14 +2478,14 @@ window.__ModuleLoader__.load({
             onClick: function () { setExtraOpen(!extraOpen); },
           },
             h("span", { className: extraOpen ? "omd-chevron omd-chevronOpen" : "omd-chevron" }, ic(P.IconChevronDownOutline14, 14)),
-            h("span", null, "人设追加（主 agent 提示词尾部，可编辑）"),
+            h("span", null, t("panel.extraToggle")),
             h("span", { className: "omd-personaEdit" }, ic(P.IconEditOutline16, 14))),
           extraOpen ? h("div", { className: "omd-personaBody" },
             h("textarea", {
               key: "omd-extra-" + extraRev + "-" + switchRev,
               className: "omd-textarea omd-extraArea",
               defaultValue: val,
-              placeholder: "留空并保存 = 不追加任何内容（默认 codegraph 规则将被移除）…",
+              placeholder: t("panel.extraPlaceholder"),
               spellCheck: false,
               disabled: busy,
               onBlur: function (e) { setMainPersonaExtra(e.target.value); },
@@ -2005,10 +2496,10 @@ window.__ModuleLoader__.load({
                 className: "omd-extraRestore",
                 disabled: busy,
                 onClick: restoreMainPersonaExtra,
-              }, "恢复默认"),
+              }, t("common.restoreDefault")),
               h("span", { className: "omd-extraHint" },
-                "保存并应用时按此追加到主 agent persona 末尾（顺序：SRC 本体 → 技能行 → 此处）。改动需重启 GUI / 新会话生效。")),
-            h("div", { className: "omd-hint" }, "清空保存 = 移除默认 codegraph 规则（配置键 main_agent_persona_extra 记为 ''）。"))
+                t("panel.extraActionHint"))),
+            h("div", { className: "omd-hint" }, t("panel.extraClearHint")))
           : null);
       }
 
@@ -2025,18 +2516,18 @@ window.__ModuleLoader__.load({
         function commitDisplayName(raw) {
           var s = String(raw == null ? "" : raw);
           if (/[\r\n]/.test(s)) {
-            toast.warn("主 agent 显示名（仅 preset 显示名）不能包含换行（\\r / \\n），未保存");
+            toast.warn(t("panel.mainNameNewline"));
             setDisplayNameRev(displayNameRev + 1); // 重挂 input，回到上次生效值
             return;
           }
           var v = s.trim();
           if (s !== "" && v === "") {
-            toast.warn("主 agent 显示名（仅 preset 显示名）不能为纯空白（清空字段或点「恢复默认」= 默认显示名），未保存");
+            toast.warn(t("panel.mainNameBlank"));
             setDisplayNameRev(displayNameRev + 1);
             return;
           }
           if (v.length > 60) {
-            toast.warn("主 agent 显示名（仅 preset 显示名）过长：trim 后最多 60 字符，未保存");
+            toast.warn(t("panel.mainNameTooLong"));
             setDisplayNameRev(displayNameRev + 1);
             return;
           }
@@ -2056,7 +2547,7 @@ window.__ModuleLoader__.load({
           setDisplayNameRev(displayNameRev + 1);
         }
         return h("div", { className: "omd-mainName" },
-          h("div", { className: "omd-glabel" }, "主 agent 显示名（仅 preset 显示名）"),
+          h("div", { className: "omd-glabel" }, t("panel.mainNameLabel")),
           h("div", { className: "omd-nameRow" },
             h("input", {
               key: "omd-displayName-" + displayNameRev + "-" + switchRev,
@@ -2068,9 +2559,9 @@ window.__ModuleLoader__.load({
               disabled: busy,
               onBlur: function (e) { commitDisplayName(e.target.value); },
             }),
-            h("button", { type: "button", className: "omd-extraRestore", disabled: busy, onClick: restoreMainDisplayName }, "恢复默认")),
+            h("button", { type: "button", className: "omd-extraRestore", disabled: busy, onClick: restoreMainDisplayName }, t("common.restoreDefault"))),
           h("div", { className: "omd-hint" },
-            "仅替换预设显示名，persona 身份行（You are the …）不动；留空 = 默认「编排模式 (Orchestrator)」（工作区预设用派生名）。改动需重启 GUI / 新会话生效。"));
+            t("panel.mainNameHint")));
       }
 
       // 内置角色「显示名」input 重挂（key 技巧）：写回校验失败 / 清空回默认时
@@ -2108,13 +2599,13 @@ window.__ModuleLoader__.load({
         function commitRoleName(raw) {
           var s = String(raw == null ? "" : raw);
           if (/[\r\n]/.test(s)) {
-            toast.warn('角色 "' + name + '" 显示名不能包含换行（\\r / \\n），未保存');
+            toast.warn(t("panel.roleNameNewline", { name: name }));
             bumpRoleNameRev(name); // 重挂 input，回到上次生效值
             return;
           }
           var v = s.trim();
           if (v.length > 60) {
-            toast.warn('角色 "' + name + '" 显示名过长：trim 后最多 60 字符，未保存');
+            toast.warn(t("panel.roleNameTooLong", { name: name }));
             bumpRoleNameRev(name);
             return;
           }
@@ -2127,7 +2618,7 @@ window.__ModuleLoader__.load({
         }
         return h("div", { className: "omd-mainName" },
           h("div", { className: "omd-glabel" },
-            isCustom ? "角色显示名（事件流委派行标题；不动 toolName / persona）" : "角色显示名（persona 身份句主语 + 事件流委派行标题；不动工具名/调用名）"),
+            isCustom ? t("panel.roleNameLabelCustom") : t("panel.roleNameLabelBuiltin")),
           h("div", { className: "omd-nameRow" },
             h("input", {
               key: "omd-roleName-" + name + "-" + ((roleNameRev && roleNameRev[name]) || 0) + "-" + switchRev,
@@ -2141,8 +2632,8 @@ window.__ModuleLoader__.load({
             })),
           h("div", { className: "omd-hint" },
             isCustom
-              ? '留空 = 事件流显示 toolName（' + name + '）；保存并应用后生效（仅 GUI 展示，不影响生成产物与调用名）。'
-              : '留空 = 默认身份（如 "You are the ' + subject + ' agent."）；已为该角色自定义 persona 时仅作事件流标题。'));
+              ? t("panel.roleNameHintCustom", { name: name })
+              : t("panel.roleNameHintBuiltin", { subject: subject })));
       }
 
       // 角色「专用模型」行（内置与自定义角色通用同一组件，签名不变）：
@@ -2161,17 +2652,17 @@ window.__ModuleLoader__.load({
         // ── 降级模式：目录不可用 → 现状双 input ───────────────────────────
         if (!modelGroupsOk) {
           var rev = (roleModelRev && roleModelRev[name]) || 0;
-          function labelOf(key) { return key === "provider" ? "provider" : "专用模型"; }
+          function labelOf(key) { return key === "provider" ? "provider" : t("panel.modelField"); }
           function commitRoleModel(key, raw) {
             var s = String(raw == null ? "" : raw);
             if (/[\r\n]/.test(s)) {
-              toast.warn('角色 "' + name + '" ' + labelOf(key) + "不能包含换行（\\r / \\n），未保存");
+              toast.warn(t("panel.roleModelNewline", { name: name, field: labelOf(key) }));
               bumpRoleModelRev(name); // 重挂 input，回到上次生效值
               return;
             }
             var v = s.trim();
             if (v.length > 120) {
-              toast.warn('角色 "' + name + '" ' + labelOf(key) + "过长：trim 后最多 120 字符，未保存");
+              toast.warn(t("panel.roleModelTooLong", { name: name, field: labelOf(key) }));
               bumpRoleModelRev(name);
               return;
             }
@@ -2187,12 +2678,12 @@ window.__ModuleLoader__.load({
             });
             // provider 非空而 model 为空 → 允许保存（后端原样落盘），但明确提示会被忽略
             if (provider && !model) {
-              toast.warn('角色 "' + name + '"：provider 仅在同时配置模型时生效（后端将忽略），已保存');
+              toast.warn(t("panel.providerIgnored", { name: name }));
             }
             if (v === "") bumpRoleModelRev(name); // 清空 = 跟随主 agent：重挂显示占位
           }
           return h("div", { className: "omd-mainName" },
-            h("div", { className: "omd-glabel" }, "专用模型（可选；留空 = 跟随主 agent 当前模型）"),
+            h("div", { className: "omd-glabel" }, t("panel.roleModelLabel")),
             h("div", { className: "omd-nameRow" },
               h("input", {
                 key: "omd-roleModel-" + name + "-" + rev + "-" + switchRev,
@@ -2209,22 +2700,22 @@ window.__ModuleLoader__.load({
                 type: "text",
                 className: "omd-nameInput",
                 defaultValue: role.provider || "",
-                placeholder: "provider（留空=跟随主 agent）",
+                placeholder: t("panel.providerPlaceholder"),
                 spellCheck: false,
                 disabled: busy,
                 onBlur: function (e) { commitRoleModel("provider", e.target.value); },
               })),
             h("div", { className: "omd-hint" },
-              "模型目录不可用（" + (modelGroupsErr || "未知错误") + "），已回退手输。写入该角色委派块的 agentOptions；含冷恢复在内，子 agent 固定用该模型。provider 需与模型成对（如 deepseek-official）。"));
+              t("panel.modelFallbackHint", { err: modelGroupsErr || t("panel.unknownError") })));
         }
 
         // ── 下拉模式：选项来自 /api/paoding/models ────────────────────────
         var options = modelOptionsOf(modelGroups);
         var sel = roleModelSelectionOf(options, role.provider || null, role.model || null);
-        var children = [h("option", { key: "follow", value: "" }, "跟随主 agent 当前模型")];
+        var children = [h("option", { key: "follow", value: "" }, t("models.followMain"))];
         options.forEach(function (opt) {
           children.push(h("option", { key: opt.value, value: opt.value },
-            opt.modelName + "（" + opt.providerName + "）"));
+            t("models.option", { model: opt.modelName, provider: opt.providerName })));
         });
         if (sel.extra) children.push(h("option", { key: "current", value: sel.extra.value }, sel.extra.label));
         function commitRoleModelOption(value) {
@@ -2248,7 +2739,7 @@ window.__ModuleLoader__.load({
           });
         }
         return h("div", { className: "omd-mainName" },
-          h("div", { className: "omd-glabel" }, "专用模型（可选；留空 = 跟随主 agent 当前模型）"),
+          h("div", { className: "omd-glabel" }, t("panel.roleModelLabel")),
           h("div", { className: "omd-nameRow" },
             h("select", {
               key: "omd-roleModel-" + name, // 每角色独立实例；模式 / 选项集切换可整体重挂
@@ -2258,7 +2749,7 @@ window.__ModuleLoader__.load({
               onChange: function (e) { commitRoleModelOption(e.target.value); },
             }, children)),
           h("div", { className: "omd-hint" },
-            "选项来自 DSH 已注册的模型路由；留空 = 跟随主 agent，主 agent 换模型时未固定的角色跟着变。"));
+            t("panel.modelSelectHint")));
       }
 
       // 角色「会话模式」行（内置与自定义角色通用，同 roleModelBlock 的定位）：
@@ -2290,13 +2781,13 @@ window.__ModuleLoader__.load({
             h("span", { className: "omd-toolName" }, label));
         }
         return h("div", { className: "omd-mainName" },
-          h("div", { className: "omd-glabel" }, "会话模式"),
+          h("div", { className: "omd-glabel" }, t("panel.bgModeLabel")),
           h("div", { className: "omd-nameRow" },
-            bgOption("one-shot", "一次性（one-shot）", !continuable, false),
-            bgOption("continuable", "可续（continuable）", continuable, true)),
-          continuable ? h("div", { className: "omd-hint" }, ROLE_BG_CONTINUABLE_HINT) : null,
+            bgOption("one-shot", t("panel.bgOneshot"), !continuable, false),
+            bgOption("continuable", t("panel.bgContinuable"), continuable, true)),
+          continuable ? h("div", { className: "omd-hint" }, roleBgContinuableHint()) : null,
           continuable && data.persistenceAvailable === false
-            ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_BG_PERSISTENCE_WARN)
+            ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), roleBgPersistenceWarn())
             : null);
       }
 
@@ -2331,22 +2822,22 @@ window.__ModuleLoader__.load({
             h("span", { className: "omd-toolName" }, label));
         }
         return h("div", { className: "omd-mainName" },
-          h("div", { className: "omd-glabel" }, "启动方式"),
+          h("div", { className: "omd-glabel" }, t("panel.startModeLabel")),
           h("div", { className: "omd-nameRow" },
-            smOption("fresh", "全新（fresh）", !fork, false),
-            smOption("fork", "继承对话（fork）", fork, true)),
+            smOption("fresh", t("panel.smFresh"), !fork, false),
+            smOption("fork", t("panel.smFork"), fork, true)),
           fork
             ? h("div", { className: "omd-hint" },
-                "继承对话的子代理以主 agent 已完成的对话轮次为初始内容启动（一次性快照，之后两边各自推进）；工具面仍以本角色配置为准。")
+                t("panel.forkStartHint"))
             : null,
           fork && hasModel
-            ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_SM_FORK_MODEL_HINT)
+            ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), roleForkModelHint())
             : null);
       }
 
       function roleCard(name) {
         var isMain = name === "__main__";
-        var display = isMain ? "主 agent" : name;
+        var display = isMain ? t("role.mainAgent") : name;
         var isCustom = !isMain && DEFAULT_ROLES.indexOf(name) === -1;
         var open = name in openMap ? openMap[name] : defaultOpenOf(name);
 
@@ -2362,16 +2853,18 @@ window.__ModuleLoader__.load({
           },
             h("span", { className: open ? "omd-chevron omd-chevronOpen" : "omd-chevron" }, ic(P.IconChevronDownOutline14, 14)),
             h("span", { className: "omd-roleName" }, display),
-            h("span", { className: "omd-roleBadge" }, isMain ? "固定" : (isCustom ? "自定义" : "内置")),
+            h("span", { className: "omd-roleBadge" }, isMain ? t("role.badgeFixed") : (isCustom ? t("role.badgeCustom") : t("role.badgeBuiltin"))),
             h("span", { className: "omd-roleCount" },
-              (isMain ? ((data.restrictBase || []).length + a.main_agent_extra.length - (a.main_agent_remove || []).length) : a.roles[name].tools.length) + " 个工具")),
+              t("role.toolCount", { n: isMain
+                ? ((data.restrictBase || []).length + a.main_agent_extra.length - (a.main_agent_remove || []).length)
+                : a.roles[name].tools.length }))),
           // 自定义角色改名按钮：toolName 是身份键（委派调用名 / skills 引用），
           // 与内置角色的「显示名」不是一回事——那个只改 persona 主语。
           isCustom
             ? h("button", {
                 type: "button",
                 className: "omd-roleEdit",
-                title: '重命名角色 "' + name + '"（toolName = 委派调用名）',
+                title: t("role.renameTitle", { name: name }),
                 onClick: function (e) {
                   e.stopPropagation();
                   renameRole(name);
@@ -2385,7 +2878,7 @@ window.__ModuleLoader__.load({
             ? h("button", {
                 type: "button",
                 className: "omd-roleDel",
-                title: isCustom ? '删除角色 "' + name + '"' : '删除内置角色 "' + name + '"（可在下方恢复）',
+                title: isCustom ? t("role.delCustomTitle", { name: name }) : t("role.delBuiltinTitle", { name: name }),
                 onClick: function (e) {
                   e.stopPropagation();
                   if (isCustom) removeRole(name);
@@ -2397,7 +2890,7 @@ window.__ModuleLoader__.load({
         var body = [];
         if (isMain) {
           body.push(mainNameBlock());
-          body.push(h("div", { className: "omd-glabel" }, "基础工具（取消勾选即从主 agent 移除——写入 main_agent_remove）"));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.baseToolsMain")));
           body.push(h("div", { className: "omd-toolGrid" },
             (data.restrictBase || []).map(function (t) {
               return toolItem(t, "base", (a.main_agent_remove || []).indexOf(t) === -1, busy,
@@ -2409,37 +2902,37 @@ window.__ModuleLoader__.load({
           var mainInv = data.inventory || [];
           var mainMcpTools = mainInv.filter(function (t) { return hostTool(t); });
           var mainPluginTools = mainInv.filter(function (t) { return !hostTool(t); });
-          body.push(h("div", { className: "omd-glabel" }, "MCP 工具（可加入主 agent）"));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.mcpToolsMain")));
           body.push(h("div", { className: "omd-toolGrid" },
             mainMcpTools.length
               ? mainMcpTools.map(function (t) {
                   return toolItem(t, "mcp", a.main_agent_extra.indexOf(t) !== -1, busy,
                     function (e) { setMainExtra(t, e.target.checked); }, t);
                 })
-              : h("div", { className: "omd-empty" }, "未检测到 MCP 工具")));
-          body.push(h("div", { className: "omd-glabel" }, "插件工具（可加入主 agent）"));
+              : h("div", { className: "omd-empty" }, t("panel.noMcp"))));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.pluginToolsMain")));
           body.push(h("div", { className: "omd-toolGrid" },
             mainPluginTools.length
               ? mainPluginTools.map(function (t) {
                   return toolItem(t, "plugin", a.main_agent_extra.indexOf(t) !== -1, busy,
                     function (e) { setMainExtra(t, e.target.checked); }, t);
                 })
-              : h("div", { className: "omd-empty" }, "未检测到插件工具")));
-          body.push(h("div", { className: "omd-glabel" }, "技能分配（read 按需：勾选 = persona 写入技能行，主 agent 用 read 加载正文）", skillScopeNote()));
+              : h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.skillsMain")));
           body.push(gridSkills.length
             ? h("div", null,
                 h("div", { className: "omd-toolGrid" }, gridSkills.map(function (s) {
-                  return toolItem(s, "read按需", a.main_agent_skills.indexOf(s) !== -1, busy,
+                  return toolItem(s, t("panel.tagReadOnDemand"), a.main_agent_skills.indexOf(s) !== -1, busy,
                     function (e) { setMainSkill(s, e.target.checked); }, s + "s",
-                    gridProj && gridProj.has(s) ? "项目" : null);
+                    gridProj && gridProj.has(s) ? t("common.projectBadge") : null);
                 })),
-                h("div", { className: "omd-glabel" }, "内联全文（硬生效，每轮固定 persona 开销，适合 caveman 等风格技能）"),
+                h("div", { className: "omd-glabel" }, t("panel.skillsInline")),
                 h("div", { className: "omd-toolGrid" }, gridSkills.map(function (s) {
-                  return toolItem(s, "内联全文", a.main_agent_skills_inline.indexOf(s) !== -1, busy,
+                  return toolItem(s, t("panel.tagInline"), a.main_agent_skills_inline.indexOf(s) !== -1, busy,
                     function (e) { setMainSkillInline(s, e.target.checked); }, s + "i",
-                    gridProj && gridProj.has(s) ? "项目" : null);
+                    gridProj && gridProj.has(s) ? t("common.projectBadge") : null);
                 })))
-            : h("div", { className: "omd-empty" }, "未检测到技能目录"));
+            : h("div", { className: "omd-empty" }, t("panel.noSkills")));
           body.push(mainPersonaExtraBlock());
         } else {
           // 模型行位置：内置角色卡在「显示名」之后、工具面区之前；自定义角色卡
@@ -2466,30 +2959,30 @@ window.__ModuleLoader__.load({
           var pluginTools = candidates.filter(function (t) { return !hostTool(t) && inv.indexOf(t) !== -1; });
           var baseTools = candidates.filter(function (t) { return !hostTool(t) && inv.indexOf(t) === -1; });
           var checked = a.roles[name].tools;
-          body.push(h("div", { className: "omd-glabel" }, "基础工具"));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.baseTools")));
           body.push(h("div", { className: "omd-toolGrid" },
             baseTools.length
               ? baseTools.map(function (t) {
                   return toolItem(t, "base", checked.indexOf(t) !== -1, busy,
                     function (e) { setRoleTools(name, t, e.target.checked); }, t);
                 })
-              : h("div", { className: "omd-empty" }, "无")));
-          body.push(h("div", { className: "omd-glabel" }, "MCP 工具"));
+              : h("div", { className: "omd-empty" }, t("panel.none"))));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.mcpTools")));
           body.push(h("div", { className: "omd-toolGrid" },
             mcpTools.length
               ? mcpTools.map(function (t) {
                   return toolItem(t, "mcp", checked.indexOf(t) !== -1, busy,
                     function (e) { setRoleTools(name, t, e.target.checked); }, t);
                 })
-              : h("div", { className: "omd-empty" }, "未检测到 MCP 工具")));
-          body.push(h("div", { className: "omd-glabel" }, "插件工具"));
+              : h("div", { className: "omd-empty" }, t("panel.noMcp"))));
+          body.push(h("div", { className: "omd-glabel" }, t("panel.pluginTools")));
           body.push(h("div", { className: "omd-toolGrid" },
             pluginTools.length
               ? pluginTools.map(function (t) {
                   return toolItem(t, "plugin", checked.indexOf(t) !== -1, busy,
                     function (e) { setRoleTools(name, t, e.target.checked); }, t);
                 })
-              : h("div", { className: "omd-empty" }, "未检测到插件工具")));
+              : h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
           body.push(personaBlock(name));
         }
 
@@ -2506,7 +2999,7 @@ window.__ModuleLoader__.load({
           var picked = assign.skills[s] || [];
           return h("div", { className: "omd-skillRow", key: s },
             h("span", { className: "omd-skillName", title: s }, s),
-            gridProj && gridProj.has(s) ? h("span", { className: "omd-skillProj" }, "项目") : null,
+            gridProj && gridProj.has(s) ? h("span", { className: "omd-skillProj" }, t("common.projectBadge")) : null,
             h("div", { className: "omd-skillRoles" }, roleNames.map(function (r) {
               return h("label", { className: "omd-skillRole", key: r },
                 h("input", {
@@ -2519,10 +3012,16 @@ window.__ModuleLoader__.load({
                 h("span", null, r));
             })));
         });
-        return rows.length ? rows : h("div", { className: "omd-empty" }, "未检测到技能目录");
+        return rows.length ? rows : h("div", { className: "omd-empty" }, t("panel.noSkills"));
       }
 
       var customRoles = Object.keys(assign.roles).filter(function (n) { return DEFAULT_ROLES.indexOf(n) === -1; });
+      // 内置角色可见名单：条目键存在且未被 roles_remove 删除（场景模板切到
+      // 轻量/调研档后条目键仍保留——为的是切回全开档时 persona / 模型 / 工具面
+      // 原样复原——卡片显隐一律按 roles_remove 判定；标题计数同口径）。
+      var visibleBuiltinRoles = DEFAULT_ROLES.filter(function (n) {
+        return !!assign.roles[n] && (assign.roles_remove || []).indexOf(n) === -1;
+      });
 
       // persistence 警告横幅：host 层会话持久化后端缺失（state.persistenceAvailable
       // === false；字段缺失的老版服务端视为可用，不误报）且当前视角的任意角色
@@ -2537,7 +3036,7 @@ window.__ModuleLoader__.load({
         icon: busyOp === "apply"
           ? h("span", { className: "omd-spin" }, ic(P.IconLoadingOutline16, 16))
           : ic(P.IconCheckOutline16, 16),
-      }, busyOp === "apply" ? "处理中…" : "保存并应用");
+      }, busyOp === "apply" ? t("panel.applying") : t("panel.applyBtn"));
 
       var previewBtn = h(P.Button, {
         variant: "outline",
@@ -2547,7 +3046,7 @@ window.__ModuleLoader__.load({
         icon: busyOp === "preview"
           ? h("span", { className: "omd-spin" }, ic(P.IconLoadingOutline16, 16))
           : ic(P.IconCordisPluginOutline14, 14),
-      }, busyOp === "preview" ? "生成中…" : "预览生成");
+      }, busyOp === "preview" ? t("panel.previewing") : t("panel.previewBtn"));
 
       var rescanBtn = h(P.Button, {
         variant: "ghost",
@@ -2557,7 +3056,7 @@ window.__ModuleLoader__.load({
         icon: busyOp === "rescan"
           ? h("span", { className: "omd-spin" }, ic(P.IconLoadingOutline16, 16))
           : ic(P.IconRefreshOutline16, 16),
-      }, busyOp === "rescan" ? "检测中…" : "重新检测");
+      }, busyOp === "rescan" ? t("panel.scanning") : t("panel.rescanBtn"));
 
       return h("div", { className: "pd-page", ref: rootRef },
         // 运行时识别降级：持续状态（不是事件），内联一行小字贴标签行上方，
@@ -2567,7 +3066,7 @@ window.__ModuleLoader__.load({
         // persistence 警告横幅：仅当前视角确有可续角色且 host 层持久化后端
         // 缺失时出现（判定见上方 persistenceWarn），其余场合零占位
         persistenceWarn
-          ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), ROLE_BG_PERSISTENCE_WARN)
+          ? statusRow("omd-statusWarn", ic(P.IconWarningOutline16, 16), roleBgPersistenceWarn())
           : null,
 
         // 配置对象（全局默认 / 各工作区，标签页）
@@ -2597,37 +3096,51 @@ window.__ModuleLoader__.load({
         h("div", { className: "omd-group" },
           h("div", { className: "omd-groupHeading" },
             h("span", { className: "omd-groupIcon" }, ic(P.IconUserOutline16, 14)),
-            h("span", null, "角色与工具"),
-            h("span", { className: "omd-count" }, Object.keys(assign.roles).length)),
+            h("span", null, t("panel.rolesToolsHeading")),
+            h("span", { className: "omd-count" }, visibleBuiltinRoles.length + customRoles.length)),
+          // 场景模板行：三档快捷预设（只动 roles_remove + main_agent_extra），
+          // 贴工具配置区上方；说明进 title 悬浮，不占版面。仅改本地 assign，
+          // 保存仍走「保存并应用」。
+          h("div", { className: "omd-chips" },
+            h("span", { className: "omd-restoreTitle" }, t("panel.tplHeading")),
+            PAODING_SCENARIO_TEMPLATES.map(function (tpl) {
+              return h("button", {
+                type: "button",
+                key: tpl.id,
+                className: "omd-restorePill",
+                title: t(tpl.desc),
+                disabled: busy,
+                onClick: function () { applyTemplateClick(tpl); },
+              }, t(tpl.label));
+            })),
           roleCard("__main__"),
-          // 内置角色卡只渲染 assign.roles 里存在的（roles_remove 中的已删名不重建、不渲染）
-          DEFAULT_ROLES.filter(function (n) { return !!assign.roles[n]; }).map(function (n) { return roleCard(n); }),
+          visibleBuiltinRoles.map(function (n) { return roleCard(n); }),
           customRoles.map(function (n) { return roleCard(n); }),
           // 已删除的内置角色恢复区（仅删除过内置角色时出现）
           (assign.roles_remove || []).length
             ? h("div", { className: "omd-restoreRow" },
-                h("div", { className: "omd-restoreTitle" }, "已删除的内置角色"),
+                h("div", { className: "omd-restoreTitle" }, t("panel.removedHeading")),
                 h("div", { className: "omd-chips" }, (assign.roles_remove || []).map(function (n) {
                   return h("button", {
                     type: "button",
                     key: n,
                     className: "omd-restorePill",
-                    title: '恢复内置角色 "' + n + '"（工具面重建为内置默认 allow）',
+                    title: t("role.restoreTitle", { name: n }),
                     onClick: function () { restoreBuiltinRole(n); },
-                  }, "恢复 " + n);
+                  }, t("role.restorePill", { name: n }));
                 })),
                 h("div", { className: "omd-hint" },
-                  "恢复后卡片回到上方内置列表；工具面取内置默认（不沿用删前自定义配置）。"))
+                  t("panel.restoreHint")))
             : null,
           h("button", { type: "button", className: "omd-addRole", onClick: openRoleAddModal },
             h("span", { className: "omd-addRoleIcon" }, ic(P.IconPlusOutline16, 16)),
-            h("span", null, "新建自定义 agent 角色"))),
+            h("span", null, t("panel.roleAddBtn")))),
 
         // 技能分配
         h("div", { className: "omd-group" },
           h("div", { className: "omd-groupHeading" },
             h("span", { className: "omd-groupIcon" }, ic(P.IconSkillOutline16, 14)),
-            h("span", null, "技能分配（软约束：写入对应 agent 的 persona 引导）"),
+            h("span", null, t("panel.skillsHeading")),
             skillScopeNote(),
             h("span", { className: "omd-count" }, gridSkills.length)),
           // 工作区技能拉取失败的降级提示（一句话）：此刻网格数据源已回落用户级。
@@ -2636,14 +3149,19 @@ window.__ModuleLoader__.load({
             : null,
           skillsBlock()),
 
+        // 检查提示卡（预览 / 应用的结构化体检结果；无条目零占位）：
+        // preview 源贴着预览区上方，assign 一变即随预览作废；apply 源描述已
+        // 落盘结果，保留到下一次预览 / 应用（失效口径见 warnState 注释）。
+        warningsCardOf(warnState),
+
         // 预览生成（预览成功后才出现）
         preview ? h("div", { className: "omd-group", ref: previewRef },
           h("div", { className: "omd-groupHeading" },
             h("span", { className: "omd-groupIcon" }, ic(P.IconDataOutline16, 14)),
-            h("span", null, "预览生成")),
+            h("span", null, t("panel.previewBtn"))),
           h("div", { className: "omd-previewSummary" },
-            "✅ 生成成功（未写盘）" +
-            (preview.presetId ? " · 预设 " + preview.presetId : "") +
+            t("panel.previewOk") +
+            (preview.presetId ? t("panel.previewPreset", { id: preview.presetId }) : "") +
             (preview.roleResults || []).map(function (r) {
               return " · " + r.role + ": " + r.intent.length + " → " + r.kept.length;
             }).join("")),
@@ -2726,21 +3244,27 @@ window.__ModuleLoader__.load({
       return function FooterEntry(props) {
         var wide = !!(props && props.wide);
         var _st = useState(controller.getSnapshot().open), open = _st[0], setOpenState = _st[1];
+        var _lt = useState(0), langTick = _lt[0], setLangTick = _lt[1];
         useEffect(function () {
           return controller.subscribe(function () { setOpenState(controller.getSnapshot().open); });
+        }, []);
+        // 语言切换时整体重渲染入口（label / aria / title 全走 t() 取新文案）；
+        // tick 只为触发重渲染，无业务含义。
+        useEffect(function () {
+          return onLangChange(function () { setLangTick(function (n) { return n + 1; }); });
         }, []);
         return h("button", {
           type: "button",
           className: "pd-footerBtn" + (wide ? "" : " pd-footerRail"),
           "data-active": open ? "true" : undefined,
-          "aria-label": "庖丁配置",
+          "aria-label": t("nav.entryTitle"),
           "aria-haspopup": "dialog",
           "aria-expanded": open ? "true" : "false",
-          title: wide ? undefined : "庖丁配置",
+          title: wide ? undefined : t("nav.entryTitle"),
           onClick: function () { controller.toggle(); },
         },
           h(P.IconSkillOutline16, { size: wide ? 16 : 18 }),
-          wide ? h("span", { className: "pd-footerLabel" }, "庖丁配置") : null);
+          wide ? h("span", { className: "pd-footerLabel" }, t("nav.entryTitle")) : null);
       };
     }
 
@@ -2751,7 +3275,7 @@ window.__ModuleLoader__.load({
       }
       var Entry = makeFooterEntry(controller);
       var dispose = ctx.slots.inject("sidebar.footer.action", function () {
-        return ctx.slots.register({ name: "sidebar.footer.action", id: "paoding-config", order: 10, label: "庖丁配置" }, Entry);
+        return ctx.slots.register({ name: "sidebar.footer.action", id: "paoding-config", order: 10, label: t("nav.entryTitle") }, Entry);
       });
       return typeof dispose === "function" ? dispose : function () {};
     }
@@ -2767,11 +3291,13 @@ window.__ModuleLoader__.load({
     // 边界：只管工具调用行；子 agent 会话树 / 面包屑标题来自服务端会话摘要，
     // 不在客户端控制面。标题取全局配置的显示名（行渲染时不知道会话属于哪个
     // 工作区，工作区级显示名够不着）。
+    // 标题回落表：值是 i18n 字典 key（role.title.*），取文案须过 t()——
+    // 语言切换后 refreshDelegateRows 会重算 titles（见模块尾的订阅）。
     var DELEGATE_TITLE_FALLBACK = {
-      search_external: "外部检索",
-      design: "设计",
-      implement: "实现",
-      search_internal_deep: "深搜",
+      search_external: "role.title.search_external",
+      design: "role.title.design",
+      implement: "role.title.implement",
+      search_internal_deep: "role.title.search_internal_deep",
     };
     // 静态委派工具：不在 roles 键里（无条目、不可删不可改名），恒注册。
     var DELEGATE_STATIC_TOOLS = ["search_internal_deep"];
@@ -2782,12 +3308,16 @@ window.__ModuleLoader__.load({
       var removed = Array.isArray(cfg.roles_remove) ? cfg.roles_remove : [];
       var titles = {};
       var tools = DELEGATE_STATIC_TOOLS.slice();
-      DELEGATE_STATIC_TOOLS.forEach(function (n) { titles[n] = DELEGATE_TITLE_FALLBACK[n] || n; });
+      DELEGATE_STATIC_TOOLS.forEach(function (n) {
+        var tk = DELEGATE_TITLE_FALLBACK[n];
+        titles[n] = tk ? t(tk) : n;
+      });
       Object.keys(roles).forEach(function (n) {
         if (removed.indexOf(n) !== -1) return; // 已删内置角色：委派工具不存在，键命中不了，不注册
         if (tools.indexOf(n) === -1) tools.push(n);
         var nm = roles[n] && typeof roles[n].name === "string" ? roles[n].name.trim() : "";
-        titles[n] = nm !== "" ? nm : (DELEGATE_TITLE_FALLBACK[n] || n);
+        var tk = DELEGATE_TITLE_FALLBACK[n];
+        titles[n] = nm !== "" ? nm : (tk ? t(tk) : n);
       });
       return { titles: titles, tools: tools };
     }
@@ -2846,7 +3376,7 @@ window.__ModuleLoader__.load({
       var status = delegateStatusOf(block);
       var stateCls = status === "running" ? "pd-delegateRunning" : (status === "error" ? "pd-delegateFailed" : (status === "stopped" ? "pd-delegateStopped" : "pd-delegateDone"));
       var stateGlyph = status === "running" ? "◌" : (status === "error" ? "✕" : (status === "stopped" ? "⊘" : "✓"));
-      var title = delegateMeta.titles[toolName] || DELEGATE_TITLE_FALLBACK[toolName] || toolName;
+      var title = delegateMeta.titles[toolName] || (tHas(DELEGATE_TITLE_FALLBACK[toolName]) ? t(DELEGATE_TITLE_FALLBACK[toolName]) : "") || toolName;
       return h("div", { className: "pd-delegateRow" + (status === "error" ? " pd-delegateErr" : "") },
         h("button", {
           type: "button",
@@ -2906,6 +3436,10 @@ window.__ModuleLoader__.load({
       if (typeof document === "undefined") return function () {};
       delegateRowsCtx = ctx;
       refreshDelegateRows();
+      // 语言切换：titles 里的 t() 值已过期，整表重算；比对串含 titles 值，
+      // 变了就重注册（无需理会 controller 是否已挂载——未挂载时 ctx.slots
+      // 注入照常，行组件只在事件流渲染时才取值）。
+      onLangChange(function () { refreshDelegateRows(); });
       var offReset = null;
       if (ctx && typeof ctx.on === "function") {
         try {
@@ -2993,14 +3527,15 @@ window.__ModuleLoader__.load({
         var inner = mine.querySelectorAll ? mine.querySelectorAll("[id]") : [];
         for (var i = 0; i < inner.length; i++) inner[i].removeAttribute("id");
         mine.setAttribute("data-paoding-ws-menu", "1");
-        mine.setAttribute("aria-label", "庖丁配置");
-        mine.setAttribute("title", "打开庖丁配置并切到该工作区");
+        mine.setAttribute("aria-label", t("nav.entryTitle"));
+        mine.setAttribute("title", t("nav.openToWs"));
         var walker = document.createTreeWalker(mine, NodeFilter.SHOW_TEXT, null);
         var node;
         while ((node = walker.nextNode())) {
-          var t = node.nodeValue;
-          if (t.indexOf("重命名") !== -1 || t.toLowerCase().indexOf("rename") !== -1) {
-            node.nodeValue = t.replace(/重命名|Rename/gi, "庖丁配置");
+          var txt = node.nodeValue;
+          // 注意局部名用 txt：全局 t() 是 i18n 取词函数，不能被文本值遮蔽
+          if (txt.indexOf("重命名") !== -1 || txt.toLowerCase().indexOf("rename") !== -1) {
+            node.nodeValue = txt.replace(/重命名|Rename/gi, t("nav.entryTitle"));
           }
         }
         mine.addEventListener("click", function (e) {
@@ -3044,11 +3579,11 @@ window.__ModuleLoader__.load({
             if (hit) controller.open(hit);
             else {
               controller.open();
-              toast.warn("宿主工作区「" + title + "」还没在庖丁注册，已打开全局默认");
+              toast.warn(t("menu.wsNotRegistered", { title: title }));
             }
           }).catch(function () {
             controller.open();
-            toast.warn("工作区列表拉取失败，已打开全局默认");
+            toast.warn(t("menu.listFail"));
           });
         }, 80);
       }
@@ -3115,21 +3650,23 @@ window.__ModuleLoader__.load({
       if (!verInfo || !verInfo.latest) return;
       var isDev = verInfo.layout === "dev";
       var msg = isDev
-        ? "当前为开发 link 直连形态：无法就地升级，请手动执行 dsh plugin add dsh-paoding@latest 切换到 registry 版本。仍要继续尝试吗？"
-        : "确定升级到 " + versionTagOf(verInfo.latest) + "？升级将通过插件通道原地换版本，完成后需重启 DSH 生效。";
+        ? t("menu.upgradeDevBody")
+        : t("menu.upgradeBody", { v: versionTagOf(verInfo.latest) });
       confirmCtrl.ask({
-        title: "升级 dsh-paoding",
+        title: t("menu.upgradeTitle"),
         body: msg,
         danger: false,
-        confirmText: "升级",
+        confirmText: t("menu.upgradeConfirm"),
         onConfirm: function () {
           setUpgBusy(true);
           setUpgNote("");
           setUpgErr("");
           paodingApi("upgrade", {}).then(function (r) {
-            if (r && r.upToDate) { setUpgNote("已是最新版本"); return; }
+            if (r && r.upToDate) { setUpgNote(t("menu.upToDate")); return; }
             var done = versionTagOf((r && r.version) || verInfo.latest);
-            setUpgNote((r && r.message) || ("✅ 已升级到 " + done + "，重启 DSH 后新版本生效（preset 会自动按新版重生成）"));
+            // 服务端返回了 message 就原文透传（服务端消息不做客户端翻译），
+            // 没有才落本地化兜底文案。
+            setUpgNote((r && r.message) || t("menu.upgraded", { v: done }));
             // 重拉版本信息：服务端有 1 小时缓存且本进程挂的还是旧代码，重启前
             // 更新卡可能仍在（重启后自然消失），以此处的生效提示为准。
             paodingApi("version").then(function (d) {
@@ -3138,7 +3675,7 @@ window.__ModuleLoader__.load({
           }).catch(function (err) {
             // 失败要醒目：截服务端透传的子进程输出尾部 ~300 字符并入 err，方便
             // 定位 pnpm 缓存权限（EPERM）之类环境问题，不用翻服务端日志。
-            var tail = typeof err.output === "string" && err.output ? "：" + err.output.slice(-300) : "";
+            var tail = typeof err.output === "string" && err.output ? t("menu.errTail", { tail: err.output.slice(-300) }) : "";
             setUpgErr(err.message + tail);
           }).finally(function () {
             setUpgBusy(false);
@@ -3190,6 +3727,122 @@ window.__ModuleLoader__.load({
       // 版本检测重试进行中（页头失败行的「重试」按钮禁用态）：与升级三态分开，
       // 检测失败重试不该锁升级（升级预检在服务端另做一次，不依赖这份 verInfo）。
       var _vb = useState(false), verRetryBusy = _vb[0], setVerRetryBusy = _vb[1];
+      // 语言切换 tick：页头文案（标题 / 副标题 / 菜单 / 语言项）走 t()，切换后
+      // 需整体重渲染一次；ConfigPanel 内部另有 registerReload 整页重拉。
+      var _lg = useState(0), langTick = _lg[0], setLangTick = _lg[1];
+      useEffect(function () {
+        return onLangChange(function () { setLangTick(function (n) { return n + 1; }); });
+      }, []);
+
+      // ── 页头「更多」菜单：配置导出 / 导入 ────────────────────────────────
+      // 低频的整文件级操作收进菜单，页头保持一行动静。导出 / 导入写的是整份
+      // 配置文件（非面板视图的局部编辑），与面板 busy 互不相干，独立 busy 态。
+      var _mo = useState(false), moreOpen = _mo[0], setMoreOpen = _mo[1];
+      var _eb = useState(false), expBusy = _eb[0], setExpBusy = _eb[1];
+      var _ib = useState(false), impBusy = _ib[0], setImpBusy = _ib[1];
+      var importFileRef = useRef(null); // 隐藏 file input（菜单项点击 → 程序化触发选文件）
+      var reloadRef = useRef(null); // ConfigPanel 注册进来的 load（导入成功后整体刷新）
+
+      // 导出：GET config/export 拿配置文件原文（服务端不存在时回基础模板），
+      // Blob + a[download] 落盘，文件名以服务端给的为准（= 实际配置文件名）。
+      function doExportConfig() {
+        setMoreOpen(false);
+        setExpBusy(true);
+        paodingApi("config/export").then(function (r) {
+          var name = r && typeof r.filename === "string" && r.filename ? r.filename : "dsh-paoding.config.yml";
+          var blob = new Blob([r && typeof r.content === "string" ? r.content : ""], { type: "text/yaml;charset=utf-8" });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          // revoke 留一拍：点击派发的下载任务未必当场读完 blob URL
+          setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+          toast.ok(t("menu.exported", { name: name }));
+        }).catch(function (err) {
+          toast.err(t("menu.exportFail", { msg: err.message }));
+        }).finally(function () {
+          setExpBusy(false);
+        });
+      }
+
+      // 导入：选文件 → 读文本 → 确认弹窗（整体覆盖，danger 红钮）→ POST。
+      // file input 复用同一个小众路径：每次先清 value，选同一个文件也能再触发。
+      function pickImportFile() {
+        setMoreOpen(false);
+        if (!importFileRef.current) return;
+        importFileRef.current.value = "";
+        importFileRef.current.click();
+      }
+
+      function onImportFilePicked(e) {
+        var file = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!file) return;
+        // File.text() 现代环境都有；老环境回落 FileReader，读不出只 toast 不打扰面板
+        var reading = typeof file.text === "function"
+          ? file.text()
+          : new Promise(function (resolve, reject) {
+              var reader = new FileReader();
+              reader.onload = function () { resolve(String(reader.result)); };
+              reader.onerror = function () { reject(new Error(t("menu.readFail"))); };
+              reader.readAsText(file);
+            });
+        reading.then(function (text) {
+          confirmCtrl.ask({
+            title: t("menu.importTitle"),
+            // 多行文案由 pd-modalText 的 pre-line 保留换行；工作区段会被整份
+            // 替换这点必须说清（面板视图只显示一个配置对象，导入却是全文件）。
+            body: t("menu.importBody", { name: file.name }),
+            danger: true,
+            confirmText: t("menu.importConfirm"),
+            onConfirm: function () {
+              setImpBusy(true);
+              paodingApi("config/import", { content: text }).then(function () {
+                toast.ok(t("menu.imported"));
+                // 服务端 saveConfig 已改 mtime → state 缓存自动失效；这里触发
+                // 面板重拉 state 并按新配置重建 assign（预览 / 提示卡一并作废）。
+                if (typeof reloadRef.current === "function") reloadRef.current();
+              }).catch(function (err) {
+                toast.err(t("menu.importFail", { msg: err.message }));
+              }).finally(function () {
+                setImpBusy(false);
+              });
+            },
+          });
+        }).catch(function (err) {
+          toast.err(t("menu.readFailPrefix", { msg: err.message }));
+        });
+      }
+
+      // 菜单开着时 Esc 只收菜单（捕获级先于 PageShell 的关页监听，与
+      // ConfigPanel 弹窗的 Esc 分层同款）；点菜单外空白处收菜单。
+      useEffect(function () {
+        if (!moreOpen) return;
+        var onKey = function (e) {
+          if (e && e.key === "Escape") {
+            e.stopPropagation();
+            setMoreOpen(false);
+          }
+        };
+        var onClick = function (e) {
+          var t = e && e.target;
+          if (t && typeof t.closest === "function" &&
+              (t.closest("[data-pd-more-menu]") || t.closest("[data-pd-more-btn]"))) return;
+          setMoreOpen(false);
+        };
+        document.addEventListener("keydown", onKey, true);
+        document.addEventListener("mousedown", onClick, true);
+        return function () {
+          document.removeEventListener("keydown", onKey, true);
+          document.removeEventListener("mousedown", onClick, true);
+        };
+      }, [moreOpen]);
+
+      // 稳定的注册函数（ConfigPanel effect 依赖它）：导入成功后的整体刷新入口
+      var registerReload = useCallback(function (fn) { reloadRef.current = fn; }, []);
 
       // 一键升级逻辑在共享的 runUpgradeFlow（页头更新卡统一走这一份）。
       function doUpgrade() {
@@ -3220,21 +3873,72 @@ window.__ModuleLoader__.load({
             // 标题行：标题 + 版本号 + （有新版时的）更新卡并排；窄屏放不下时
             // 换行收纳，副标题独占下一行
             h("div", { className: "pd-titleRow" },
-              h("h1", { className: "pd-pageTitle" }, "庖丁配置",
+              h("h1", { className: "pd-pageTitle" }, t("nav.entryTitle"),
                 verInfo && typeof verInfo.current === "string" && verInfo.current
                   ? h("span", { className: "pd-versionTag" }, versionTagOf(verInfo.current))
                   : null),
               versionRowOf(verInfo, { busy: upgBusy, onUpgrade: doUpgrade, note: upgNote, error: upgErr, onRetry: doRetryVersion, retryBusy: verRetryBusy })),
             h("p", { className: "pd-pageSubtitle" },
-              "为主 agent 与子 agent 编排工具、技能与角色，预览并应用生成的 agent.cordis.yml。")),
+              t("menu.subtitle"))),
+          // 页头「更多」菜单：整份配置文件的导出 / 导入（低频操作收进来，页头
+          // 不添第二排按钮）。定位锚点用相对定位的薄包裹层，下拉复用工作区
+          // 「更多」的 omd-tabMenu / omd-tabMenuItem 既有样式；靠右对齐（inline
+          // style 压掉类里的 left:2px），避免从页头右缘向右溢出。
+          h("div", { style: { position: "relative", flex: "none" } },
+            h("button", {
+              type: "button",
+              className: "omd-restorePill",
+              "data-pd-more-btn": "1",
+              "aria-haspopup": "menu",
+              "aria-expanded": moreOpen ? "true" : "false",
+              title: t("menu.moreBtnTip"),
+              onClick: function () { setMoreOpen(!moreOpen); },
+            }, t("menu.moreBtn")),
+            moreOpen ? h("div", {
+                className: "omd-tabMenu",
+                role: "menu",
+                "aria-label": t("menu.menuLabel"),
+                "data-pd-more-menu": "1",
+                style: { left: "auto", right: "0", top: "calc(100% + 6px)", minWidth: "180px" },
+              },
+              h("button", {
+                type: "button", role: "menuitem", className: "omd-tabMenuItem",
+                disabled: expBusy || impBusy,
+                onClick: doExportConfig,
+              }, h("span", { className: "omd-tabText" }, expBusy ? t("menu.exporting") : t("menu.exportItem"))),
+              h("button", {
+                type: "button", role: "menuitem", className: "omd-tabMenuItem",
+                disabled: expBusy || impBusy,
+                onClick: pickImportFile,
+              }, h("span", { className: "omd-tabText" }, impBusy ? t("menu.importing") : t("menu.importItem"))),
+              // 语言切换项：label 刻意不进字典——按当前语言显示「另一端」的叫法，
+              // 中文界面显示 English，英文界面显示中文（语言名用母语写才认得出）。
+              h("button", {
+                type: "button", role: "menuitem", className: "omd-tabMenuItem",
+                title: t("menu.langTip"),
+                onClick: function () {
+                  setMoreOpen(false);
+                  setLang(pdLang() === "zh" ? "en" : "zh");
+                  if (typeof reloadRef.current === "function") reloadRef.current();
+                },
+              }, h("span", { className: "omd-tabText" }, pdLang() === "zh" ? "English" : "中文")))
+              : null,
+            // 隐藏选文件 input：导入入口的程序化触发器（样式零占位）
+            h("input", {
+              ref: importFileRef,
+              type: "file",
+              accept: ".yml,.yaml,text/yaml,text/plain",
+              style: { display: "none" },
+              onChange: onImportFilePicked,
+            })),
           h("button", {
             type: "button",
             className: "pd-closeBtn",
-            "aria-label": "关闭庖丁配置",
-            title: "关闭（Esc）",
+            "aria-label": t("nav.closeAria"),
+            title: t("nav.closeTip"),
             onClick: function () { if (typeof onClose === "function") onClose(); },
           }, h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
-        h(ConfigPanel, { setVerInfo: setVerInfo }),
+        h(ConfigPanel, { setVerInfo: setVerInfo, registerReload: registerReload }),
         // 反馈 toast 宿主：订阅模块级 toast 控制器，悬浮于操作坞上方
         h(ToastHost),
         // 通用确认弹窗层：订阅 confirmCtrl（发起方见各 confirmCtrl.ask 调用点），

@@ -28,8 +28,8 @@
             req: {
               title: opts.title,
               body: opts.body,
-              confirmText: opts.confirmText || "确认",
-              cancelText: opts.cancelText || "取消",
+              confirmText: opts.confirmText || t("common.confirm"),
+              cancelText: opts.cancelText || t("common.cancel"),
               danger: !!opts.danger,
               onConfirm: opts.onConfirm,
             },
@@ -58,7 +58,7 @@
             "aria-label": req.title, "aria-describedby": "pd-confirmBody" },
           h("div", { className: "pd-modalHeader" },
             h("h2", { className: "pd-modalTitle" }, req.title),
-            h("button", { type: "button", className: "pd-modalClose", "aria-label": "关闭", onClick: close },
+            h("button", { type: "button", className: "pd-modalClose", "aria-label": t("common.close"), onClick: close },
               h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
           h("div", { className: "pd-modalBody" },
             h("div", { className: "pd-modalText", id: "pd-confirmBody" }, req.body)),
@@ -67,7 +67,7 @@
             // 取消，与原生 confirm 的键盘习惯对齐；danger 反向落焦是让破坏性
             // 操作多一道显式点击的门槛。弹窗关闭即整体卸载，重开重新自动聚焦。
             h(P.Button, { variant: "outline", size: "md", autoFocus: !!req.danger, onClick: close },
-              req.cancelText || "取消"),
+              req.cancelText || t("common.cancel")),
             h(P.Button, {
               variant: "primary",
               size: "md",
@@ -79,7 +79,40 @@
                 close();
                 if (typeof req.onConfirm === "function") req.onConfirm();
               },
-            }, req.confirmText || "确认"))));
+            }, req.confirmText || t("common.confirm")))));
+    }
+
+    // ── 检查提示卡（结构化体检结果的渲染）──────────────────────────────────
+    // warnState = { source: "preview" | "apply", items: [{level, code, message}] }
+    // （items 即 tools/lib/health.mjs healthCheck 的 items 原样）。无 items 不渲染
+    // （零占位）；逐条一行，按 level 分色（error 红 / warn 琥珀 / info 中性，复用
+    // statusRow 同款 omd-status* 类），code 收进悬浮提示（面向排障，不占版面）。
+    // 行不放 role=alert：卡片随响应常驻展示而非突发警报，读屏按普通内容播报即可。
+    function warningsCardOf(warnState) {
+      if (!warnState || !Array.isArray(warnState.items) || warnState.items.length === 0) return null;
+      var rows = warnState.items.map(function (w, i) {
+        var level = w && (w.level === "error" || w.level === "warn") ? w.level : "info";
+        var cls = level === "error" ? "omd-statusError" : level === "warn" ? "omd-statusWarn" : "omd-status";
+        var icon = level === "error" ? "⛔" : level === "warn" ? "⚠️" : "ℹ️";
+        // 悬浮提示：已知 code（tools/lib/health.mjs 的固定集）给本地化标题
+        // （warn.title.<code>），未知 code 沿用「检查项：<code>」；服务端 message
+        // 原文作正文（服务端体检文案仅中文，本轮不译——取舍见 04 字典注释）。
+        var title = undefined;
+        if (w && w.code) {
+          title = tHas("warn.title." + w.code)
+            ? t("warn.title." + w.code) + "（" + w.code + "）"
+            : t("warn.itemTitle", { code: w.code });
+        }
+        return h("div", { className: cls, key: i, title: title },
+          h("span", { className: "omd-statusIcon" }, icon),
+          h("span", { className: "omd-statusText" }, (w && w.message) || ""));
+      });
+      return h("div", { className: "omd-group" },
+        h("div", { className: "omd-groupHeading" },
+          h("span", { className: "omd-groupIcon" }, ic(P.IconWarningOutline16, 14)),
+          h("span", null, warnState.source === "apply" ? t("warn.heading.apply") : t("warn.heading.preview")),
+          h("span", { className: "omd-count" }, warnState.items.length)),
+        h("div", { className: "omd-section" }, rows));
     }
 
     // ── 主面板 ─────────────────────────────────────────────────────────────
@@ -91,6 +124,10 @@
       var _b = useState(false), busy = _b[0], setBusy = _b[1];
       var _op = useState(null), busyOp = _op[0], setBusyOp = _op[1];
       var _p = useState(null), preview = _p[0], setPreview = _p[1];
+      // 检查提示卡状态（形状见 warningsCardOf）：preview 源随 assign 变更作废
+      //（与预览同一失效逻辑），apply 源描述的是「已落盘结果」——应用成功后
+      // 服务端回拉 state 重建 assign 不算编辑，不作废，直到下一次预览/应用。
+      var _wn = useState(null), warnState = _wn[0], setWarnState = _wn[1];
       var _o = useState({}), openMap = _o[0], setOpenMap = _o[1];
       var _m = useState({}), personaMap = _m[0], setPersonaMap = _m[1];
       var _x = useState(false), extraOpen = _x[0], setExtraOpen = _x[1];
@@ -105,6 +142,10 @@
       // 状态挂在页头 PageShell（版本号展示在标题旁），经 props 下发：
       // setVerInfo 供 loadVersion 回写页头（版本号与更新卡都在 PageShell）。
       var setVerInfo = props && props.setVerInfo;
+      // 导入配置后的整体刷新入口：ConfigPanel 把 load 注册给页头（PageShell 的
+      // 「更多 → 导入配置」成功后调用）。面板与页头分属两棵子树，props 只能
+      // 单向传「注册函数」，刷新动作反过来经 ref 回调触达。
+      var registerReload = props && props.registerReload;
       var _ws = useState(null), activeWs = _ws[0], setActiveWs = _ws[1]; // 当前配置对象：null = 全局默认；否则工作区绝对路径
       // 视角切换计数：switchWorkspace 每次自增，拼进全部未受控（defaultValue）
       // 编辑器的 key——否则切 tab 不重挂，旧工作区输入框里未提交的文本会在
@@ -253,6 +294,19 @@
 
       useEffect(load, [load]);
 
+      // 把「整体刷新」注册给页头（「导入配置」成功后由 PageShell 调用）：load
+      // 重拉 state + 按新配置重建 assign；导入 = 整份文件被替换，两源检查提示
+      // 一并作废（旧卡描述的已落盘结果已不在盘上，留着只会误导）。load 是
+      // useCallback 稳定引用；卸载时反注册，防页头持有失效闭包。
+      useEffect(function () {
+        if (typeof registerReload !== "function") return;
+        registerReload(function () {
+          setWarnState(null);
+          load();
+        });
+        return function () { registerReload(null); };
+      }, [load, registerReload]);
+
       // 工作区列表：面板加载时拉一次宿主注册表（与 state 并行）。失败降级为
       // 空列表——workspaceRowsOf 会用 state.existing.workspaces 的键兜底出 pill，
       // 绝不阻塞面板。降级不再无声：宿主侧故障（如插件实例已 disposed 的僵尸
@@ -261,7 +315,7 @@
       // 日志定位。请求错误 / 响应格式异常都汇入同一个 catch，提示口径一致。
       var loadWorkspaces = useCallback(function () {
         api("workspaces").then(function (d) {
-          if (!d || d.ok !== true || !Array.isArray(d.items)) throw new Error("工作区列表响应格式异常");
+          if (!d || d.ok !== true || !Array.isArray(d.items)) throw new Error(t("ws.listBadResponse"));
           setWsList(d.items);
           setWsListTried(true);
           setWsListErr("");
@@ -269,8 +323,8 @@
           setWsList([]); // 静默降级：只用配置文件里已有的工作区键
           setWsListTried(true);
           var msg = err && err.message ? String(err.message) : "";
-          setWsListErr("宿主工作区列表拉取失败，仅显示配置文件中的工作区；重启 DSH 后通常可恢复"
-            + (msg ? "（" + (msg.length > 80 ? msg.slice(0, 80) + "…" : msg) + "）" : ""));
+          setWsListErr(t("ws.listFailHint")
+            + (msg ? t("ws.listFailDetail", { msg: msg.length > 80 ? msg.slice(0, 80) + "…" : msg }) : ""));
         });
       }, [api]);
 
@@ -290,7 +344,7 @@
           if (rows[i].path.replace(/[\/\\]+$/, "") === target) { hit = rows[i].path; break; }
         }
         if (hit) switchWorkspace(hit);
-        else toast.warn("工作区 " + target + " 不在列表里，未切换 tab");
+        else toast.warn(t("ws.notInList", { path: target }));
       }, [data, wsListTried]);
 
       // 「添加工作区」候选：输入框首次聚焦时拉一次服务端扫描
@@ -322,7 +376,7 @@
         if (cached !== undefined) {
           setWsSkills(cached ? cached.skills : null);
           setWsProjSkills(cached ? new Set(cached.projectSkills) : null);
-          setWsSkillsErr(cached ? "" : "该工作区技能列表拉取失败，技能网格已回退用户级技能");
+          setWsSkillsErr(cached ? "" : t("ws.skillsFail"));
           return;
         }
         api("workspaces?skills=1&path=" + encodeURIComponent(wsPath)).then(function (d) {
@@ -338,7 +392,7 @@
           if (activeWsRef.current !== wsPath) return;
           setWsSkills(null);
           setWsProjSkills(null);
-          setWsSkillsErr("该工作区技能列表拉取失败，技能网格已回退用户级技能");
+          setWsSkillsErr(t("ws.skillsFail"));
         });
       }
 
@@ -374,7 +428,7 @@
           return api("workspaces").then(function (d) {
             if (d && d.ok === true && Array.isArray(d.items)) setWsList(d.items);
             switchWorkspace(wsPath);
-            toast.ok((r.created === false ? "工作区已在列表里：" : "已注册工作区：") + wsPath + "；配置后点「保存并应用」生成专属预设");
+            toast.ok(t(r.created === false ? "ws.existsToast" : "ws.addedToast", { path: wsPath }));
           });
         }).catch(function (err) {
           setWsAddErr(err.message);
@@ -504,7 +558,7 @@
       var loadModels = useCallback(function () {
         api("models").then(function (d) {
           var groups = d && Array.isArray(d.groups) ? d.groups : null;
-          if (!d || d.ok !== true || !groups) throw new Error("模型目录响应格式异常");
+          if (!d || d.ok !== true || !groups) throw new Error(t("models.listBadResponse"));
           setModelGroups(groups);
           setModelGroupsOk(true);
           setModelGroupsErr("");
@@ -634,23 +688,23 @@
         // 空名静默吞掉：确认按钮在空值时本来就 disabled，这里只兜输入框直接
         // 按 Enter 的路径（与旧 prompt 实现的 if (!name) return 同语义）。
         if (name === "") return;
-        if (!/^[a-z][a-z0-9_-]{1,31}$/.test(name)) { setRoleAddErr("角色名须为 2-32 位小写字母/数字/下划线/连字符"); return; }
+        if (!/^[a-z][a-z0-9_-]{1,31}$/.test(name)) { setRoleAddErr(t("panel.roleNameInvalid")); return; }
         // 内置名不可经「新建」再造：已删除（不在 roles、在 roles_remove）的
         // 内置名在此拦截并引导走恢复区，避免同一内置名同时出现在卡片流与
         // 「已删除的内置角色」恢复区；仍正常存在的内置名由下方「已存在」命中。
-        if (DEFAULT_ROLES.indexOf(name) !== -1) { setRoleAddErr('内置角色不可新建（"' + name + '"如已删除，请在下方「已删除的内置角色」区恢复）'); return; }
+        if (DEFAULT_ROLES.indexOf(name) !== -1) { setRoleAddErr(t("panel.roleNameBuiltin", { name: name })); return; }
         // 已存在检查从 setAssign updater 挪到外层：报错要走弹窗内错误行，
         // setState 副作用不能塞进 updater；闭包 assign 与点击时刻一致，双击
         // 极端场景下重复创建也只是同形状覆盖，幂等无害。
-        if (assign.roles[name]) { setRoleAddErr('角色 "' + name + '" 已存在'); return; }
+        if (assign.roles[name]) { setRoleAddErr(t("panel.roleExists", { name: name })); return; }
         // 显示名校验与 roleTitleBlock 的 commitRoleName 同源（不含 \r \n、
         // trim 后 ≤60、空 = null）：新建时就把显示名写进出厂形状，省得建完
         // 再去卡片里补一枪。报错走弹窗内错误行（不 toast）——此刻弹窗还开着，
         // 错误行就贴在输入框下面，比 toast 更贴输入现场。
         var dispRaw = String(roleAddDispName == null ? "" : roleAddDispName);
-        if (/[\r\n]/.test(dispRaw)) { setRoleAddErr("显示名不能包含换行（\\r / \\n）"); return; }
+        if (/[\r\n]/.test(dispRaw)) { setRoleAddErr(t("panel.dispNameNewline")); return; }
         var dispTrim = dispRaw.trim();
-        if (dispTrim.length > 60) { setRoleAddErr("显示名过长：trim 后最多 60 字符"); return; }
+        if (dispTrim.length > 60) { setRoleAddErr(t("panel.dispNameTooLong")); return; }
         var disp = dispTrim === "" ? null : dispTrim; // 空 / 纯空白 = null：事件流标题回落 toolName
         setAssign(function (prev) {
           var next = JSON.parse(JSON.stringify(prev));
@@ -679,7 +733,7 @@
         setRoleAddBgMode("one-shot"); // 成功提交即复位出厂默认（取消重开才保留残值）
         setRoleAddStartMode("fresh"); // 成功提交即复位出厂默认（取消重开才保留残值）
         setRoleAddErr("");
-        toast.ok('已新建角色 "' + name + '"，记得「保存并应用」');
+        toast.ok(t("panel.roleAddedToast", { name: name }));
       }
 
       // 自定义角色改名（toolName = 委派调用名）：名称是身份键，改它要联动
@@ -703,12 +757,12 @@
         var v = String(roleRenameVal || "").trim();
         // 未改动：原 prompt 下按 Enter 即关窗（只是没改名），这里对齐——直接收起。
         if (v === name) { closeRoleRenameModal(); return; }
-        if (!/^[a-z][a-z0-9_-]{1,31}$/.test(v)) { setRoleRenameErr("角色名须为 2-32 位小写字母/数字/下划线/连字符"); return; }
-        if (DEFAULT_ROLES.indexOf(v) !== -1) { setRoleRenameErr('不可改成内置角色名 "' + v + '"'); return; }
+        if (!/^[a-z][a-z0-9_-]{1,31}$/.test(v)) { setRoleRenameErr(t("panel.roleNameInvalid")); return; }
+        if (DEFAULT_ROLES.indexOf(v) !== -1) { setRoleRenameErr(t("panel.roleRenameBuiltin", { name: v })); return; }
         // 已存在检查从 setAssign updater 挪到外层（与 submitRoleAdd 同款）：
         // 报错要走弹窗内错误行，setState 副作用不能塞进 updater；闭包 assign
         // 与点击时刻一致。
-        if (assign.roles[v]) { setRoleRenameErr('角色 "' + v + '" 已存在'); return; }
+        if (assign.roles[v]) { setRoleRenameErr(t("panel.roleExists", { name: v })); return; }
         setAssign(function (prev) {
           var next = JSON.parse(JSON.stringify(prev));
           var roles = {};
@@ -733,16 +787,16 @@
         closeRoleRenameModal();
         setRoleRenameVal("");
         setRoleRenameErr("");
-        toast.ok('已重命名 "' + name + '" → "' + v + '"，记得「保存并应用」');
+        toast.ok(t("panel.roleRenamedToast", { old: name, new: v }));
       }
 
       function removeRole(name) {
         // 原原生 confirm 改通用确认弹窗：删除属破坏性操作，danger 红底确认钮。
         confirmCtrl.ask({
-          title: "删除自定义角色",
-          body: "删除自定义角色 \"" + name + "\"？",
+          title: t("panel.delCustomRoleTitle"),
+          body: t("panel.delCustomRoleBody", { name: name }),
           danger: true,
-          confirmText: "确认删除",
+          confirmText: t("common.confirmDelete"),
           onConfirm: function () {
             setAssign(function (prev) {
               var next = JSON.parse(JSON.stringify(prev));
@@ -763,10 +817,10 @@
         // 原原生 confirm 改通用确认弹窗；文案含恢复引导（多行由
         // pd-modalText 的 pre-line 保留换行），danger 红底确认钮。
         confirmCtrl.ask({
-          title: "删除内置角色",
-          body: "删除内置角色 \"" + name + "\"？\n该角色的委派工具、工具面、persona 与主 agent 的委派指引将一并移除；\n可在下方「已删除的内置角色」区一键恢复。",
+          title: t("panel.delBuiltinRoleTitle"),
+          body: t("panel.delBuiltinRoleBody", { name: name }),
           danger: true,
-          confirmText: "确认删除",
+          confirmText: t("common.confirmDelete"),
           onConfirm: function () {
             setAssign(function (prev) {
               var next = JSON.parse(JSON.stringify(prev));
@@ -798,18 +852,38 @@
         });
       }
 
+      // 场景模板一键切换：只改 roles_remove 与 main_agent_extra（见
+      // applyScenarioTemplate），点的是本地 assign、不自动保存——预览随 assign
+      // 变更由既有失效逻辑自动作废，toast 明示「保存并应用后生效」。
+      function applyTemplateClick(tpl) {
+        if (!assign) return;
+        setAssign(function (prev) {
+          return applyScenarioTemplate(prev, tpl, (data && data.inventory) || []);
+        });
+        toast.ok(t("panel.tplAppliedToast", { label: t(tpl.label) }));
+      }
+
       function doPreview() {
         if (!assign) return;
         var reqAssign = assign;
         setBusy(true);
         setBusyOp("preview");
         setPreview(null);
+        setWarnState(null); // 旧一轮的提示条目随新预览请求一并清掉（失败也不留陈账）
         // workspace 透传当前配置对象（null = 全局默认），服务端据此选生成落点。
         api("preview", { assignments: reqAssign, workspace: activeWsRef.current }).then(function (r) {
           if (assignRef.current !== reqAssign) return; // 生成期间配置已改：结果过期，不挂旧预览
           setPreview(r);
+          setWarnState({ source: "preview", items: Array.isArray(r.warnings) ? r.warnings : [] });
           setScrollReq("preview"); // 预览成功后自动滚动定位到预览生成区
-        }).catch(function (err) { toast.err(err.message); }).finally(function () {
+        }).catch(function (err) {
+          toast.err(err.message);
+          // 预览失败（如零工具角色 422）通常伴随体检说明：卡片给出每条原因，
+          // 比 toast 一行错误更可行动。
+          if (Array.isArray(err.warnings) && err.warnings.length) {
+            setWarnState({ source: "preview", items: err.warnings });
+          }
+        }).finally(function () {
           setBusy(false);
           setBusyOp(null);
         });
@@ -818,9 +892,14 @@
       // 预览时效：assign 一变即作废已挂出的预览——预览文本对应生成时刻的目标
       // 配置，继续挂着「✅ 生成成功」只会误导（switchWorkspace 自带
       // setPreview(null) 只覆盖切视角，这里兜住其余一切编辑路径；生成中的
-      // 请求由 doPreview 里的 assignRef 快照比对作废）。
+      // 请求由 doPreview 里的 assignRef 快照比对作废）。检查提示卡里 preview
+      // 源的条目描述的是同一次生成的产物，随预览一并作废；apply 源的描述的是
+      // 已落盘结果，不受编辑影响，保留到下一次预览 / 应用。
       useEffect(function () {
         setPreview(null);
+        setWarnState(function (prev) {
+          return prev && prev.source === "preview" ? null : prev;
+        });
       }, [assign]);
 
       function doApply() {
@@ -829,14 +908,14 @@
         // 确认文案按配置对象分流（语义原样保留）：全局覆盖共享的 orchestrator
         // 预设（现状文案）；工作区落独立预设、只并进 workspaces 段，全局预设
         // 不受影响。写预设非破坏性操作，danger 不置位（主色确认钮）。
-        var applyMsg = wsPath
-          ? "确认应用当前配置？将为该工作区生成专属预设（orchestrator-<slug>）并保存到 dsh-paoding.config.yml 的 workspaces 段，全局 orchestrator 预设不受影响。"
-          : "确认应用当前配置？将写入 preset 并覆盖 ~/.dsh/.agent-presets/orchestrator，且保存到 dsh-paoding.config.yml。";
+        // 确认文案按配置对象分流（语义原样保留）：全局覆盖共享的 orchestrator
+        // 预设（现状文案）；工作区落独立预设、只并进 workspaces 段，全局预设
+        // 不受影响。写预设非破坏性操作，danger 不置位（主色确认钮）。
         confirmCtrl.ask({
-          title: "保存并应用",
-          body: applyMsg,
+          title: t("panel.applyTitle"),
+          body: wsPath ? t("panel.applyBodyWs") : t("panel.applyBodyGlobal"),
           danger: false,
-          confirmText: "确认应用",
+          confirmText: t("panel.applyConfirm"),
           onConfirm: function () {
             setBusy(true);
             setBusyOp("apply");
@@ -844,24 +923,46 @@
               var notes = (r.roleResults || []).map(function (x) {
                 return x.role + ": " + x.intent.length + " → " + x.kept.length;
               });
-              var summary = notes.join("；") + "。";
+              var summary = notes.join(t("common.listSep")) + t("common.period");
+              // 体检结果挂卡展示；warn/error 在场时成功 toast 降为 warn 档点一句
+              // 「见下方」（成功 toast 的既有信息——preset id / 生效说明——不丢，
+              // 并进 warn 文案），全 info / 无条目保持原成功 toast。
+              var warnItems = Array.isArray(r.warnings) ? r.warnings : [];
+              setWarnState({ source: "apply", items: warnItems });
+              var badCount = warnItems.filter(function (w) {
+                return w && (w.level === "error" || w.level === "warn");
+              }).length;
+              var warnTail = t("panel.warnTail", { n: warnItems.length });
               if (wsPath) {
                 // 工作区应用：点明生成的 preset id，提示去预设选择器选用（工作区
-                // 预设不会自动成为默认，须在新建会话时显式选择）。
-                toast.ok("已生成预设 " + (r.presetId || "orchestrator-<slug>") + "：" + summary + "新建会话时在预设选择器选它。" + (r.staleNote ? " ⚠️ patch 较新，重新应用后生效。" : ""));
+                // 预设不会自动成为默认，须在新建会话时显式选择）。体检 bad 时
+                // summary 槽位换 warnTail（沿用原口径：角色明细让位给检查提示）。
+                var wsMsg = t("panel.appliedWs", { id: r.presetId || "orchestrator-<slug>", summary: badCount > 0 ? warnTail : summary })
+                  + (r.staleNote ? t("panel.staleReapply") : "");
+                if (badCount > 0) toast.warn(wsMsg); else toast.ok(wsMsg);
                 // 服务端 apply 后已重刷状态缓存：静默拉一次，让 workspaceMeta /
                 // existing.workspaces 跟上（全局路径保持旧交互，不额外拉取）。
+                // 回拉重建 assign 不清 apply 源提示卡（见 warnState 注释）。
                 api("state").then(function (d) {
                   setData(d);
                   setAssign(buildTargetAssignments(d, activeWsRef.current));
                 }).catch(function () { /* 静默：落盘已成功，仅展示层暂旧 */ });
               } else {
-                toast.ok("已安装：" + summary + (r.staleNote ? " ⚠️ patch 较新，重启后生效。" : " 重启 DSH 或新建会话后生效。"));
+                var gMsg = t("panel.appliedGlobal", { summary: badCount > 0 ? warnTail : summary })
+                  + (r.staleNote ? t("panel.staleRestart") : t("panel.effectiveRestart"));
+                if (badCount > 0) toast.warn(gMsg); else toast.ok(gMsg);
               }
               // 显示名 / 角色名单可能变了：事件流委派行键控注册跟着刷新（行组件
               // 标题读 delegateMeta，刷新即可见，无需重开会话）。
               refreshDelegateRows();
-            }).catch(function (err) { toast.err(err.message); }).finally(function () {
+            }).catch(function (err) {
+              toast.err(err.message);
+              // 失败（如零工具角色 422）也把体检说明挂卡：错误原因逐条可读，
+              // 修起来有据可依。落盘未发生，卡描述的是「这次为什么没成」。
+              if (Array.isArray(err.warnings) && err.warnings.length) {
+                setWarnState({ source: "apply", items: err.warnings });
+              }
+            }).finally(function () {
               setBusy(false);
               setBusyOp(null);
             });
@@ -877,7 +978,7 @@
           setData(d);
           setAssign(buildTargetAssignments(d, activeWsRef.current));
           // 回调参数 d 即重扫后的新 state，直接报数字，补回原徽标条的信息量
-          toast.ok("已重新检测：" + (d.inventory || []).length + " 个 MCP / 插件工具 · " + (d.skills || []).length + " 个技能");
+          toast.ok(t("panel.rescanned", { n: (d.inventory || []).length, m: (d.skills || []).length }));
         }).catch(function (err) { toast.err(err.message); }).finally(function () {
           setBusy(false);
           setBusyOp(null);

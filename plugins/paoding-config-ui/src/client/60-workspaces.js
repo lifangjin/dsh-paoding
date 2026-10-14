@@ -60,9 +60,9 @@
       return "global";
     }
 
-    // 三态 → 标签文案（中文，与 tooltip 口径一致）
+    // 三态 → 标签文案（i18n：tab 小徽标与「更多」菜单共用，与 tooltip 口径一致）
     function wsTagTextOf(kind) {
-      return kind === "project" ? "项目" : kind === "pending" ? "待应用" : "全局";
+      return kind === "project" ? t("ws.tag.project") : kind === "pending" ? t("ws.tag.pending") : t("ws.tag.global");
     }
 
     // 角色卡「默认展开」判定单一来源（toggleRole / roleCard 共用）：主 agent
@@ -77,12 +77,12 @@
       var m = meta && meta[row.path];
       var kind = wsTagOf(existingWs, meta, row.path);
       return row.path +
-        (row.sessionCount != null ? " · " + row.sessionCount + " 会话" : "") +
+        (row.sessionCount != null ? t("ws.tip.sessions", { n: row.sessionCount }) : "") +
         (kind === "project"
-          ? " · 项目配置（预设 " + (m && m.presetId) + "）"
+          ? t("ws.tip.project", { id: m && m.presetId })
           : kind === "pending"
-            ? " · 已保存项目配置、预设未生成（点「保存并应用」生效）"
-            : " · 跟随全局配置");
+            ? t("ws.tip.pending")
+            : t("ws.tip.global"));
     }
 
     // 工作区 tab 的显示顺序：按会话数降序（缺失沉底、同分保持注册表顺序），

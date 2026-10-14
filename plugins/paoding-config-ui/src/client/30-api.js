@@ -28,13 +28,17 @@
           if (!r.ok) {
             var err = new Error((d && d.error) || ("HTTP " + r.status));
             if (d && typeof d.output === "string" && d.output) err.output = d.output;
+            // 结构化体检结果（preview/apply 的 422 会把 warnings 一并带回，如
+            // 零工具角色的可读说明）：message 装不下多条，挂 error.warnings，
+            // 调用方 catch 侧渲染成检查提示卡（见 ConfigPanel 的 warnState）。
+            if (d && Array.isArray(d.warnings)) err.warnings = d.warnings;
             throw err;
           }
-          if (!d) throw new Error("HTTP " + r.status + "（响应不是 JSON）");
+          if (!d) throw new Error(t("api.notJson", { status: r.status }));
           return d;
         });
       }).catch(function (err) {
-        if (ctrl && err && err.name === "AbortError") throw new Error("请求超时（" + (PAODING_API_TIMEOUT_MS / 1000) + "s 无响应）");
+        if (ctrl && err && err.name === "AbortError") throw new Error(t("api.timeout", { s: PAODING_API_TIMEOUT_MS / 1000 }));
         throw err;
       }).finally(function () {
         if (timer !== null) clearTimeout(timer);
