@@ -234,6 +234,12 @@ doctor 不改任何文件，逐项检查并给出 `✔ 正常 / ⚠ 警告 / ✘
 
 `dsh plugin add` 报 pnpm 相关错误：`dsh plugin` 依赖 pnpm 装包。`npm i -g pnpm`（或 `corepack enable`）装好后重试。
 
+面板「升级」报 `spawn pnpm ENOENT` 是同一件事的 desktop 形态：desktop profile 的升级不走 dsh 转发器，而是直跑 `pnpm add`，PATH 里没有裸 `pnpm`（pnpm 由 corepack 托管、又没跑过 `corepack enable` 的机器就是这样）即报此错。0.4.1 起升级自动按「裸 pnpm → `corepack pnpm` → PNPM_HOME 常见落位」回落，一般无需处理；更早版本手动升一把即可：
+
+```bash
+cd "${DSH_HOME:-$HOME/.dsh}/profiles/desktop" && corepack pnpm add dsh-paoding@latest
+```
+
 **装了插件，预设列表里却没有「编排模式 (Orchestrator)」**
 
 预设由插件启动时自动生成：先确认装完后**重启过 DSH**；预设在新会话创建时装载，重启后还要新建一个会话才会出现在选择器里。仍没有就查 DSH 日志里 `paoding-config-ui` 的告警（自动生成失败会记日志，可到面板手动「保存并应用」补上），再检查 `ls "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"`——目录为空多半是插件运行时的 `$DSH_HOME` 与你以为的家目录不一致（启动 DSH 前显式 `export DSH_HOME=…`）。目录在、宿主又是 0.1.7+ 而选择器里仍没有时，再查 `$DSH_HOME/cordis.patch.yml` 里有无 dsh-paoding 托管块——0.1.7 靠块内声明行发现预设，缺块就到面板点一次「保存并应用」补写（见第 2 节「版本支持与预设落点双轨」）。

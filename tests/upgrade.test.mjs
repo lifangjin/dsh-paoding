@@ -22,15 +22,19 @@ function stubFetch(latest = '9.9.9') {
 }
 
 // spawn 桩：记录每次调用的形状供断言，按 result 收敛（同 defaultSpawn 形状）。
+// result 传数组时按次出队（候选链回落的逐跳模拟），队空回落成功形状。
 function stubSpawn(result = { code: 0, output: 'ok' }) {
+  const queue = Array.isArray(result) ? [...result] : null
   const calls = []
   const fn = async (command, args, options) => {
     calls.push({ command, args, options })
-    return result
+    return queue ? (queue.shift() ?? { code: 0, output: 'ok' }) : result
   }
   fn.calls = calls
   return fn
 }
+
+const ENOENT = { code: null, output: '', error: 'spawn pnpm ENOENT', errorCode: 'ENOENT' }
 
 // DSH_HOME 环境门：desktop 分支据此解析 profile 目录，用例内指向临时目录、
 // 收尾恢复原值（原本未设则删回未设，避免污染后续用例）。
@@ -105,6 +109,41 @@ test('desktop profile：pnpm 退出码非 0 → 文案点明 pnpm add 并带输�
   assert.equal(result.ok, false)
   assert.equal(result.error, 'pnpm add 退出码 1')
   assert.equal(result.output, 'ERR_PNPM_NO_MATCHING_VERSION')
+})
+
+test('desktop profile：裸 pnpm ENOENT → 回落 corepack pnpm（corepack 形态机器）', async (t) => {
+  makeDesktopProfile(t)
+  const spawnImpl = stubSpawn([ENOENT, { code: 0, output: 'Done in 2s' }])
+  const result = await runUpgrade({ profile: 'desktop', fetchImpl: stubFetch('9.9.9'), spawnImpl })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.output, 'Done in 2s')
+  assert.equal(spawnImpl.calls.length, 2)
+  assert.equal(spawnImpl.calls[0].command, useShell ? 'pnpm.cmd' : 'pnpm')
+  assert.equal(spawnImpl.calls[1].command, useShell ? 'corepack.cmd' : 'corepack')
+  assert.deepEqual(spawnImpl.calls[1].args, ['pnpm', 'add', 'dsh-paoding@9.9.9'])
+  assert.equal(spawnImpl.calls[1].options.cwd, spawnImpl.calls[0].options.cwd)
+})
+
+test('desktop profile：非 ENOENT 的 spawn 失败（EACCES）→ 不换通道，如实返回', async (t) => {
+  makeDesktopProfile(t)
+  const spawnImpl = stubSpawn([{ code: null, output: '', error: 'spawn pnpm EACCES', errorCode: 'EACCES' }])
+  const result = await runUpgrade({ profile: 'desktop', fetchImpl: stubFetch('9.9.9'), spawnImpl })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'spawn pnpm EACCES')
+  assert.equal(spawnImpl.calls.length, 1)
+})
+
+test('desktop profile：全候选 ENOENT → 可读指引（corepack enable / 手动命令），不裸抛', async (t) => {
+  const profileDir = makeDesktopProfile(t)
+  const spawnImpl = stubSpawn(ENOENT)
+  const result = await runUpgrade({ profile: 'desktop', fetchImpl: stubFetch('9.9.9'), spawnImpl })
+
+  assert.equal(result.ok, false)
+  assert.ok(spawnImpl.calls.length >= 2, `至少试了裸 pnpm 与 corepack 两路，实试 ${spawnImpl.calls.length}`)
+  assert.ok(result.error.includes('corepack enable'), '指引含 corepack enable')
+  assert.ok(result.error.includes(`cd ${profileDir}`), '指引含手动升级命令的 profile 目录')
 })
 
 test('常规 profile：保持 dsh 插件转发器原样（args / cwd / 退出码文案）', async (t) => {

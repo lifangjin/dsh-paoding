@@ -13,7 +13,10 @@
  *     profile 目录里直跑 `pnpm add dsh-paoding@<目标版本>`：本包已在 profile
  *     package.json 的 dsh.profile.bundles 清单里，无需 bundle reconcile；用
  *     精确版本而非 update，避开 pnpm 新鲜度防护 / 镜像 packument 滞后造成的
- *     静默空转。
+ *     静默空转。pnpm 本身按候选链解析（裸 pnpm → corepack pnpm → PNPM_HOME
+ *     常见落位，仅 ENOENT 换下一路）——corepack 管的机器没跑过 corepack
+ *     enable 时 PATH 里没有裸 pnpm，0.3.8~0.4.0 直 spawn 裸名即报
+ *     `spawn pnpm ENOENT`（0.4.1 修）。
  *
  * 本模块只负责「拿目标版本 → 探测自身 profile → 跑子进程」这一段编排；
  * profile 名从本文件运行时真实路径反推（registry 安装形态必然位于
@@ -77,7 +80,7 @@ function defaultSpawn(command, args, options, timeoutMs, timeoutLabel) {
     }, timeoutMs)
     child.on('error', (err) => {
       clearTimeout(timer)
-      resolve({ code: null, output: tailOutput(output), error: String(err?.message ?? err) })
+      resolve({ code: null, output: tailOutput(output), error: String(err?.message ?? err), errorCode: err?.code ?? null })
     })
     child.on('close', (code) => {
       clearTimeout(timer)
@@ -128,8 +131,10 @@ function desktopProfileDir() {
  *     node:child_process 的 spawn、Date.now()。
  *   - timeoutMs：升级子进程超时（含 pnpm 下载安装），默认 120s。
  *   - spawnImpl 契约：(command, args, options, timeoutMs, timeoutLabel) →
- *     Promise resolving { code, output, error? }（同 defaultSpawn 的收敛形状；
- *     timeoutLabel 仅缺省实现用于超时文案，注入桩可忽略）。
+ *     Promise resolving { code, output, error?, errorCode? }（同 defaultSpawn
+ *     的收敛形状；errorCode 为子进程 spawn 失败的 err.code，如 'ENOENT'，
+ *     desktop 分支据此走 pnpm 候选链回落；timeoutLabel 仅缺省实现用于超时
+ *     文案，注入桩可忽略）。
  * @returns {Promise<object>} 恒不抛错，收敛为：
  *   - { ok: true, upToDate: true, current }                    本地已不落后 registry
  *   - { ok: true, version, profile, output, elapsedMs }        升级成功（退出码 0）
@@ -193,18 +198,61 @@ async function doRunUpgrade({ profile, fetchImpl, spawnImpl, timeoutMs, now }) {
     return { ok: false, error: `desktop profile 目录不存在或未初始化: ${desktopDir}` }
   }
   const useShell = process.platform === 'win32'
-  const command = isDesktop ? (useShell ? 'pnpm.cmd' : 'pnpm') : useShell ? 'dsh.cmd' : 'dsh'
   const args = isDesktop
     ? ['add', `dsh-paoding@${targetVersion}`]
     : ['plugin', '--profile', resolved, 'update', 'dsh-paoding']
   const run = typeof spawnImpl === 'function' ? spawnImpl : defaultSpawn
-  const proc = await run(command, args, {
+  const spawnOptions = {
     cwd: isDesktop ? desktopDir : os.tmpdir(),
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: useShell,
-  }, timeoutMs, isDesktop ? 'pnpm add' : 'dsh plugin update')
+  }
+
+  // pnpm/dsh 候选链：spawn ENOENT（命令在 PATH 里不存在）才换下一路，
+  // EACCES / 超时 / 退出码非 0 都是真实运行结果，如实返回不换通道。
+  //   - 裸 pnpm：npm i -g pnpm / homebrew 等常规安装直接命中；
+  //   - corepack pnpm：corepack 随 node 发行，node 在 PATH 就兜得住，
+  //     未 enable 也能即装即用（corepack pnpm add ...）；
+  //   - PNPM_HOME 常见落位（darwin ~/Library/pnpm、linux ~/.local/share/pnpm）
+  //     的绝对路径：pnpm 独立安装脚本形态，spawn 绝对路径不依赖 PATH；
+  //     existsSync 预筛，不存在不浪费一次 spawn。
+  // 常规 profile 的 dsh 单候选同走这套循环，ENOENT 也收敛成可读文案。
+  const suffix = useShell ? '.cmd' : ''
+  const candidates = isDesktop
+    ? [
+        { command: `pnpm${suffix}`, argsPrefix: [], label: 'pnpm' },
+        { command: `corepack${suffix}`, argsPrefix: ['pnpm'], label: 'corepack pnpm' },
+      ]
+    : [{ command: `dsh${suffix}`, argsPrefix: [], label: 'dsh' }]
+  if (isDesktop) {
+    const homes = [path.join(os.homedir(), 'Library', 'pnpm'), path.join(os.homedir(), '.local', 'share', 'pnpm')]
+    for (const home of homes) {
+      const bin = path.join(home, `pnpm${suffix}`)
+      if (existsSync(bin)) candidates.push({ command: bin, argsPrefix: [], label: bin })
+    }
+  }
+
+  let proc = null
+  for (const cand of candidates) {
+    proc = await run(cand.command, [...cand.argsPrefix, ...args], spawnOptions, timeoutMs,
+      isDesktop ? 'pnpm add' : 'dsh plugin update')
+    if (proc?.errorCode !== 'ENOENT') break
+  }
   const output = tailOutput(proc?.output)
+
+  // 全候选 ENOENT：给可操作的出路，不裸抛 spawn xxx ENOENT。
+  if (proc?.errorCode === 'ENOENT') {
+    const tried = candidates.map((c) => c.label).join(' / ')
+    return {
+      ok: false,
+      error: isDesktop
+        ? `未找到可用的 pnpm（已试 ${tried}）。可先在终端执行 corepack enable 并重启 DSH 后重试；或手动升级：cd ${desktopDir} && corepack pnpm add dsh-paoding@${targetVersion}`
+        : `未找到 dsh 命令（PATH 异常？已试 ${tried}），请检查 dsh 安装后重试`,
+      output,
+      elapsedMs: elapsedMs(),
+    }
+  }
 
   // ④ 无磁盘后验（旧 npx 时代读 $DSH_HOME/dsh-paoding 对账的方案已随该目录
   //    一并废弃）：本进程代码不随升级变化，无从对账；成功与否以退出码为准，

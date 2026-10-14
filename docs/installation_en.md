@@ -234,6 +234,12 @@ The panel runs the same checks on every save: each Preview / Save & Apply respon
 
 `dsh plugin add` fails with a pnpm error: `dsh plugin` relies on pnpm to install packages. Install it (`npm i -g pnpm` or `corepack enable`) and retry.
 
+The panel's Upgrade button reporting `spawn pnpm ENOENT` is the same problem in its desktop form: desktop-profile upgrades bypass the dsh forwarder and run `pnpm add` directly, which fails the same way when no bare `pnpm` is on PATH (typical for corepack-managed setups that never ran `corepack enable`). Since 0.4.1 the upgrade falls back automatically — bare `pnpm` → `corepack pnpm` → common PNPM_HOME locations — so no action is normally needed; on earlier versions, upgrade manually:
+
+```bash
+cd "${DSH_HOME:-$HOME/.dsh}/profiles/desktop" && corepack pnpm add dsh-paoding@latest
+```
+
 **The plugin is installed but "编排模式 (Orchestrator)" is not in the preset list**
 
 The preset is generated automatically when the plugin starts: first make sure you **restarted DSH** after installing; presets load when a session is created, so after the restart you also need a new session for it to appear in the selector. Still nothing? Check the DSH log for `paoding-config-ui` warnings (a failed auto-generation is logged; apply manually from the panel), then check `ls "${DSH_HOME:-$HOME/.dsh}/.agent-presets/orchestrator"` — an empty directory usually means the plugin's runtime `$DSH_HOME` differs from the home directory you assumed (export `DSH_HOME=…` explicitly before launching DSH). If the directory is there, the host is 0.1.7+, and the selector still shows nothing, check `$DSH_HOME/cordis.patch.yml` for the dsh-paoding managed block — 0.1.7 discovers presets through the declaration rows inside it; if the block is missing, hit Save & Apply once in the panel to write it (see §2 "Version support and the dual preset landing").
