@@ -8,11 +8,11 @@
  */
 import os from 'node:os'
 import path from 'node:path'
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { assignSlugs, collectState, generateAndInstall, presetIdOf } from '../../tools/install.mjs'
 import { autoAssignments, baseAssignments } from '../../tools/lib/alloc.mjs'
-import { normalizeConfig, normalizeTargetFields, saveConfig, serializeConfig } from '../../tools/lib/config.mjs'
+import { loadConfig, normalizeConfig, normalizeTargetFields, saveConfig, serializeConfig, stripNonTargetKeys } from '../../tools/lib/config.mjs'
 import { parseYamlSubset, preprocessPatchText } from '../../tools/lib/yaml.mjs'
 import { captureWarnings, healthCheck } from '../../tools/lib/health.mjs'
 import {
@@ -23,7 +23,9 @@ import {
   isPtcWorkerHost,
   listOrchestratorPresetIds,
   parseGeneratorMarker,
+  presetRowId,
   readHomePatchRows,
+  stripHomePatchRows,
   WORKER_PTC,
   WORKER_WORKER_THREAD,
 } from '../../tools/lib/preset-system.mjs'
@@ -268,6 +270,133 @@ export async function importConfigContent(content) {
   }
   saveConfig(resolveConfigFile(), normalizeConfig(data))
   return { ok: true }
+}
+
+// ── 预设 CRUD（presets 路由族的服务端核心）──────────────────────────────────
+//
+// 面板 apply 只覆盖「全局 / 单个工作区视角的生成」，这里补齐预设对象本身的
+// 生命周期：列举（GET）、新增 / 更新（POST/PUT，复用 installAssignments）、
+// 删除（DELETE，配置条目 + preset 目录 + 声明行三位一体清理）。全局
+// orchestrator 不在删除之列——插件启动自愈（ensurePresetInstalled）会在下次
+// 启动把它装回来，删除语义不成立，路由层直接 403。
+
+/**
+ * 预设清单组装（GET presets）：输入 serializeState 后的只读视图，输出响应的
+ * presets 数组。全局 orchestrator 恒在首位（assignments = existing 顶层剥掉
+ * profile / workspaces 两个容器键后的目标字段；existing 缺失 = 尚无配置文件，
+ * assignments 也为 null），其后按配置 workspaces 段的键序逐个工作区补项。
+ */
+export function listPresets(view) {
+  const existing = view?.existing ?? null
+  const installedPresets = Array.isArray(view?.installedPresets) ? view.installedPresets : []
+  const presets = [{
+    presetId: 'orchestrator',
+    scope: 'global',
+    workspacePath: null,
+    installed: installedPresets.includes('orchestrator'),
+    assignments: existing ? stripNonTargetKeys(existing) : null,
+  }]
+  const workspaces = existing?.workspaces && typeof existing.workspaces === 'object' && !Array.isArray(existing.workspaces)
+    ? existing.workspaces
+    : {}
+  const metaOf = view?.workspaceMeta ?? {}
+  // workspaceMeta 缺项兜底（理论不会走到——workspaceMeta 由同一份 existing 派生，
+  // 只防老版本状态/外部构造视图漏了键）：整组键现算一次 assignSlugs，口径与
+  // serializeState / 生成层一致，避免逐项单算丢掉同 basename 的 hash 后缀。
+  let fallbackSlugs = null
+  for (const [wsPath, assignments] of Object.entries(workspaces)) {
+    let meta = metaOf[wsPath] ?? null
+    if (!meta) {
+      fallbackSlugs ??= assignSlugs(Object.keys(workspaces))
+      const slug = fallbackSlugs.get(wsPath)
+      const presetId = presetIdOf(slug)
+      meta = { slug, presetId, installed: installedPresets.includes(presetId) }
+    }
+    presets.push({
+      presetId: meta.presetId,
+      scope: 'workspace',
+      workspacePath: wsPath,
+      installed: !!meta.installed,
+      assignments,
+    })
+  }
+  return presets
+}
+
+/**
+ * presetId（orchestrator-<slug>）→ 工作区绝对路径反查（PUT/DELETE presets/<id>）：
+ * 对 existing.workspaces 的键集整组 assignSlugs（与生成层 / serializeState 同源，
+ * 同 basename 冲突的 hash 后缀才能对得上），再按 presetIdOf 逐一比对。找不到
+ * （id 未注册、键集为空、全局 orchestrator 之外未知形态）返回 null，由路由层
+ * 回 404。
+ */
+export function resolveWorkspacePathByPresetId(existing, presetId) {
+  const slugs = assignSlugs(Object.keys((existing && existing.workspaces) || {}))
+  for (const [wsPath, slug] of slugs) {
+    if (presetIdOf(slug) === presetId) return wsPath
+  }
+  return null
+}
+
+/**
+ * 删除工作区预设（DELETE presets/<id>）：配置条目、preset 目录、声明行三位
+ * 一体清理。state 传原始 collectState state（拿 yamlMod / dshHome / configFile，
+ * 绝不能喂 serializeState 的 JSON 视图——loadConfig 需要宿主 yaml 口径）。
+ *
+ * 步骤与护栏：
+ *   1. 现配置读取（破坏性落盘护栏）：读失败硬中止——「去条目 + 整文件覆写」
+ *      不允许对着不可信状态动刀，文案与 generateAndInstall 同款；
+ *   2. workspaces 段去掉该键后经 saveConfig 整体落盘（键已被外部移除也继续
+ *      后续清理，幂等）；配置文件缺失（loadConfig 回 null）时没有条目可去，
+ *      跳过落盘——不为一次删除凭空物化配置文件；
+ *   3. slug 按「删除前键集 ∪ 本路径」分配：键在时恰为删除前键集，与
+ *      generateAndInstall 落盘时的键集（磁盘 ∪ 本路径）同口径，保证算出的
+ *      presetId 与当初产物目录名一致；键不在时同口径现算，纯兜底清理；
+ *   4. preset 目录存在才 rmSync；声明行经 stripHomePatchRows 撤除——该函数对
+ *      文件缺失 / 无托管块是安全 no-op（directory 轨宿主常态），无须预判轨道。
+ *
+ * 不动宿主 workspaceRegistry：注册表层与配置层解耦，DELETE 只清配置与预设产物
+ * （注册工作区是 POST /workspaces 的职责）。返回
+ * { presetId, removedConfigEntry, removedPresetDir }；读配置失败仍按既有约定
+ * 抛错（无 statusCode，由路由层外层 catch 回 500）。
+ */
+export function deleteWorkspacePreset(state, workspacePath) {
+  const { yamlMod, dshHome, configFile } = state
+  const wsPath = path.normalize(path.resolve(workspacePath))
+  let prev = null
+  try {
+    prev = loadConfig(configFile, yamlMod)
+  } catch (err) {
+    throw new Error(`现有配置 ${configFile} 读取失败，已中止（未做任何落盘）: ${err.message}`)
+  }
+
+  const wsEntries = Object.keys(prev?.workspaces ?? {})
+  if (!wsEntries.includes(wsPath)) wsEntries.push(wsPath)
+  const presetId = presetIdOf(assignSlugs(wsEntries).get(wsPath))
+
+  let removedConfigEntry = false
+  if (prev !== null) {
+    const workspaces = { ...prev.workspaces }
+    removedConfigEntry = Object.prototype.hasOwnProperty.call(workspaces, wsPath)
+    delete workspaces[wsPath]
+    // 顶层字段随工作区保存的同一写盘口径重规范化（normalizeTargetFields），
+    // profile 维持磁盘现状（缺省 null 时由序列化器兜底，不引入运行时 profile）。
+    saveConfig(configFile, {
+      profile: prev.profile ?? null,
+      ...normalizeTargetFields(prev),
+      workspaces,
+    })
+  }
+
+  const presetDir = path.join(dshHome, '.agent-presets', presetId)
+  let removedPresetDir = false
+  if (existsSync(presetDir)) {
+    rmSync(presetDir, { recursive: true, force: true })
+    removedPresetDir = true
+  }
+  stripHomePatchRows(dshHome, [presetRowId(presetId)])
+
+  return { presetId, removedConfigEntry, removedPresetDir }
 }
 
 // ── 首装 / 升级后 preset 自动重生成 ─────────────────────────────────────────

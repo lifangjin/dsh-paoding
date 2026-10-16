@@ -750,3 +750,20 @@ workspaces:
 | `generation` | warn | 生成器自身的提示信息（如默认值回退） |
 
 作废口径：**预览**产生的提示随配置草稿的任何改动一并作废（与预览同一逻辑）；**应用**产生的提示描述的是已落盘结果，保留到下一次预览或应用。应用失败时错误 toast 照旧，同时卡片给出每条失败原因；应用成功但存在 warn/error 级提示时，成功 toast 会换成琥珀档「有 N 条检查提示，见下方」。
+
+## 13. HTTP 接口
+
+插件的 Web 后端随 DSH Web 服务同进程挂载在 `/api/paoding/*` 前缀下（回环地址 + 端口随部署，信任围栏与面板一致），面板能做的配置读写，脚本与自动化工具也能照做。预设对象的完整 CRUD 四条：
+
+| 方法与路径 | 语义 |
+| --- | --- |
+| `GET /api/paoding/presets` | 列举预设。返回 `{ ok, presets: [...] }`：全局 `orchestrator` 恒在首位（`scope: 'global'`、`workspacePath: null`，`assignments` = 配置顶层剥掉 `profile` / `workspaces` 后的目标字段），其后按配置 `workspaces` 段逐个工作区项（`scope: 'workspace'`）；每项带 `installed`（落盘产物是否在场） |
+| `POST /api/paoding/presets` | 新增（或幂等更新）工作区预设。body：`{ workspace: <绝对路径>, assignments: <目标字段对象> }`。等价「保存并应用」勾上该工作区：同一条生成管线落 `orchestrator-<slug>` 并把条目并进配置 `workspaces` 段；响应在 apply 字段（`wrote` / `roleResults` / `text` / `presetId` / `configFile` / `warnings`）之外附 `created`（此前配置里是否还没有该条目）与 `workspace`（归一后的绝对路径） |
+| `PUT /api/paoding/presets/<id>` | 更新既有预设。body：`{ assignments }`；`<id>` 取 `orchestrator`（全局更新，等价 apply 不带 workspace）或 `orchestrator-<slug>`（按 id 反查到的工作区）。响应同 POST，但没有 `created` |
+| `DELETE /api/paoding/presets/<id>` | 删除工作区预设：配置 `workspaces` 条目、`~/.dsh/.agent-presets/orchestrator-<slug>` 目录、声明行轨的声明行一次清干净。全局 `orchestrator` 拒绝删除（403）——插件启动自愈会自动重装，卸载请移除 dsh-paoding 插件 |
+
+几点约定：
+
+- **同管线同体检**：写操作（POST / PUT）与面板「保存并应用」走同一条生成管线，响应的 `warnings` 字段即 §12 的结构化体检结果；并共用同一把写盘互斥闸——任一写操作进行中，其余写请求收到 409，稍后重试即可。
+- **错误语义**：请求体缺失 / 工作区目录不存在等 422；目标预设不存在 404；删除全局预设 403；其余服务端错误 500，响应统一为 `{ error }`（生成失败时另带 `warnings`）。
+- **删除只清配置层**：DELETE 清的是配置 `workspaces` 条目与预设产物（目录 + 声明行），不动宿主工作区注册表——注册/注销工作区仍走面板「添加工作区」对应的接口。

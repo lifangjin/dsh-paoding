@@ -762,3 +762,20 @@ Entries come from the structured health review (`tools/lib/health.mjs`); codes a
 | `generation` | warn | Generator's own notices (e.g. default-value fallbacks) |
 
 Invalidation scope: messages from a **preview** are discarded together with the draft on any config edit (same rule as the preview itself); messages from an **apply** describe what has already been written and survive until the next preview or apply. When an apply fails, the error toast stays as usual and the card lists every reason; when an apply succeeds but warn/error-level findings exist, the success toast switches to the amber variant "N check messages, see below".
+
+## 13. HTTP API
+
+The plugin's web backend is mounted under the `/api/paoding/*` prefix inside the DSH web server itself (loopback address + port per your deployment; the same trust fence as the panel). Anything the panel can do to the config, scripts and automation can do too. Full CRUD for preset objects:
+
+| Method & path | Semantics |
+| --- | --- |
+| `GET /api/paoding/presets` | List presets. Returns `{ ok, presets: [...] }`: the global `orchestrator` always comes first (`scope: 'global'`, `workspacePath: null`, `assignments` = the config's top-level target fields minus `profile` / `workspaces`), followed by one entry per configured workspace (`scope: 'workspace'`); every entry carries `installed` (whether the on-disk preset exists) |
+| `POST /api/paoding/presets` | Create (or idempotently update) a workspace preset. Body: `{ workspace: <absolute path>, assignments: <target-fields object> }`. Equivalent to "save & apply" with that workspace selected: the same generation pipeline writes `orchestrator-<slug>` and merges the entry into the config's `workspaces` section; the response adds `created` (whether the config lacked this entry before) and `workspace` (the normalized absolute path) on top of the apply fields (`wrote` / `roleResults` / `text` / `presetId` / `configFile` / `warnings`) |
+| `PUT /api/paoding/presets/<id>` | Update an existing preset. Body: `{ assignments }`; `<id>` is either `orchestrator` (global update, equivalent to apply without a workspace) or `orchestrator-<slug>` (the workspace resolved from the id). Response as POST, but without `created` |
+| `DELETE /api/paoding/presets/<id>` | Delete a workspace preset: the config `workspaces` entry, the `~/.dsh/.agent-presets/orchestrator-<slug>` directory, and its declarative-track row are removed in one go. The global `orchestrator` refuses deletion (403) — the plugin's startup self-heal reinstalls it; uninstall the dsh-paoding plugin instead |
+
+Ground rules:
+
+- **Same pipeline, same health review**: writes (POST / PUT) run through the same generation pipeline as the panel's "save & apply"; the response's `warnings` field is the §12 structured health review. They also share the same in-flight write gate — while any write is running, other writes answer 409; retry shortly.
+- **Error semantics**: missing body fields or a non-existent workspace directory answer 422; an unknown preset id answers 404; deleting the global preset answers 403; anything else answers 500. Responses are uniformly `{ error }` (generation failures additionally carry `warnings`).
+- **Deletion only touches the config layer**: DELETE removes the `workspaces` config entry and the preset artifacts (directory + declarative row), not the host workspace registry — registering/unregistering workspaces remains the job of the API behind the panel's "add workspace".

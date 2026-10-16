@@ -2,11 +2,13 @@
  * paoding-config-ui — DSH Web 插件 (cordis)
  *
  * 把 dsh-paoding 可视化配置器整合进 DSH Web GUI（左侧栏全页配置，无独立服务端）：
- *   - Node 侧：注册 /api/paoding/* 前缀路由（state/models/workspaces/version/
- *     upgrade/preview/apply/rescan/config/export/config/import + client.css
- *     静态样式），经
+ *   - Node 侧：注册 /api/paoding/* 前缀路由（state/models/workspaces/presets/
+ *     version/upgrade/preview/apply/rescan/config/export/config/import +
+ *     client.css 静态样式），经
  *     ./api-core.mjs 复用 tools/install.mjs 的检测与生成管线；workspaces 直连
- *     宿主 workspaceRegistry 服务（list / create，幂等）；version
+ *     宿主 workspaceRegistry 服务（list / create，幂等）；presets 提供预设
+ *     对象的 CRUD（列举 / 新增更新 / 删除工作区预设，全局 orchestrator 由启动
+ *     自愈保障、拒绝删除）；version
  *     复用 tools/lib/version.mjs 的版本检测（npm registry 优先，npmmirror
  *     镜像、GitHub release 依次兜底）；upgrade 经 tools/lib/upgrade.mjs 完成
  *     一键升级（常规 profile spawn dsh 插件转发器；desktop profile 被 dsh CLI
@@ -37,7 +39,7 @@ import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getState, refreshState, isStateCacheStale, serializeState, installAssignments, resolveDshHome, discoverWorkspaceCandidates, ensurePresetInstalled, pluginVersion, exportConfigPayload, importConfigContent } from './api-core.mjs'
+import { getState, refreshState, isStateCacheStale, serializeState, installAssignments, resolveDshHome, discoverWorkspaceCandidates, ensurePresetInstalled, pluginVersion, exportConfigPayload, importConfigContent, listPresets, resolveWorkspacePathByPresetId, deleteWorkspacePreset } from './api-core.mjs'
 import { collectModelRefs } from '../../tools/lib/health.mjs'
 import { detectSkills } from '../../tools/lib/skills.mjs'
 import { collectRuntimeFacts } from './runtime-inventory.mjs'
@@ -287,6 +289,73 @@ async function modelDirectoryOf(ctx) {
     }
   }))
   return { groups: results.filter(Boolean), failures }
+}
+
+/**
+ * 工作区预设写侧公共流程（POST presets / PUT presets/<id> 共用，模块级以便
+ * 复用同一把闸）：与 apply 路由完全同款 —— in-flight 闸防并发写盘、原始 state
+ * 喂生成管线（serializeState 视图会炸 TypeError，契约见 tests/api-apply.test.mjs）、
+ * 按需取模型目录做体检、落盘后强制重刷缓存（best-effort，失败只 warn）。
+ * withCreated：POST 需要回 created（以进 installAssignments 前的
+ * state.existing?.workspaces 判断该工作区键是否已存在）；PUT 一律视作更新，
+ * 不回该键。生成失败按 apply 同款 422（err.warnings 透传体检结果）。
+ */
+async function writeWorkspacePreset(ctx, res, { workspacePath, assignments, withCreated }) {
+  if (applyInFlight) {
+    json(res, 409, { error: '已有一次应用（apply）正在进行，请稍后重试' })
+    return
+  }
+  applyInFlight = true
+  try {
+    const s = await rawStateWithRuntimeFacts(ctx)
+    const created = withCreated
+      ? !(s.existing?.workspaces && Object.prototype.hasOwnProperty.call(s.existing.workspaces, workspacePath))
+      : undefined
+    // 模型目录按需取（unknown_model 体检的比对名单），口径与 apply 一致：
+    // assignments 里没有任何角色专用模型时不做目录发现，拿不到传 null。
+    let models = null
+    if (collectModelRefs(assignments).length > 0) {
+      try {
+        models = (await modelDirectoryOf(ctx)).groups
+      } catch {
+        models = null
+      }
+    }
+    try {
+      const result = installAssignments(s, assignments, {
+        dryRun: false,
+        saveConfigOnWrite: true,
+        workspacePath,
+        models,
+      })
+      // 落盘后强制重刷状态缓存（同 apply：否则浏览器刷新读到应用前的快照）；
+      // best-effort，刷新失败不影响已成功的落盘结果。
+      try {
+        await rawStateWithRuntimeFacts(ctx, { force: true })
+      } catch (err) {
+        ctx.logger?.warn?.('paoding-config-ui: post-apply state refresh failed: ' + String(err?.message ?? err))
+      }
+      json(res, 200, {
+        wrote: result.wrote,
+        staleNote: result.staleNote,
+        roleResults: result.roleResults,
+        text: result.text,
+        // 本次落点随 workspacePath：orchestrator（全局更新）或 orchestrator-<slug>。
+        presetId: result.presetId,
+        configFile: s.configFile,
+        warnings: result.warnings,
+        ...(withCreated ? { created } : {}),
+        workspace: workspacePath,
+      })
+    } catch (err) {
+      json(res, 422, {
+        error: err.message,
+        ...(Array.isArray(err?.warnings) ? { warnings: err.warnings } : {}),
+      })
+    }
+  } finally {
+    applyInFlight = false
+  }
 }
 
 // —— 宿主热切换竞态兜底 ————————————————————————————————————————————
@@ -656,6 +725,129 @@ export async function apply(ctx) {
               : {}),
           })
           return
+        }
+
+        // ── 预设 CRUD（presets 路由族）──────────────────────────────────────
+        // 把「预设对象」的生命周期开放给 API（服务端核心在 api-core.mjs）：
+        //   GET    presets        列举：全局 orchestrator 恒在首位 + 配置
+        //                         workspaces 段的各工作区预设（只读）。
+        //   POST   presets        新增（或幂等更新）工作区预设 = apply 带
+        //                         workspace 的幂等包装：同一生成管线落
+        //                         orchestrator-<slug> 并把条目并进配置
+        //                         workspaces 段，响应多带 created / workspace。
+        //   PUT    presets/<id>   更新既有预设（orchestrator = 全局，等价
+        //                         apply 不带 workspace；orchestrator-<slug>
+        //                         = 反查到的工作区）。
+        //   DELETE presets/<id>   删工作区预设 = 配置条目 + preset 目录产物 +
+        //                         声明行三位一体清理；全局 orchestrator 由
+        //                         插件启动自愈保障，删除一律 403 拒绝。
+        // 写侧三条（POST/PUT/DELETE）与 apply 共用同一把 in-flight 闸：任一
+        // 落盘路径进行中，其余写请求一律 409，防并发交错写配置。方法不符的
+        // 路径不命中以下分支，落到底部 404 兜底（与既有路由一致）。
+        if (route === 'presets' && req.method === 'GET') {
+          // 列举只读：serializeState 后的浏览器视图即可（existing /
+          // installedPresets / workspaceMeta 齐全，见 listPresets）。
+          json(res, 200, { ok: true, presets: listPresets(await stateWithRuntimeFacts(ctx)) })
+          return
+        }
+
+        if (route === 'presets' && req.method === 'POST') {
+          // 新增 / 幂等更新工作区预设。校验先行（不占闸）：assignments 非空
+          // 对象、workspace 归一为绝对路径且 statSync 预检是目录（文案与
+          // POST /workspaces / apply 的工作区预检同款）。
+          const body = await readBody(req)
+          const assignments = body.assignments
+          if (!assignments || typeof assignments !== 'object' || Array.isArray(assignments) || Object.keys(assignments).length === 0) {
+            json(res, 422, { error: '缺少预设配置（body.assignments）' })
+            return
+          }
+          const rawWorkspace = typeof body.workspace === 'string' ? body.workspace.trim() : ''
+          if (rawWorkspace === '') {
+            json(res, 422, { error: '缺少工作区目录绝对路径（body.workspace）' })
+            return
+          }
+          let wsStat = null
+          try { wsStat = statSync(rawWorkspace) } catch { /* 不存在：stat 抛错，落到下方 422 */ }
+          if (!wsStat || !wsStat.isDirectory()) {
+            json(res, 422, { error: `目录不存在或不是目录：${rawWorkspace}` })
+            return
+          }
+          await writeWorkspacePreset(ctx, res, {
+            workspacePath: path.normalize(path.resolve(rawWorkspace)),
+            assignments,
+            withCreated: true,
+          })
+          return
+        }
+
+        if (route.startsWith('presets/') && (req.method === 'PUT' || req.method === 'DELETE')) {
+          const presetId = route.slice('presets/'.length)
+          // 只认单层 id（presets/<id>）；空 id / 多层路径落底部 404 兜底。
+          if (presetId !== '' && !presetId.includes('/')) {
+            // 全局预设两态先行分流：更新 = 等价 apply 不带 workspace；删除
+            // 语义不成立（启动自愈会装回来），403 直接拒绝。
+            if (req.method === 'DELETE' && presetId === 'orchestrator') {
+              json(res, 403, { error: '全局 orchestrator 预设不支持删除：插件启动自愈会自动重装；卸载请移除 dsh-paoding 插件' })
+              return
+            }
+            // PUT 的 body 与校验先行（不占闸，与 POST 同款文案），校验过了再
+            // 分流全局 / 工作区；DELETE 无 body。
+            let assignments = null
+            if (req.method === 'PUT') {
+              const body = await readBody(req)
+              assignments = body.assignments
+              if (!assignments || typeof assignments !== 'object' || Array.isArray(assignments) || Object.keys(assignments).length === 0) {
+                json(res, 422, { error: '缺少预设配置（body.assignments）' })
+                return
+              }
+            }
+            if (presetId === 'orchestrator') {
+              // 全局更新：workspacePath = null、无 created，其余与 POST 一致。
+              await writeWorkspacePreset(ctx, res, { workspacePath: null, assignments, withCreated: false })
+              return
+            }
+            // 工作区预设按 id 反查路径（原始 state 的 existing.workspaces 键集
+            // 整组 assignSlugs，同 basename 的 hash 后缀才对得上）；此处读取
+            // 在闸外（缓存命中近乎零成本），未知的 id 趁早 404，不必等闸。
+            const s0 = await rawStateWithRuntimeFacts(ctx)
+            const workspacePath = resolveWorkspacePathByPresetId(s0.existing, presetId)
+            if (workspacePath === null) {
+              json(res, 404, { error: `未找到预设: ${presetId}` })
+              return
+            }
+            // 目录预检（配置里的路径可能已被外部删除），文案与 POST 同款。
+            let wsStat = null
+            try { wsStat = statSync(workspacePath) } catch { /* 不存在：落到下方 422 */ }
+            if (!wsStat || !wsStat.isDirectory()) {
+              json(res, 422, { error: `目录不存在或不是目录：${workspacePath}` })
+              return
+            }
+            if (req.method === 'PUT') {
+              await writeWorkspacePreset(ctx, res, { workspacePath, assignments, withCreated: false })
+              return
+            }
+            // DELETE：核心清理在 deleteWorkspacePreset（配置重读护栏在函数
+            // 内部），传原始 state 拿 yamlMod / dshHome / configFile。与写侧
+            // 共用同一把闸；成功后显式重刷缓存（saveConfig 已改 mtime，理论
+            // 上缓存自失效，重刷与 POST/PUT 对齐；best-effort）。
+            if (applyInFlight) {
+              json(res, 409, { error: '已有一次应用（apply）正在进行，请稍后重试' })
+              return
+            }
+            applyInFlight = true
+            try {
+              const removed = deleteWorkspacePreset(s0, workspacePath)
+              try {
+                await rawStateWithRuntimeFacts(ctx, { force: true })
+              } catch (err) {
+                ctx.logger?.warn?.('paoding-config-ui: post-apply state refresh failed: ' + String(err?.message ?? err))
+              }
+              json(res, 200, { ok: true, ...removed })
+            } finally {
+              applyInFlight = false
+            }
+            return
+          }
         }
 
         json(res, 404, { error: `no such route: ${req.method} /api/paoding/${route}` })

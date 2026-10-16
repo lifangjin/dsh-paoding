@@ -22,6 +22,7 @@ dsh-paoding (Chinese brand 「庖丁」/ Pao Ding, from the Zhuangzi parable of 
 - **A health check before every save**: preview/apply runs a built-in check — tools configured but not mounted, zero-tool roles, unknown model names, a preset lagging behind the config — each flagged by severity; on the CLI side, `dsh-paoding doctor` runs six read-only checks (config parses, install track, managed declaration block, orphan directories, version marker, preset drift) in one command.
 - **Scenario templates swap the roster in one click**: Lite (implement only), Research (search roles only), and Full (everyone on deck, main agent carrying the whole detected inventory) — templates only touch who is present and what the main agent carries; hand-tuned role settings are never touched.
 - **Config export & import**: download `dsh-paoding.config.yml` from the panel's More menu for migration or backup; imports are validated first, and overwriting the whole config (workspaces included) asks for confirmation.
+- **Config over HTTP**: list, create, update, and delete presets through the four `/api/paoding/presets` endpoints, served in-process by the DSH web service and callable over loopback; they ride the panel's Save & Apply generation pipeline and share its write lock, so scripts and automation tools can reshape the roster without opening a browser.
 - **Panel in English and Chinese**: every UI string ships in both languages, auto-detected (explicit choice first, then Chinese signals — browser language, host page language, Chinese time zones — outrank English ones, since the Electron shell pins navigator to en-US regardless of the OS), switchable from the More menu and remembered.
 - **Notified of new releases, one-click upgrade in the panel**: the panel compares your local version against the latest npm registry publish (npmmirror and GitHub release as successive fallbacks) and points to the release page when a newer one is out. The Upgrade button swaps in the new version in place (profile auto-detected): regular profiles go through `dsh plugin update dsh-paoding`, while the Electron-owned desktop profile — which the dsh CLI guards against — gets a direct `pnpm add dsh-paoding@<version>` run in the profile directory, falling back to `corepack pnpm` when no bare pnpm is on PATH; a DSH restart applies it, and the orchestrator preset regenerates itself against the new version on startup. A dev checkout in link: form cannot be upgraded in place — the panel tells you how to switch back to the registry version. If the check fails (offline, rate-limited), a subdued "version check failed · retry" row stays in the header (full causes and proxy hints in its tooltip) without popping anything up.
 - **Installs and uninstalls cleanly**: no DSH source changes; active in a new session right after install, gone when you delete one directory.
@@ -81,6 +82,14 @@ While a helper runs, the main agent can send follow-ups, check progress, or stop
 
 All preferences live in `~/.dsh/dsh-paoding.config.yml`: role add/remove/tweak, skill assignment, per-role models, per-role session modes (one-shot / continuable), per-role start modes (fresh / fork), the main agent's tools and skills… Edit it, open the 庖丁配置 (Paoding Config) entry at the bottom of the sidebar, and hit Save & Apply — the preset syncs. It is regenerated from "static source + config" every time, so no manual patches pile up. The full key reference is in the [configuration guide](docs/configuration_en.md); the rationale and the cost ledger are in the [architecture guide](docs/architecture_en.md).
 
+Prefer driving it from a script? An HTTP API covers the same ground: `/api/paoding/presets` lists, creates, updates, and deletes presets. It rides the DSH web service (same port you open DSH at in the browser) and answers loopback calls directly:
+
+```bash
+curl http://127.0.0.1:19387/api/paoding/presets
+```
+
+Writes go through the same generation pipeline and write lock as the panel's Save & Apply. Methods, request bodies, and error semantics are in [section 13 of the configuration guide](docs/configuration_en.md).
+
 ## Documentation
 
 | Document | Contents |
@@ -88,7 +97,7 @@ All preferences live in `~/.dsh/dsh-paoding.config.yml`: role add/remove/tweak, 
 | [Architecture](docs/architecture_en.md) | Why it is designed this way — overview, the cost ledger, roles and tools, mapping to DSH's native mechanisms, token governance, known limits. |
 | [Installation](docs/installation_en.md) | The single official channel (`dsh plugin add`), version support and the dual preset landing (DSH 0.1.5 – 0.2.0-rc.2), first-install automation and the version marker, upgrading, dev-checkout install, host patch detection, the Paoding Config panel, uninstalling, troubleshooting. |
 | [Orchestration](docs/orchestration_en.md) | Orchestration overview, how failures surface and the three recovery layers, one-shot vs continuable, context isolation. |
-| [Configuration](docs/configuration_en.md) | The full key reference, tool-entry wildcards, tuning built-in roles, main-agent tools and skills, custom roles, per-role models, per-role session and start modes, scenario templates, config export/import, health-check hints. |
+| [Configuration](docs/configuration_en.md) | The full key reference, tool-entry wildcards, tuning built-in roles, main-agent tools and skills, custom roles, per-role models, per-role session and start modes, scenario templates, config export/import, health-check hints, the HTTP API. |
 
 ## Contributing
 

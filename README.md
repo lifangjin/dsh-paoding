@@ -22,6 +22,7 @@ dsh-paoding（中文品牌「庖丁」，典出《庄子》——庖丁顺纹理
 - **保存前先体检**：预览/应用时自动过一遍检查——配置了但未挂载的工具、零工具角色、查无此名的模型、预设落后于配置，分级提示一目了然；CLI 侧 `dsh-paoding doctor` 六项只读自检（配置可解析、安装轨道、声明行托管块、孤儿目录、版本标记、预设漂移），一条命令查全身。
 - **场景模板一键换班底**：轻量（只留实现）、调研（只留检索）、全开（全员到齐、主 agent 带满检测库存）三档点一下就切，只动「谁在场 + 主 agent 额外带什么」，精调过的角色配置分毫不动。
 - **配置可导出可导入**：面板「更多」菜单一键下载 `dsh-paoding.config.yml`，换机迁移、备份整份拷走；导入先验格式，覆盖整体配置（含工作区段）需二次确认。
+- **HTTP 接口直连配置**：预设的列举、新增、更新、删除走 `/api/paoding/presets` 四条接口，随 DSH Web 服务同进程挂载、本机回环直调；与面板「保存并应用」同一条生成管线、同一把写盘互斥闸——脚本和自动化工具改班底，不必开浏览器。
 - **面板中英双语**：界面文案 zh/en 全覆盖，语言自动识别（显式选择 → 中文信号优先：浏览器语言、宿主页面语言、中文时区），「更多」菜单一键切换并记住。
 - **版本更新有提醒，面板一键升级**：面板会对比 npm registry（npmmirror 镜像、GitHub release 依次兜底）上的最新版本，发现新版就地提示并附上发布页链接；点「升级」就地换上新版（profile 自动探测：普通 profile 走 `dsh plugin update dsh-paoding`；desktop profile 被 dsh CLI 的 Electron 专属守卫挡住，改在 profile 目录直跑 `pnpm add dsh-paoding@<版本>`，pnpm 找不到时自动回落 `corepack pnpm`），重启 DSH 后生效，编排预设会在重启时按新版自动重生成。开发检出的 link 形态无法就地升级，面板会提示切回 registry 版的办法；检测失败时页头留一行「版本检测失败 · 重试」（完整原因与代理排查提示在悬浮提示里），不弹窗打扰。
 - **来去自由**：不改 DSH 一行源码；装完新会话即用，卸载即删目录。
@@ -81,6 +82,14 @@ dsh plugin --profile web add link:"$PWD/dsh-paoding"
 
 所有偏好都写在 `~/.dsh/dsh-paoding.config.yml`：角色增删改、技能分配、专用模型、会话模式（one-shot / continuable）、启动方式（fresh / fork）、主 agent 的工具与技能……改完打开左侧栏底部的「庖丁配置」入口，点「保存并应用」即同步生效。预设每次由「静态源 + 配置」重新生成，不攒手工补丁。全部配置键说明见 [配置文档](docs/configuration.md)；背后机制与成本账见 [架构文档](docs/architecture.md)。
 
+偏好走脚本的，还有一套 HTTP 接口：`/api/paoding/presets` 覆盖预设的列举 / 新增 / 更新 / 删除，随 DSH Web 服务同进程（端口即浏览器打开 DSH 的那个端口），本机回环直调即可：
+
+```bash
+curl http://127.0.0.1:19387/api/paoding/presets
+```
+
+写操作与面板「保存并应用」同一条生成管线与写盘互斥。方法、请求体与错误语义见 [配置文档](docs/configuration.md)第 13 节。
+
 ## 文档
 
 | 文档 | 内容 |
@@ -88,7 +97,7 @@ dsh plugin --profile web add link:"$PWD/dsh-paoding"
 | [架构](docs/architecture.md) | 为什么这样设计——概述、成本账、角色与工具、对应 DSH 原生机制、Token 治理、已知边界。 |
 | [安装](docs/installation.md) | 官方插件通道一条命令安装、版本支持与预设落点双轨（DSH 0.1.5 – 0.2.0-rc.2）、首装自动化与版本标记、升级、开发检出自装、host patch 检测机制、庖丁配置面板、卸载、排查。 |
 | [编排](docs/orchestration.md) | 编排总览、失败如何呈现与三层处理、one-shot vs continuable、上下文隔离。 |
-| [配置](docs/configuration.md) | 配置键全参考、工具条目通配符、内置角色微调、主 agent 工具与技能、自定义角色、按角色分模型、角色会话与启动方式、场景模板、配置导出导入、检查提示。 |
+| [配置](docs/configuration.md) | 配置键全参考、工具条目通配符、内置角色微调、主 agent 工具与技能、自定义角色、按角色分模型、角色会话与启动方式、场景模板、配置导出导入、检查提示、HTTP 接口。 |
 
 ## 贡献
 
