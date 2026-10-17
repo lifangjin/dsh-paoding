@@ -31,6 +31,12 @@
  * workflow worker 行按宿主版本生成期适配（adaptWorkflowWorkerRow：≥0.1.6 把
  * 0.1.5-only 的 workflow-worker-thread 条目换成 workflow-ptc；探测不到版本
  * 保守保留源行，产物零 diff 性质随之保留）。
+ * 角色委派行也按宿主版本生成期适配（adaptPresetRoleRows：≥0.2.1 把内联
+ * persona / toolFilter 的角色行瘦身为 agentPreset 选择子预设——dsh-tool-subagent
+ * 0.2.1 起 apply() 硬拒 persona / toolFilter 键——并追加 paoding-role-<toolName>
+ * AgentPreset 声明行（dsh-persona config.prefix 带角色人设 + ./role-restrict.mjs
+ * 行带工具面 allow）；fork provider 不支持 agentPreset，fork 角色 persona/
+ * toolFilter 丢弃并 warn；< 0.2.1 / 探测不到版本保守保留源形状）。
  * 自定义角色另有三道防护/自动化：toolName 保留名校验（assertCustomToolName，
  * 内置角色 / restrictBase / subagent* / mcp__ 前缀 / YAML 字面量一律 throw）；
  * tools 为空时拒绝安装零工具角色（renderCustomRoleBlocks 直接 throw，防
@@ -44,7 +50,7 @@
 import { DEFAULT_MAIN_AGENT_PERSONA_EXTRA, ROLES, warn } from './util.mjs'
 import { normalizeModelRef, yamlScalar } from './config.mjs'
 import { isHostDependent } from './host.mjs'
-import { isPtcWorkerHost } from './preset-system.mjs'
+import { isPresetRoleHost, isPtcWorkerHost } from './preset-system.mjs'
 import { expandToolPatterns } from './glob.mjs'
 
 // ── workflow worker 行的宿主版本适配 ─────────────────────────────────────────
@@ -81,6 +87,280 @@ export function adaptWorkflowWorkerRow(text, hostVersionTriple) {
     throw new Error('workflow-worker-thread block not found in source agent.cordis.yml')
   }
   return text.replace(WORKER_THREAD_BLOCK, WORKER_PTC_BLOCK)
+}
+
+// ── 角色委派行宿主版本适配（DSH 0.2.1+ AgentPreset 形态）────────────────────
+
+/** 角色 AgentPreset 声明行的 id 前缀（paoding-role-<toolName>，与 deleg 行的
+ * agentPreset: 键互指）。前缀本身保证 id 是干净标量，toolName 无需再过引号。 */
+export const ROLE_PRESET_ID_PREFIX = 'paoding-role-'
+/** 角色 AgentPreset 的 order 分配：base + step × 序号，内置在前、自定义随后。 */
+const ROLE_PRESET_BASE_ORDER = 100
+const ROLE_PRESET_ORDER_STEP = 10
+/** 角色面行（preset plugins 内）的本地插件名，buildPresetRowText 据此绝对化。 */
+const ROLE_RESTRICT_ROW_NAME = './role-restrict.mjs'
+
+/** 子预设声明行前的说明注释（生成产物自解释；风格照抄源模板段注释）。 */
+const ROLE_PRESET_HEADER = [
+  '# ── 角色子预设（DSH 0.2.1+ agentPreset 形态）──────────────────────────────',
+  '# 0.2.1 起 dsh-tool-subagent 拒绝内联 persona / toolFilter（apply 时抛',
+  '# "persona is no longer supported"），角色人设与工具面改挂各角色的',
+  '# AgentPreset（spawn provider 支持 agentPreset 选择子预设）。显式选择时子',
+  '# agent 不继承父 preset、也不会自动获得 standard 基础工具，所以每个角色',
+  '# preset 的 plugins 是完整组合：standard 基础行（下方 shell/filesystem/jobs/',
+  '# skills/goals/plan/compaction 与 remaining 各节的工具注册行，与主 preset',
+  '# 逐字同源照抄）+ 该角色 persona + role-restrict 裁面——只放 persona 与',
+  '# restrict 的子预设会让子 agent 一个工具都没有：',
+  '#   · standard 基础行 → 与 preset-orchestrator 同源，只注册不裁面；',
+  '#     MCP 工具（tavily 等）由宿主全局注册，无需 preset 行，allow 引用即可',
+  '#   · persona       → dsh-persona 的 config.prefix（角色人设原样搬运）',
+  '#   · role-restrict → role-restrict.mjs 在 system-prompt/assemble 瀑布上',
+  '#     无条件按 config.allow 裁剪子 agent 工具面（与主 agent restrict.mjs',
+  '#     语义相反：无 delegated-child 放行守卫；assemble 期全部名字已注册，',
+  '#     fail-open；注册级不做 deny，role allow 含 skill 时技能目录注入守卫',
+  '#     才能放行）',
+  '#   · fork provider 不支持 agentPreset——fork 角色的人设/工具面被丢弃，',
+  '#     子 agent 按宿主缺省组合启动（生成期已 warn）',
+].join('\n')
+
+/** 内置角色（含静态的 search_internal_deep）的缺省显示名（无 roles.<toolName>.name
+ * 配置时子预设的 name 落这里；自定义角色退到 persona 首行职责句）。 */
+const ROLE_DISPLAY_NAME_DEFAULTS = {
+  search_external: '外部调研',
+  design: '设计',
+  implement: '实现',
+  search_internal_deep: '全仓深度探索',
+}
+
+/** 剥掉 yamlScalar 落盘的成对引号（'123' / "x" → 123 / x）；其余原样返回。 */
+function unquoteYamlScalar(text) {
+  const s = String(text ?? '').trim()
+  if (s.length >= 2 && ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith('"') && s.endsWith('"')))) {
+    return s.slice(1, -1)
+  }
+  return s
+}
+
+/**
+ * 块标量内容区结束下标扫描（appendToMainPersona 的结构扫描原样复用）：首内容行
+ * 定缩进，到第一条比内容缩进浅的非空行为止。
+ */
+function blockScalarEnd(text, contentStart) {
+  const firstLineEnd = text.indexOf('\n', contentStart)
+  const firstLine = text.slice(contentStart, firstLineEnd === -1 ? text.length : firstLineEnd)
+  const indent = (firstLine.match(/^[ \t]*/) ?? [''])[0].length
+  let cursor = contentStart
+  let end = contentStart
+  while (cursor < text.length) {
+    const lineEnd = text.indexOf('\n', cursor)
+    const line = text.slice(cursor, lineEnd === -1 ? text.length : lineEnd)
+    if (line.trim() !== '' && (line.match(/^[ \t]*/) ?? [''])[0].length < indent) break
+    end = lineEnd === -1 ? text.length : lineEnd + 1
+    cursor = end
+  }
+  return end
+}
+
+/**
+ * 解析一条旧形（内联 persona / toolFilter）角色委派块：头部 provider / toolName、
+ * persona 块标量文本、toolFilter.allow 名单与瘦身 drop span [dropStart, dropEnd)
+ *（从 `persona:` 行行首到最后一条 allow 条目行行尾——恰是 0.2.1 形状下要删掉/替换
+ * 的整段）。块内无 persona 行（已是新形 / 已瘦身的 fork 块 / 非角色行）返回 null；
+ * 有 persona 而缺 toolName / allow 属模板漂移，硬错误（与其余 marker 缺失口径一致）。
+ */
+function parseInlineRoleBlock(text, itemStart, blockEnd) {
+  const personaMarker = '        persona: |-'
+  const personaKeyIdx = text.indexOf(personaMarker, itemStart)
+  if (personaKeyIdx === -1 || personaKeyIdx >= blockEnd) return null
+  const head = text.slice(itemStart, personaKeyIdx)
+  const toolNameM = /\n        toolName: ([^\n]*)/.exec(head)
+  if (!toolNameM) throw new Error('角色委派块缺 toolName 行（0.2.1 角色行适配无法定位 8 空格缩进的 "toolName: "）')
+  const providerM = /\n        provider: ([^\n]*)/.exec(head)
+  // persona 块标量：key 行之后 `|-` + 换行 + 缩进内容（缩进剥皮走 personaDefaultText）。
+  const dashStart = personaKeyIdx + personaMarker.length // 指向 `|-` 之后的换行
+  const contentStart = dashStart + 1
+  const personaEnd = blockScalarEnd(text, contentStart)
+  const personaText = personaDefaultText(text.slice(dashStart, personaEnd))
+  // toolFilter.allow：10 空格键行 + 12 空格条目行，扫到第一条非条目行为止
+  //（下一块的注释行 / 空行天然截断，drop span 不吞下一块内容）。
+  const allowKeyIdx = text.indexOf('\n          allow:', personaEnd)
+  if (allowKeyIdx === -1 || allowKeyIdx >= blockEnd) {
+    throw new Error('角色委派块缺 toolFilter.allow（0.2.1 角色行适配要求内联 allow 可定位）')
+  }
+  const names = []
+  let cursor = allowKeyIdx + '\n          allow:'.length + 1 // 首条目行行首
+  let end = cursor
+  while (cursor < text.length && cursor < blockEnd) {
+    const lineEnd = text.indexOf('\n', cursor)
+    const line = text.slice(cursor, lineEnd === -1 ? text.length : lineEnd)
+    const m = /^            - (.*)$/.exec(line)
+    if (!m) break
+    names.push(unquoteYamlScalar(m[1]))
+    end = lineEnd === -1 ? text.length : lineEnd + 1
+    cursor = end
+  }
+  if (names.length === 0) {
+    throw new Error('角色委派块的 toolFilter.allow 为空（生成器拒绝零工具角色，空名单属模板漂移）')
+  }
+  return {
+    toolName: unquoteYamlScalar(toolNameM[1]),
+    provider: providerM ? unquoteYamlScalar(providerM[1]) : 'spawn',
+    personaText,
+    names,
+    dropStart: personaKeyIdx,
+    dropEnd: end,
+  }
+}
+
+/** 渲染一条角色 AgentPreset 声明行（agent.cordis.yml 顶层行形状，0 缩进起排）：
+ * config.plugins = dsh-persona（config.prefix 带角色人设）+ role-restrict.mjs
+ * （config.allow 带角色工具面）+ standard 基础行（baseRowsBlock，已归一化并
+ * 预缩进到条目层级——0.2.1 显式选择 preset 时子 agent 不继承父 preset，角色
+ * preset 必须自带完整基础组合）。persona 文本渲染沿用 renderPersona（12 空格
+ * 内容缩进 = plugins 内 config.prefix 的块标量缩进）。 */
+function renderRolePresetRow({ presetId, displayName, order, personaText, allowNames, baseRowsBlock }) {
+  return (
+    [
+      `- id: ${presetId}`,
+      `  name: '@deepseek-ai/dsh-agent-preset'`,
+      '  config:',
+      `    id: ${presetId}`,
+      `    name: ${yamlScalar(displayName)}`,
+      `    order: ${order}`,
+      '    plugins:',
+      '      - id: persona',
+      `        name: '@deepseek-ai/dsh-persona'`,
+      '        config:',
+      '          prefix: |-',
+      ...String(personaText).split('\n').map((l) => (l === '' ? '' : `            ${l}`)),
+      '      - id: role-restrict',
+      `        name: ${ROLE_RESTRICT_ROW_NAME}`,
+      '        config:',
+      '          allow:',
+      ...allowNames.map((n) => `            - ${yamlScalar(n)}`),
+    ].join('\n') + '\n' + baseRowsBlock + '\n'
+  )
+}
+
+/**
+ * 从生成产物抽取角色 preset 共用的 standard 基础行片段：shell 分节注释行 →
+ * 「delegation and workflows」分节注释行之前（工具注册 + planning/compaction
+ * 组），加 remaining-marker 注释行之后到文尾（ask-user / todo / web）。两段
+ * 都在委派层之外，恰好排除了编排层四行（persona / agent-instructions /
+ * orchestrator-restrict / delegation-labels）与 delegation 组（含 worker 行）。
+ * 分节注释缺失属模板漂移——只放 persona+restrict 的角色 preset 会让子 agent
+ * 零工具，硬错误优于静默产出废 preset。返回已归一（去首尾空行）并整体 +6
+ * 缩进到 plugins 条目层级的文本块（两段之间一个空行）。
+ */
+function extractRoleBaseRows(out) {
+  const shellIdx = out.indexOf('# ── shell')
+  const delegIdx = out.indexOf('# ── delegation and workflows')
+  const markerIdx = out.indexOf('# ── remaining model-facing rows')
+  if (shellIdx === -1 || delegIdx === -1 || markerIdx === -1 || delegIdx < shellIdx || markerIdx < delegIdx) {
+    throw new Error(
+      '角色子预设 standard 基础行定位失败（模板漂移：缺 "# ── shell" / ' +
+        '"# ── delegation and workflows" / "# ── remaining model-facing rows" 分节注释）',
+    )
+  }
+  const slice2Start = out.indexOf('\n', markerIdx) + 1 // 跳过 marker 注释行本身
+  const normalize = (text) => {
+    const lines = text.replace(/\n+$/, '').split('\n')
+    while (lines.length > 0 && lines[0].trim() === '') lines.shift()
+    while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop()
+    return lines.map((l) => (l === '' ? '' : `      ${l}`)).join('\n')
+  }
+  return `${normalize(out.slice(shellIdx, delegIdx))}\n\n${normalize(out.slice(slice2Start))}`
+}
+
+/**
+ * 角色委派行宿主版本适配（≥0.2.1 走 AgentPreset 形态，见 isPresetRoleHost）：
+ *  1) 扫全部 4 空格缩进的 `- id: delegation-<rowId>` 行（内置三块 +
+ *     search_internal_deep 静态块 + 自定义角色块；delegation-labels 等顶层行
+ *     缩进不匹配）；块边界 = 下一行首 / '# ── remaining model-facing rows' / 文尾。
+ *  2) 逐块 parseInlineRoleBlock；无 persona 行的块（已适配 / 非旧形）原样跳过
+ *    （幂等：重复调用零改动）。
+ *  3) 瘦身：块内 [persona 行首, allow 末条目行尾) 整段替换为
+ *     `        agentPreset: paoding-role-<toolName>`（其余键 provider / toolName /
+ *     agentOptions / backgroundMode 原样保留）；fork provider 不支持 agentPreset
+ *     （capabilities 仅 spawn 声明）→ 整段删除 + warn（0.2.1 守卫禁止内联回退）。
+ *  4) 非瘦身块逐个渲染成 paoding-role-<toolName> AgentPreset 声明行，插到
+ *     '# ── remaining model-facing rows' 注释之前（自定义角色块之后，块间空行
+ *     风格与全文一致）。声明行 plugins 除 persona + role-restrict 外照抄
+ *     standard 基础行（extractRoleBaseRows：0.2.1 显式选择 preset 时子 agent
+ *     不继承父 preset，角色 preset 必须是完整组合）。
+ * < 0.2.1 / 探测不到版本：原样返回（产物零 diff 不变量）。hostPrerelease 可选
+ *（0.2.1 的 prerelease 再分辨：守卫 0.2.1-rc.2 落地，rc.0/rc.1 保持内联形状，
+ * 见 isPresetRoleHost）。调用点在 composeGenerated 全部 edits 应用之后，与
+ * span 偏移零交互（同 adaptWorkflowWorkerRow）。
+ */
+export function adaptPresetRoleRows(text, assignments, hostVersionTriple, hostPrerelease) {
+  if (!isPresetRoleHost(hostVersionTriple, hostPrerelease)) return text
+  const rowRe = /^    - id: (delegation-\S+)[ \t]*$/gm
+  const starts = []
+  let m
+  while ((m = rowRe.exec(text)) !== null) starts.push(m.index)
+  if (starts.length === 0) return text
+  const tailIdx = text.indexOf('# ── remaining model-facing rows')
+  const blocks = []
+  for (let i = 0; i < starts.length; i++) {
+    const blockEnd = i + 1 < starts.length ? starts[i + 1] : tailIdx === -1 ? text.length : tailIdx
+    const parsed = parseInlineRoleBlock(text, starts[i], blockEnd)
+    if (parsed !== null) blocks.push(parsed)
+  }
+  if (blocks.length === 0) return text // 全部已是新形：幂等零改动
+  // 子预设顺序（order 分配 + 声明行落盘序）：内置三角色（ROLES 序，在场的）→
+  // search_internal_deep 静态 → 自定义角色（文档序）；同一块只出现一次。
+  const ordered = []
+  for (const roleName of [...ROLES, 'search_internal_deep']) {
+    const block = blocks.find((b) => b.toolName === roleName)
+    if (block !== undefined) ordered.push(block)
+  }
+  for (const block of blocks) {
+    if (!ordered.includes(block)) ordered.push(block)
+  }
+  const displayNameOf = (toolName, personaText) => {
+    const raw = assignments?.roles?.[toolName]?.name
+    if (typeof raw === 'string' && raw.trim() !== '') return raw.trim()
+    if (ROLE_DISPLAY_NAME_DEFAULTS[toolName] !== undefined) return ROLE_DISPLAY_NAME_DEFAULTS[toolName]
+    return firstLine(personaText)
+  }
+  const chunks = []
+  const dropEdits = []
+  // standard 基础行片段从原文提取即可：两段切片（shell→delegation 注释行之间、
+  // remaining marker→文尾）都在委派层之外，瘦身编辑不落在切片内。
+  const baseRowsBlock = extractRoleBaseRows(text)
+  for (let idx = 0; idx < ordered.length; idx++) {
+    const block = ordered[idx]
+    if (block.provider === 'fork') {
+      warn(
+        `roles.${block.toolName}: start_mode: 'fork' 不支持 agentPreset（仅 spawn provider 支持），` +
+          '0.2.1+ 宿主上该角色的 persona 与 toolFilter 已丢弃——子 agent 将按宿主缺省组合启动',
+      )
+      dropEdits.push({ start: block.dropStart, end: block.dropEnd, text: '' })
+      continue
+    }
+    const presetId = `${ROLE_PRESET_ID_PREFIX}${block.toolName}`
+    const order = ROLE_PRESET_BASE_ORDER + ROLE_PRESET_ORDER_STEP * idx
+    chunks.push(
+      renderRolePresetRow({
+        presetId,
+        displayName: displayNameOf(block.toolName, block.personaText),
+        order,
+        personaText: block.personaText,
+        allowNames: block.names,
+        baseRowsBlock,
+      }),
+    )
+    dropEdits.push({ start: block.dropStart, end: block.dropEnd, text: `        agentPreset: ${presetId}\n` })
+  }
+  let out = text
+  dropEdits.sort((a, b) => b.start - a.start)
+  for (const edit of dropEdits) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end)
+  if (chunks.length === 0) return out
+  const insertAt = out.indexOf('# ── remaining model-facing rows')
+  if (insertAt === -1) throw new Error('remaining model-facing rows marker not found')
+  const presetBlock = ROLE_PRESET_HEADER + '\n\n' + chunks.join('\n')
+  return out.slice(0, insertAt) + presetBlock + '\n' + out.slice(insertAt)
 }
 
 // ── restrict.mjs main-agent allow base ──────────────────────────────────────
@@ -733,7 +1013,7 @@ export function filterUsableTools(tools, presetUniverse, inventory) {
  * block / restrict config.allow injection) plus the per-role diff info for
  * the report.
  */
-export function composeGenerated(srcText, blocks, personaBlocks, assignments, inventory, restrictBase, mainAgentSkillMetas = {}, hostVersionTriple = null) {
+export function composeGenerated(srcText, blocks, personaBlocks, assignments, inventory, restrictBase, mainAgentSkillMetas = {}, hostVersionTriple = null, hostPrerelease = undefined) {
   const skillsMap = assignments.skills ?? {}
   const customToolNames = Object.keys(assignments.roles).filter((n) => !ROLES.includes(n))
   // roles_remove：被删除的内置角色不产 allow/persona edits（委派行整条删除时避免重叠），
@@ -1015,6 +1295,10 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
     ? DEFAULT_MAIN_AGENT_PERSONA_EXTRA
     : String(personaExtraRaw)
   if (personaExtra !== '') out = appendToMainPersona(out, '\n\n' + personaExtra)
+
+  // 角色委派行宿主版本适配（≥0.2.1：内联 persona/toolFilter → agentPreset 子预设
+  // + paoding-role-* 声明行；fork 角色丢弃并 warn；见 adaptPresetRoleRows）。
+  out = adaptPresetRoleRows(out, assignments, hostVersionTriple, hostPrerelease)
 
   return { text: out, roleResults }
 }

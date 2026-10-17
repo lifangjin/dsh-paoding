@@ -12,7 +12,7 @@
 
 - **Node.js ≥ 18**。DSH host 与插件链路都跑在 Node 上；版本过低时 `dsh` 本身就起不来。可用 `node --version` 自查。
 - **pnpm 可用**。`dsh plugin` 是 pnpm 的透明转发器：插件包装进 profile 时由 pnpm 完成。缺失时安装命令会报 pnpm 相关错误，装好 pnpm（`npm i -g pnpm` 或 `corepack enable`）后重试。
-- **已安装 DSH host**（`dsh` 可用，含其 Web/agent 运行时；**@deepseek-ai/dsh 0.1.5 – 0.2.0-rc.2** 全支持，安装器自动适配两代预设机制，详见第 2 节「版本支持与预设落点双轨」）。本插件不改 DSH 源码，只往 DSH 的 preset roster 写入编排预设、并把「庖丁配置」面板挂进 Web 左侧栏，因此先要有可用的 DSH 家目录。
+- **已安装 DSH host**（`dsh` 可用，含其 Web/agent 运行时；**@deepseek-ai/dsh 0.1.5 – 0.2.1** 全支持，安装器自动适配宿主版本（预设落点与角色委派行形态），详见第 2 节「版本支持与预设落点双轨」）。本插件不改 DSH 源码，只往 DSH 的 preset roster 写入编排预设、并把「庖丁配置」面板挂进 Web 左侧栏，因此先要有可用的 DSH 家目录。
 - **路径事实**（生成管线内建常量，写死前先了解它们）：
 
 | 项 | 默认值 | 说明 |
@@ -50,9 +50,9 @@ dsh plugin --profile web add dsh-paoding
 
 `--profile web` 决定插件装进哪个 profile：「庖丁配置」面板只在以该 profile 启动的 DSH Web 里出现。`web` 是 `dsh web` 的默认 profile，多数机器无需改动；多 profile 用户对每个需要的 profile 各执行一次 `dsh plugin add`。编排预设本体落在 `$DSH_HOME/.agent-presets/`，全机共享、不随 profile 走——DSH ≥ 0.1.7 的声明行写在 home 层 `$DSH_HOME/cordis.patch.yml`，同样与 profile 无关——在任何 profile 的面板里「保存并应用」，写的都是同一份预设。
 
-### 版本支持与预设落点双轨（DSH 0.1.5 – 0.2.0-rc.2）
+### 版本支持与预设落点双轨（DSH 0.1.5 – 0.2.1）
 
-本插件兼容两代宿主：**DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.1 / 0.2.0-rc.2 全部支持**，安装与使用流程完全一致。插件 0.3.4 起，package.json 显式声明 `peerDependencies: @deepseek-ai/dsh >= 0.1.5`——0.1.7 起宿主装插件前做兼容性预检，无声明等于默认放行，显式声明后按真实兼容面把关；0.1.5 / 0.1.6 不读这个字段，声明纯属元数据，不影响安装。
+本插件兼容两代宿主：**DSH 0.1.5 / 0.1.6 / 0.1.7-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.1 / 0.2.0-rc.2 / 0.2.1-rc.2+ 全部支持**，安装与使用流程完全一致。插件 0.3.4 起，package.json 显式声明 `peerDependencies: @deepseek-ai/dsh >= 0.1.5`——0.1.7 起宿主装插件前做兼容性预检，无声明等于默认放行，显式声明后按真实兼容面把关；0.1.5 / 0.1.6 不读这个字段，声明纯属元数据，不影响安装。
 
 两代宿主发现「本地 authored preset」的机制不同，安装器据此分双轨落点，宿主检测全自动、用户无感：
 
@@ -70,6 +70,7 @@ dsh plugin --profile web add dsh-paoding
 
 - **降级自愈（0.1.7 → 0.1.6）**：0.1.6 不认识声明行，声明行留在 patch 里会让 profile 启动失败——安装器自动撤下 home patch 里的托管块；目录轨产物本就齐全，预设无缝回到目录扫描。
 - **升级迁移（0.1.6 → 0.1.7）**：安装器自动补写托管块；`.agent-presets/` 里按旧轨生成的 preset 会话（`agentPreset: orchestrator`）在新轨下按 `config.id` 继续对上，老会话恢复不断档。
+- **角色委派行换代（0.2.0 → 0.2.1）**：0.2.1 起 dsh-tool-subagent 拒绝配置里的内联 persona / toolFilter（出现即抛错，挂编排预设的新建会话直接失败），自愈整盘重生成把人设与工具面迁到各角色的 AgentPreset（`agentPreset: paoding-role-<角色名>`）；工作区专属预设（orchestrator-<slug>）随同轮自愈一并换代。0.2.1 的 prerelease 再细分——守卫自 0.2.1-rc.2 落地，rc.0 / rc.1 仍按内联形状生成。
 
 另有两处跨版本行为对齐，同样自动完成、无需用户动作：
 

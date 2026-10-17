@@ -48,7 +48,7 @@ import { composeGenerated, extractMainAgentAllow } from './compose.mjs'
 import { smartDefaults } from './alloc.mjs'
 import {
   buildPresetRowText,
-  detectHostVersionTriple,
+  detectHostVersionInfo,
   detectPresetSystem,
   listOrchestratorPresetIds,
   presetRowId,
@@ -61,10 +61,11 @@ import {
 /**
  * 预设源文件清单（generateAndInstall 原样复制件；agent.cordis.yml 走重写，
  * 不在此列）。collectState 的存在性检查与物化复制共用同一份，加源文件只改
- * 这一处。delegation-labels.mjs 与 restrict.mjs 同生命周期：都是本地 cordis
- * 插件，声明行轨内联时按绝对 file: URL 引用。
+ * 这一处。restrict.mjs / delegation-labels.mjs / role-restrict.mjs 同生命周期：
+ * 都是本地 cordis 插件，声明行轨内联时按绝对 file: URL 引用（role-restrict.mjs
+ * 仅 0.2.1+ AgentPreset 形态产物引用，老宿主复制了不引用、无害）。
  */
-export const PRESET_ASIS_FILES = ['preset.yml', 'restrict.mjs', 'delegation-labels.mjs']
+export const PRESET_ASIS_FILES = ['preset.yml', 'restrict.mjs', 'delegation-labels.mjs', 'role-restrict.mjs']
 
 /**
  * 预设源文件存在性检查（collectState 第一步）：全部源文件缺任一件即硬错误，
@@ -249,9 +250,13 @@ export async function collectState({ dshHome, configFile, profile = null, patche
   //（见 preset-system.detectPresetSystem 的降级链）。
   const presetSystem = await detectPresetSystem({ dshHome, runtimeSystem: runtimeFacts?.presetSystem ?? null })
 
-  // 宿主版本三元组（argv 宿主版本 > dsh --version > null，探测不到按未知处理）：
-  // workflow worker 行的生成期形态判定（isPtcWorkerHost）与标记 worker 行都从这里取。
-  const hostVersionTriple = detectHostVersionTriple()
+  // 宿主版本信息（argv 宿主版本 > dsh --version > null，探测不到按未知处理）：
+  // workflow worker 行的生成期形态判定（isPtcWorkerHost）与标记 worker 行取
+  // triple；角色委派行形态判定（isPresetRoleHost）另取 prerelease——0.2.1 守卫
+  // 是 0.2.1-rc.2 落地的，rc.0/rc.1 保持内联形状。
+  const hostVersion = detectHostVersionInfo()
+  const hostVersionTriple = hostVersion?.triple ?? null
+  const hostPrerelease = hostVersion?.prerelease ?? null
 
   // 已落盘 preset 目录扫描（编排类）：.agent-presets 下的 orchestrator 基础
   // preset 与 orchestrator-<slug> 工作区专属 preset。扫描失败（目录尚不存在、
@@ -288,6 +293,8 @@ export async function collectState({ dshHome, configFile, profile = null, patche
     presetSystem,
     // 宿主版本三元组（null = 探测不到）：workflow worker 行生成期形态判定用
     hostVersionTriple,
+    // 宿主 prerelease 原文（null = 正式版 / 探测不到）：角色委派行形态判定用
+    hostPrerelease,
     // 主 persona 尾部追加的默认常量（配置键 main_agent_persona_extra 缺省值）：
     // 供 UI state（serializeState → /api/paoding/state）展示与「恢复默认」用。
     mainPersonaExtraDefault: DEFAULT_MAIN_AGENT_PERSONA_EXTRA,
@@ -391,7 +398,7 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
   // Compose the generated config; a composition error is a hard error.
   //（这层包装无增值，让 composeGenerated 的原始错误直接上抛。）宿主版本三元组
   // 驱动 workflow worker 行的生成期换行（≥0.1.6 → workflow-ptc，null 按现代宿主）。
-  const composed = composeGenerated(srcText, blocks, personaBlocks, assignments, inventory, restrictBase, mainAgentSkillMetas, state?.hostVersionTriple ?? null)
+  const composed = composeGenerated(srcText, blocks, personaBlocks, assignments, inventory, restrictBase, mainAgentSkillMetas, state?.hostVersionTriple ?? null, state?.hostPrerelease)
   const generatedText = composed.text
   const roleResults = composed.roleResults
 
@@ -533,8 +540,8 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
   // declarative（0.1.7+）：目录扫描机制已删，必须把本 preset 以一条 `- insert:`
   // 声明行写进 home patch 托管块才算安装完成（preset 元信息与写 preset.yml 同
   // 源：显示名取 displayName ?? SRC preset.yml 的 name，description / order 取
-  // SRC；restrict.mjs / delegation-labels.mjs 用绝对 file: URL——声明行没有
-  // 「相对 preset 目录」语义）。
+   // SRC；restrict.mjs / delegation-labels.mjs / role-restrict.mjs 用绝对 file: URL——声明行没有
+   // 「相对 preset 目录」语义；role-restrict URL 仅供 0.2.1+ AgentPreset 形态产物的角色面行消费）。
   // directory（≤0.1.6）：上面落盘即完成；home patch 里若有残留托管声明块
   //（宿主刚从 0.1.7 降级等场景）整块撤下自愈——残留声明行会让 profile 启动失败。
   if (wrote) {
@@ -549,6 +556,7 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
           agentYmlText: generatedText,
           restrictFileUrl: pathToFileURL(path.join(dstDir, 'restrict.mjs')).href,
           delegationLabelsFileUrl: pathToFileURL(path.join(dstDir, 'delegation-labels.mjs')).href,
+          roleRestrictFileUrl: pathToFileURL(path.join(dstDir, 'role-restrict.mjs')).href,
         }),
       ])
     } else if (readHomePatchRows(dshHome).length > 0) {

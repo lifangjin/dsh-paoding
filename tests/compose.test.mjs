@@ -28,6 +28,7 @@ import {
   composeGenerated,
   computeRestrictAllow,
   extractMainAgentAllow,
+  personaDefaultText,
   filterUsableTools,
   injectDelegationLabelRoles,
   injectRestrictAllow,
@@ -988,8 +989,9 @@ test('workflow worker 行: ≥0.1.6 宿主整块换 workflow-ptc（字节级只�
   const run = (triple) =>
     composeGenerated(SRC, blocks, personaBlocks, emptyAssignments(), fullInventory(), restrictBase, {}, triple).text
 
-  // 0.1.6 / 0.1.7 / 0.2.0：产物 = SRC 原文做一次块替换，其余逐字节一致
-  for (const triple of [[0, 1, 6], [0, 1, 7], [0, 2, 0], [1, 0, 0]]) {
+  // 0.1.6 / 0.1.7 / 0.2.0（<0.2.1，角色行不换代）：产物 = SRC 原文做一次块替换，
+  // 其余逐字节一致；≥0.2.1（含 1.0.0）起角色行换代叠加，字节面见下方 0.2.1 组测试
+  for (const triple of [[0, 1, 6], [0, 1, 7], [0, 2, 0]]) {
     assert.equal(run(triple), SRC.replace(WORKER_THREAD_BLOCK, WORKER_PTC_BLOCK), `triple=${triple}`)
   }
   // 0.1.5 / 未知（null / 非法形状）：保守保留源行（恒等性金测口径）
@@ -1063,4 +1065,216 @@ test('injectDelegationLabelRoles: 空映射原样返回；模板漂移（无行/
     () => injectDelegationLabelRoles('- id: delegation-labels\n  name: ./delegation-labels.mjs', { implement: 'X' }),
     /placeholder not found/,
   )
+})
+
+// ── n) 0.2.1 角色委派行适配（agentPreset 子预设形态）────────────────────────
+
+/** 按宿主三元组合成（runCompose 的版本门控变体）。 */
+function runComposeForHost(assignments, triple, prerelease) {
+  const blocks = locateAllowBlocks(SRC, yamlMod)
+  const personaBlocks = locatePersonaBlocks(SRC, yamlMod)
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  return composeGenerated(SRC, blocks, personaBlocks, assignments, fullInventory(), restrictBase, {}, triple, prerelease).text
+}
+
+/** 取委派行块源文本（`- id: <rowId>` 行首到首个空行；补尾换行便于逐行正则）。 */
+function delegationRowSegment(text, rowId) {
+  const marker = `- id: ${rowId}\n`
+  const idx = text.indexOf(marker)
+  assert.ok(idx !== -1, `${rowId} 委派行不存在`)
+  const end = text.indexOf('\n\n', idx)
+  const seg = text.slice(idx, end === -1 ? text.length : end)
+  return seg.endsWith('\n') ? seg : seg + '\n'
+}
+
+/** 取一个 paoding-role-* 子预设块源文本（行首到下一个顶层行首 / 文尾）。 */
+function rolePresetSegment(text, toolName) {
+  const marker = `- id: paoding-role-${toolName}\n`
+  const idx = text.indexOf(marker)
+  assert.ok(idx !== -1, `paoding-role-${toolName} 子预设行不存在`)
+  const rest = text.slice(idx + marker.length)
+  const next = rest.search(/^- id: /m)
+  return text.slice(idx, idx + marker.length + (next === -1 ? rest.length : next))
+}
+
+test('0.2.1-rc.1 宿主（tool-subagent 守卫未落地）：委派行保持内联形状，不产出子预设行', () => {
+  const text = runComposeForHost(emptyAssignments(), [0, 2, 1], 'rc.1')
+  assert.ok(/        persona: \|-\n/.test(text), 'rc.1 宿主应保持内联角色 persona（该版本仍认内联形状）')
+  assert.ok(!text.includes('- id: paoding-role-'), 'rc.1 宿主不应产出角色子预设行')
+  assert.ok(!/^        agentPreset: paoding-role-/m.test(text), 'rc.1 宿主不应出现 agentPreset 引用（会被当未知键拒绝）')
+  // rc.2 起（守卫落地点）：照常换代
+  const next = runComposeForHost(emptyAssignments(), [0, 2, 1], 'rc.2')
+  assert.ok(next.includes('- id: paoding-role-search_external'), 'rc.2 宿主应产出角色子预设行')
+})
+
+test('0.2.1 宿主：角色委派行瘦身为 agentPreset 引用，内联 persona/toolFilter 消失', () => {
+  const text = runComposeForHost(emptyAssignments(), [0, 2, 1])
+  const rowIds = {
+    search_external: 'delegation-search-external',
+    design: 'delegation-design',
+    implement: 'delegation-implement',
+    search_internal_deep: 'delegation-search-internal-deep',
+  }
+  for (const [toolName, rowId] of Object.entries(rowIds)) {
+    const seg = delegationRowSegment(text, rowId)
+    assert.ok(!seg.includes('persona:'), `${toolName} 委派块仍带内联 persona`)
+    assert.ok(!seg.includes('toolFilter:'), `${toolName} 委派块仍带内联 toolFilter`)
+    assert.ok(seg.includes(`agentPreset: paoding-role-${toolName}`), `${toolName} 委派块缺 agentPreset 引用`)
+    assert.ok(seg.includes('provider: spawn'), `${toolName} 委派块 provider 行丢失`)
+    assert.ok(seg.includes(`toolName: ${toolName}`), `${toolName} 委派块 toolName 行丢失`)
+  }
+  assert.ok(text.includes("name: '@deepseek-ai/dsh-tool-subagent'"), 'tool-subagent 行名被动过')
+  assert.ok(!/        persona: \|-/.test(text), '产物残留 8 空格缩进的内联角色 persona（0.2.1 守卫必炸）')
+  assert.ok(!/^        toolFilter:/m.test(text), '产物残留 8 空格缩进的内联角色 toolFilter')
+})
+
+/** 从旧形状（<0.2.1）产物的委派行里抠内联 persona 原文（搬运一致性的期望值）。 */
+function inlinePersonaOf(text, rowId) {
+  const seg = delegationRowSegment(text, rowId)
+  const m = /        persona: \|-\n((?:          [^\n]*\n?)+)/.exec(seg)
+  assert.ok(m, `${rowId} 内联 persona 不存在`)
+  return m[1]
+    .split('\n')
+    .filter((l) => l.trim() !== '')
+    .map((l) => l.replace(/^          /, ''))
+    .join('\n')
+}
+
+test('0.2.1 宿主：四个角色子预设行完整（agent-preset 行名、persona.prefix 原文、allow 原样搬运、order 递增）', () => {
+  const text = runComposeForHost(emptyAssignments(), [0, 2, 1])
+  // 期望值取自同一配置的旧形状产物（<0.2.1 内联块），钉死「原样搬运」语义
+  const oldText = runComposeForHost(emptyAssignments(), [0, 2, 0])
+  const rowIds = {
+    search_external: 'delegation-search-external',
+    design: 'delegation-design',
+    implement: 'delegation-implement',
+    search_internal_deep: 'delegation-search-internal-deep',
+  }
+  let lastOrder = -1
+  for (const toolName of ['search_external', 'design', 'implement', 'search_internal_deep']) {
+    const seg = rolePresetSegment(text, toolName)
+    assert.ok(seg.includes("name: '@deepseek-ai/dsh-agent-preset'"), `${toolName} 子预设行名不是 dsh-agent-preset`)
+    assert.ok(seg.includes(`id: paoding-role-${toolName}`), `${toolName} 子预设 config.id 缺失`)
+    const order = Number(/order: (\d+)/.exec(seg)?.[1])
+    assert.ok(Number.isInteger(order) && order > lastOrder, `${toolName} 子预设 order 不递增（${order}）`)
+    lastOrder = order
+    // persona：dsh-persona 行 + config.prefix 块标量 = 源 persona 原文
+    assert.ok(seg.includes("name: '@deepseek-ai/dsh-persona'"), `${toolName} 子预设缺 dsh-persona 行`)
+    const prefixM = /          prefix: \|-\n((?:            [^\n]*\n?)+)/.exec(seg)
+    assert.ok(prefixM, `${toolName} 子预设缺 config.prefix 块标量`)
+    const prefixText = prefixM[1]
+      .split('\n')
+      .filter((l) => l.trim() !== '')
+      .map((l) => l.replace(/^            /, ''))
+      .join('\n')
+    assert.equal(prefixText, inlinePersonaOf(oldText, rowIds[toolName]), `${toolName} prefix 与源 persona 不一致`)
+    // standard 基础行照抄（0.2.1 显式选择 preset 时子 agent 不继承父 preset，
+    // 角色必须是完整组合——只放 persona+restrict 会让子 agent 零工具）
+    for (const baseRow of ['      - id: tool-bash', '      - id: tool-fs', '      - id: tool-fs-search', '      - id: tool-skill', '      - id: tool-goal', '      - id: compaction', '      - id: tool-ask-user', '      - id: tool-todo', '      - id: tool-web']) {
+      assert.ok(seg.includes(baseRow), `${toolName} 子预设缺 standard 基础行 ${baseRow.trim()}`)
+    }
+    assert.equal((seg.match(/        name: cordis:group/g) ?? []).length, 2, `${toolName} 子预设缺 planning/compaction 组`)
+    // 编排层四行 + delegation 组不得进角色子预设
+    assert.ok(!/\n      - id: delegation-/.test(seg), `${toolName} 子预设泄漏编排层 delegation 行`)
+    assert.ok(!seg.includes("name: '@deepseek-ai/dsh-agent-instructions'"), `${toolName} 子预设泄漏 agent-instructions`)
+    assert.ok(!seg.includes('./delegation-labels.mjs'), `${toolName} 子预设泄漏 delegation-labels`)
+    // allow：role-restrict 行 config.allow = 旧形状 toolFilter.allow 原样搬运
+    assert.ok(seg.includes('name: ./role-restrict.mjs'), `${toolName} 子预设缺 role-restrict 插件行`)
+    const allowM = /          allow:\n((?:            - [^\n]+\n)+)/.exec(seg)
+    assert.ok(allowM, `${toolName} 子预设缺 config.allow`)
+    const allowNames = [...allowM[1].matchAll(/- (.+)/g)].map((x) => x[1].trim())
+    const oldSeg = delegationRowSegment(oldText, rowIds[toolName])
+    const oldAllowM = /        toolFilter:\n          allow:\n((?:            - [^\n]+\n)+)/.exec(oldSeg)
+    assert.ok(oldAllowM, `${toolName} 旧形状产物缺 toolFilter.allow`)
+    const oldAllowNames = [...oldAllowM[1].matchAll(/- (.+)/g)].map((x) => x[1].trim())
+    assert.deepEqual(allowNames, oldAllowNames, `${toolName} allow 未原样搬运`)
+  }
+})
+
+test('0.2.1 宿主：子预设声明行插在 remaining marker 注释之前，marker 注释保留', () => {
+  const text = runComposeForHost(emptyAssignments(), [0, 2, 1])
+  const presetIdx = text.indexOf('# ── 角色子预设')
+  const firstPresetRow = text.indexOf('- id: paoding-role-search_external')
+  const markerIdx = text.indexOf('# ── remaining model-facing rows')
+  assert.ok(presetIdx !== -1 && firstPresetRow !== -1 && markerIdx !== -1, '新区块或 marker 缺失')
+  assert.ok(presetIdx < firstPresetRow && firstPresetRow < markerIdx, '角色子预设块必须整体插在 remaining marker 之前')
+  assert.ok(text.slice(markerIdx).includes("name: '@deepseek-ai/dsh-tool-ask-user'"), 'marker 之后的 tool 区块被破坏')
+})
+
+test('0.2.1 宿主：roles.<tool>.name 覆盖子预设显示名（yaml 歧义字符加引号）', () => {
+  const text = runComposeForHost(
+    { ...emptyAssignments(), roles: { design: { name: '设计: 首页' } } },
+    [0, 2, 1],
+  )
+  assert.ok(rolePresetSegment(text, 'design').includes("'设计: 首页'"), '子预设显示名未吃 roles.design.name')
+})
+
+test('0.2.1 宿主：自定义角色（skill-finder）同样产出子预设行——五个角色全覆盖，allow 含 skill 与通配展开名', () => {
+  const text = runComposeForHost(
+    {
+      ...emptyAssignments(),
+      roles: {
+        'skill-finder': {
+          persona: '你的职责就是查找符合用户要求的技能。',
+          tools: ['skill', 'read', 'gr*'],
+        },
+      },
+    },
+    [0, 2, 1],
+  )
+  assert.equal((text.match(/^- id: paoding-role-/gm) ?? []).length, 5, '四内置 + skill-finder 应产出 5 条子预设行')
+  const row = delegationRowSegment(text, 'delegation-skill-finder')
+  assert.ok(row.includes('agentPreset: paoding-role-skill-finder'), '自定义角色委派块缺 agentPreset')
+  assert.ok(!row.includes('persona:'), '自定义角色委派块残留内联 persona')
+  const seg = rolePresetSegment(text, 'skill-finder')
+  assert.ok(seg.includes("name: '@deepseek-ai/dsh-agent-preset'"), '自定义角色缺子预设行')
+  assert.ok(/          prefix: \|-\n            你的职责就是查找符合用户要求的技能。/.test(seg), '自定义角色 persona 未进 prefix')
+  const allowM = /          allow:\n((?:            - [^\n]+\n)+)/.exec(seg)
+  assert.ok(allowM, '自定义角色子预设缺 config.allow')
+  const allowNames = [...allowM[1].matchAll(/- (.+)/g)].map((x) => x[1].trim())
+  assert.ok(allowNames.includes('skill'), 'skill-finder allow 应含 skill（注册级不做 deny，技能目录注入守卫才能放行）')
+  assert.ok(allowNames.includes('grep'), '自定义角色 allow 未展开通配符候选（gr*）')
+  // 完整组合：自定义角色子预设同样自带 standard 基础行
+  assert.ok(seg.includes('      - id: tool-bash'), '自定义角色子预设缺 standard 基础行')
+})
+
+test('0.2.1 宿主：roles_remove 删除的角色不产出子预设行，其余角色照常', () => {
+  const text = runComposeForHost({ ...emptyAssignments(), roles_remove: ['design'] }, [0, 2, 1])
+  assert.ok(!text.includes('paoding-role-design'), '被删角色仍产出子预设行')
+  assert.ok(!text.includes('agentPreset: paoding-role-design'), '被删角色委派行仍在')
+  assert.ok(text.includes('agentPreset: paoding-role-implement'), '未删角色被误伤')
+  assert.ok(text.includes('paoding-role-search_internal_deep'), '静态角色被误伤')
+})
+
+test('0.2.1 宿主：fork 角色丢弃 persona/toolFilter（不产出子预设），委派行保 provider: fork', () => {
+  const text = runComposeForHost(
+    { ...emptyAssignments(), roles: { design: { start_mode: 'fork' } } },
+    [0, 2, 1],
+  )
+  assert.ok(!text.includes('paoding-role-design'), 'fork 角色不应产出子预设行')
+  const row = delegationRowSegment(text, 'delegation-design')
+  assert.ok(row.includes('provider: fork'), 'fork 角色委派行 provider 未改写')
+  assert.ok(!row.includes('persona:'), 'fork 角色委派行残留内联 persona（0.2.1 守卫必炸）')
+  assert.ok(!row.includes('toolFilter:'), 'fork 角色委派行残留内联 toolFilter')
+  assert.ok(!row.includes('agentPreset:'), 'fork 角色不应挂 agentPreset')
+})
+
+test('0.2.0 及以下宿主：角色行保持内联旧形状（版本门控不误伤）', () => {
+  for (const triple of [null, [0, 1, 5], [0, 2, 0]]) {
+    const text = runComposeForHost(emptyAssignments(), triple)
+    assert.ok(/        persona: \|-/.test(text), `triple=${triple} 旧形状 persona 丢失`)
+    assert.ok(/        toolFilter:\n          allow:/.test(text), `triple=${triple} 旧形状 toolFilter 丢失`)
+    assert.ok(!text.includes('paoding-role-'), `triple=${triple} 不应产出子预设行`)
+    assert.ok(!text.includes('agentPreset:'), `triple=${triple} 不应出现 agentPreset 引用`)
+  }
+  // null 与 [0,1,5]（worker 同形）与源逐字节一致（golden 性质在新分支下保持）
+  assert.equal(runComposeForHost(emptyAssignments(), [0, 1, 5]), SRC)
+})
+
+test('0.2.1 宿主：全默认配置产物角色行计数正确（4 条子预设 + 4 条 agentPreset 引用）', () => {
+  const text = runComposeForHost(emptyAssignments(), [0, 2, 1])
+  assert.equal((text.match(/^- id: paoding-role-/gm) ?? []).length, 4, '顶层角色子预设行应为 4 条')
+  assert.equal((text.match(/^        agentPreset: paoding-role-/gm) ?? []).length, 4, '委派行 agentPreset 引用应为 4 条')
+  const doc = parseYamlSubset(text)
+  assert.ok(Array.isArray(doc) && doc.length > 0, '产物可被子集解析器解析')
 })

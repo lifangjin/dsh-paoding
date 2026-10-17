@@ -24,9 +24,11 @@ export const PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
  * 主 agent persona 尾部追加规则（默认值）。
  * 用户可在配置 UI 的「人设追加」里编辑/清空；配置键 main_agent_persona_extra：
  * null/缺省 = 用本默认；'' = 明确清空（不追加）；其他字符串 = 覆盖。
- * {{cwd}}/{{model}} 是 persona 模板占位符，DSH 运行时替换，必须原样保留。
+ * 禁用 {{cwd}} 占位：该文本拼进部署主代理 persona，DSH 0.2.1 的
+ * deployment:persona-prefix 段只注册 provider/model，未知变量直接抛错；
+ * 「当前工作目录」由宿主 env 上下文提供，无需模板变量。
  */
-export const DEFAULT_MAIN_AGENT_PERSONA_EXTRA = `Codegraph MCP default project may be a DIFFERENT repository than {{cwd}}. Never call codegraph_* tools without passing projectPath = {{cwd}} (the absolute path of your working directory). If {{cwd}} has no .codegraph index, fall back to glob/grep/read directly and do not loop or comment on project mismatches.`
+export const DEFAULT_MAIN_AGENT_PERSONA_EXTRA = `Codegraph MCP default project may be a DIFFERENT repository than your current working directory. Never call codegraph_* tools without passing projectPath = the absolute path of your current working directory. If that directory has no .codegraph index, fall back to glob/grep/read directly and do not loop or comment on project mismatches.`
 
 export function warn(message) {
   console.warn(`warning: ${message}`)

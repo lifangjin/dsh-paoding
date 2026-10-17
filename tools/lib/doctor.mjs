@@ -26,12 +26,14 @@ import { assignSlugs, presetIdOf } from './workspaces.mjs'
 import {
   MANAGED_BEGIN,
   MANAGED_END,
-  detectHostVersionTriple,
+  detectAgentRolesFlavor,
+  detectHostVersionInfo,
   detectPresetSystem,
   isDeclarativeTriple,
   isPtcWorkerHost,
   listOrchestratorPresetIds,
   parseGeneratorMarker,
+  presetRolesFlavorOf,
   readHomePatchRows,
 } from './preset-system.mjs'
 import { healthCheck } from './health.mjs'
@@ -108,7 +110,9 @@ export async function runDoctor({ dshHome, configFile, profile = null, state = n
 
   // ── 2. 预设安装轨道 vs 宿主版本 ───────────────────────────────────────────
   const track = state?.presetSystem ?? (await detectPresetSystem({ dshHome }).catch(() => null))
-  const hostTriple = detectHostVersionTriple()
+  const hostInfo = detectHostVersionInfo()
+  const hostTriple = hostInfo?.triple ?? null
+  const hostPrerelease = hostInfo?.prerelease ?? null
   if (state === null && stateError !== null) {
     add('skip', '预设安装轨道', `检测管线不可用（${stateError}），跳过轨道核对`)
   } else if (hostTriple === null) {
@@ -175,9 +179,35 @@ export async function runDoctor({ dshHome, configFile, profile = null, state = n
     } else {
       add('warn', '工作区预设目录', `孤儿目录（配置 workspaces 已无对应条目）：${orphans.join('、')}——下次「保存并应用」会自动回收，不用可手动删除`)
     }
+    // 形态漂移（基础预设标记对账覆盖不到的暗角）：工作区产物的角色行形态与宿主
+    // 所需不符时，挂该预设的新建会话会被宿主拒绝（0.2.1 守卫拒内联 persona /
+    // toolFilter；反方向降级同理）。启动自愈会自动换代，这里只报事实。宿主版本
+    // 探测不到不猜（与第 5 节 worker/角色行口径一致）。
+    if (hostTriple !== null && configUsable && dirs.length > 0) {
+      const wantedRoles = presetRolesFlavorOf(hostTriple, hostPrerelease)
+      const stale = []
+      for (const id of dirs) {
+        if (orphans.includes(id)) continue
+        try {
+          const flavor = detectAgentRolesFlavor(readFileSync(path.join(dshHome, '.agent-presets', id, 'agent.cordis.yml'), 'utf8'))
+          if (flavor !== null && flavor !== wantedRoles) stale.push(id)
+        } catch { /* 产物读不到：缺失/损坏归孤儿与漂移检查之外的异常，不在此判 */ }
+      }
+      if (stale.length > 0) {
+        add(
+          'warn',
+          '工作区预设目录',
+          `角色行形态与宿主所需 ${wantedRoles} 不符：${stale.join('、')}` +
+            (wantedRoles === 'agent-preset'
+              ? '（DSH 0.2.1+ 拒绝内联 persona/toolFilter，挂这些预设的新建会话会报错）'
+              : '') +
+            '——重启 DSH 触发自愈自动换代，或对各工作区重新「保存并应用」',
+        )
+      }
+    }
   }
 
-  // ── 5. 版本标记对账（.generator-version：版本 + 轨道 + worker 形态）────────
+  // ── 5. 版本标记对账（.generator-version：版本 + 轨道 + worker/角色形态）──────
   const presetDir = path.join(dshHome, '.agent-presets', 'orchestrator')
   if (!existsSync(presetDir)) {
     add('skip', '版本标记', '基础预设未安装（无 orchestrator 目录）：首装自动化或「保存并应用」会生成')
@@ -198,11 +228,21 @@ export async function runDoctor({ dshHome, configFile, profile = null, state = n
       if (marker.track !== null && track !== null && marker.track !== track) {
         parts.push(`标记轨道 ${TRACK_LABELS[marker.track] ?? marker.track} 与当前 ${trackLabel(track)} 不符（下次启动自动迁移）`)
       }
-      // worker 形态只与探测得到的宿主版本比（探测不到不猜，保守不报）。
+      // worker / 角色行形态只与探测得到的宿主版本比（探测不到不猜，保守不报）。
       if (marker.worker !== null && hostTriple !== null) {
         const workerNow = isPtcWorkerHost(hostTriple) ? 'ptc' : 'worker-thread'
         if (marker.worker !== workerNow) {
           parts.push(`标记 worker 形态 ${marker.worker} 与宿主所需 ${workerNow} 不符（下次启动整盘重生成）`)
+        }
+      }
+      if (marker.roles !== null && hostTriple !== null) {
+        const rolesNow = presetRolesFlavorOf(hostTriple, hostPrerelease)
+        if (marker.roles !== rolesNow) {
+          parts.push(
+            rolesNow === 'agent-preset'
+              ? `标记角色行形态 ${marker.roles} 与宿主所需 agent-preset 不符（DSH 0.2.1+ 拒绝内联 persona/toolFilter，下次启动整盘重生成）`
+              : `标记角色行形态 ${marker.roles} 与宿主所需 inline 不符（下次启动整盘重生成）`,
+          )
         }
       }
       if (parts.length === 0) {

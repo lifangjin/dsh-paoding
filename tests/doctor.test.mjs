@@ -178,3 +178,38 @@ test('CLI：parseArgs 认 doctor 子命令；main doctor 干净 0 / 托管块损
     rmSync(dshHome, { recursive: true, force: true })
   }
 })
+
+test('工作区预设形态漂移：0.2.1 宿主 + 内联工作区产物 → warn 点名 presetId，新形态目录不点名', async () => {
+  const { dshHome, configFile } = freshEnv('ws-stale')
+  mkdirSync(path.join(dshHome, '.agent-presets', 'orchestrator-inline'), { recursive: true })
+  writeFileSync(path.join(dshHome, '.agent-presets', 'orchestrator-inline', 'agent.cordis.yml'), 'x\n        persona: |-\n          p\n')
+  mkdirSync(path.join(dshHome, '.agent-presets', 'orchestrator-modern'), { recursive: true })
+  writeFileSync(path.join(dshHome, '.agent-presets', 'orchestrator-modern', 'agent.cordis.yml'), 'x\n        agentPreset: paoding-role-implement\n')
+  writeFileSync(
+    configFile,
+    [
+      'profile: web',
+      'roles: {}',
+      'workspaces:',
+      '  /tmp/inline:',
+      '    roles: {}',
+      '  /tmp/modern:',
+      '    roles: {}',
+      '',
+    ].join('\n'),
+  )
+  const prevFake = process.env.DSH_PAODING_FAKE_HOST_VERSION
+  process.env.DSH_PAODING_FAKE_HOST_VERSION = '0.2.1-rc.2'
+  try {
+    const report = await runDoctor({ dshHome, configFile })
+    const item = findItem(report, '工作区预设目录', /角色行形态与宿主所需 agent-preset 不符/)
+    assert.ok(item, `应报工作区形态漂移：${JSON.stringify(report.items)}`)
+    assert.equal(item.status, 'warn')
+    assert.ok(item.detail.includes('orchestrator-inline'), `应点名漂移目录：${item.detail}`)
+    assert.ok(item.detail.includes('0.2.1'), '应提示 0.2.1 守卫背景')
+    assert.ok(!item.detail.includes('orchestrator-modern'), '新形态目录不应点名')
+  } finally {
+    if (prevFake === undefined) delete process.env.DSH_PAODING_FAKE_HOST_VERSION
+    else process.env.DSH_PAODING_FAKE_HOST_VERSION = prevFake
+  }
+})

@@ -15,17 +15,21 @@ import { autoAssignments, baseAssignments } from '../../tools/lib/alloc.mjs'
 import { loadConfig, normalizeConfig, normalizeTargetFields, saveConfig, serializeConfig, stripNonTargetKeys } from '../../tools/lib/config.mjs'
 import { parseYamlSubset, preprocessPatchText } from '../../tools/lib/yaml.mjs'
 import { captureWarnings, healthCheck } from '../../tools/lib/health.mjs'
+import { warn } from '../../tools/lib/util.mjs'
 import {
   backfillHomePatchRows,
-  detectHostVersionTriple,
+  detectAgentRolesFlavor,
+  detectHostVersionInfo,
   detectPresetSystem,
   formatGeneratorMarker,
   isPtcWorkerHost,
   listOrchestratorPresetIds,
   parseGeneratorMarker,
+  presetRolesFlavorOf,
   presetRowId,
   readHomePatchRows,
   stripHomePatchRows,
+  ROLES_AGENT_PRESET,
   WORKER_PTC,
   WORKER_WORKER_THREAD,
 } from '../../tools/lib/preset-system.mjs'
@@ -33,6 +37,12 @@ import {
 /** 宿主版本三元组 → workflow worker 标记行（生成产物行的形态，与 compose 对齐）。 */
 function workerFlavorOf(hostVersionTriple) {
   return isPtcWorkerHost(hostVersionTriple) ? WORKER_PTC : WORKER_WORKER_THREAD
+}
+
+/** 宿主版本信息 → 角色委派行标记行（生成产物行的形态，与 compose 对齐；
+ * prerelease 透传——0.2.1 守卫 0.2.1-rc.2 落地，rc.0/rc.1 按内联形态对账）。 */
+function rolesFlavorOf(hostVersionTriple, prerelease) {
+  return presetRolesFlavorOf(hostVersionTriple, prerelease)
 }
 
 /**
@@ -44,6 +54,16 @@ function workerFlavorOf(hostVersionTriple) {
  */
 function workerFlavorCompatible(markerWorker, currentWorker) {
   return (markerWorker === WORKER_PTC) === (currentWorker === WORKER_PTC)
+}
+
+/**
+ * 标记角色行与当前宿主形态是否兼容（workerFlavorCompatible 同款语义）：分叉 =
+ * 其中一边是 agent-preset；null（v3/v2 旧标记）与 inline 同侧——0.2.1 宿主上
+ * 旧插件版本的 inline 产物重生成也产不出新形状，重生成无意义；插件升级后版本
+ * 不符走整盘重生成，新形状经那条路径落地。
+ */
+function rolesFlavorCompatible(markerRoles, currentRoles) {
+  return (markerRoles === ROLES_AGENT_PRESET) === (currentRoles === ROLES_AGENT_PRESET)
 }
 
 export function resolveDshHome() {
@@ -403,11 +423,12 @@ export function deleteWorkspacePreset(state, workspacePath) {
 //
 // 唯一官方安装通道是插件通道（dsh plugin add dsh-paoding），包不再携带 CLI：
 // preset 的落盘改由插件启动时自愈。对账基准是 preset 目录里的 .generator-version
-// 标记文件（v3 起内容 = 生成器版本 + 预设安装轨道 + workflow worker 形态三行）：
-// 插件包版本变、或宿主轨道翻转 / worker 形态换代（只升 dsh 不动插件——升级最
-// 常见路径，旧标记缺行时同样解析为不符）→ 下次启动自动自愈，一举解决「升级后
-// preset 还是旧版产物」「升 dsh 后 preset 静默消失」与「升 dsh 后 worker 行
-// 失配 never started」三类漂移。
+// 标记文件（v4 起内容 = 生成器版本 + 预设安装轨道 + workflow worker 形态 +
+// 角色委派行形态四行）：插件包版本变、或宿主轨道翻转 / worker 形态换代 / 角色
+// 行换代（只升 dsh 不动插件——升级最常见路径，旧标记缺行时同样解析为不符）→
+// 下次启动自动自愈，一举解决「升级后 preset 还是旧版产物」「升 dsh 后 preset
+// 静默消失」「升 dsh 后 worker 行失配 never started」与「升 dsh 0.2.1 后内联
+// persona/toolFilter 被 apply 拒绝、新建会话即抛错」四类漂移。
 
 // 生成器版本（标记对账基准）：插件包根 package.json 读一次即缓存。读失败兜底
 // '0.0.0'——最坏后果只是每次启动多重生成一次 preset，不会装坏任何东西。
@@ -423,6 +444,45 @@ export function pluginVersion() {
   return cachedGeneratorVersion ?? '0.0.0'
 }
 
+/**
+ * 工作区预设（orchestrator-<slug>）角色行形态迁移：基础 preset 整盘重生成后，
+ * 磁盘上各工作区产物的角色行形态若与宿主所需不符（典型：宿主刚升 0.2.1，工作区
+ * 产物还是旧内联形状——声明行又在场，挂该预设的新建会话照样被 tool-subagent
+ * 守卫拒绝），按该工作区在配置 workspaces 段里最后一次应用的条目就地重生成
+ *（顶层配置兜底合入，落盘不回写配置）。产物缺失（从未生成过）与形态判不出的
+ *（角色被清空）一律跳过——不自作主张替用户代生成；单个工作区失败只 warn，
+ * 绝不拖垮整体自愈。返回完成换代的工作区 presetId 列表。
+ */
+function migrateWorkspacePresetRoles({ dshHome, state }) {
+  const wanted = presetRolesFlavorOf(state.hostVersionTriple, state.hostPrerelease)
+  const wsEntries = state.existing?.workspaces ?? {}
+  const wsPaths = Object.keys(wsEntries)
+  if (wsPaths.length === 0) return []
+  const slugs = assignSlugs(wsPaths)
+  const migrated = []
+  for (const wsPath of wsPaths) {
+    const presetId = presetIdOf(slugs.get(wsPath))
+    let flavor = null
+    try {
+      flavor = detectAgentRolesFlavor(readFileSync(path.join(dshHome, '.agent-presets', presetId, 'agent.cordis.yml'), 'utf8'))
+    } catch {
+      continue // 目录 / 产物缺失：该工作区从未生成过，保持沉默（生成是显式动作）
+    }
+    if (flavor === null || flavor === wanted) continue
+    try {
+      // 该工作区最后一次应用的条目优先，顶层字段兜底（条目缺键时回落全局值）；
+      // saveConfigOnWrite=false——配置 workspaces 段原样保留，只换代产物。
+      const merged = { ...normalizeTargetFields(state.existing), ...normalizeTargetFields(wsEntries[wsPath]) }
+      const assignments = autoAssignments({ existing: merged, suggested: state.suggested, staticBase: state.staticBase })
+      generateAndInstall(state, assignments, { dryRun: false, saveConfigOnWrite: false, workspacePath: wsPath })
+      migrated.push(presetId)
+    } catch (err) {
+      warn(`工作区预设角色行换代失败（${presetId}，可对该工作区重新「保存并应用」修复）: ${err?.message ?? err}`)
+    }
+  }
+  return migrated
+}
+
 // dispose 中止时的返回理由（记 reason 而非 error：不算失败，调用方不打日志）。
 const PRESET_ENSURE_ABORTED = '插件已卸载（dispose），本次 preset 生成中止'
 
@@ -431,9 +491,10 @@ const PRESET_ENSURE_ABORTED = '插件已卸载（dispose），本次 preset 生�
  *
  * 判定（满足其一即动盘）：
  *   - preset 目录 / 标记缺失，或标记版本与 generatorVersion 不符 → 整盘重生成；
- *   - 版本一致但标记 worker 形态与当前宿主所需分叉（宿主跨过 0.1.5/0.1.6
- *     worker 边界；v2/v1 旧标记在真实 ptc 宿主上同样分叉）→ 整盘重生成（该行
- *     长在产物正文里，轻量路径覆盖不到）；
+ *   - 版本一致但标记 worker 形态或角色行形态与当前宿主所需分叉（宿主跨过
+ *     0.1.5/0.1.6 worker 边界或 0.2.0/0.2.1 角色行边界；旧格式标记在真实
+ *     ptc/agent-preset 宿主上同样分叉）→ 整盘重生成（这些行长在产物正文里，
+ *     轻量路径覆盖不到）；
  *   - 版本 worker 都一致但标记轨道与当前宿主轨道不符（只升 dsh 不动插件 /
  *     旧格式标记）→ 轻量迁移：声明轨上按磁盘产物补写缺失声明行（内容字节
  *     不动，不重生成），directory 轨上落回整盘重生成（残留声明行会让 0.1.6
@@ -467,12 +528,14 @@ export async function ensurePresetInstalled({ dshHome = resolveDshHome(), genera
 
     if (marker !== null && marker.version === generatorVersion) {
       // 版本一致：内容原则上无需重生成，但宿主可能已随 dsh 升降级翻转轨道或
-      // 跨过 workflow worker 形态边界（只升 dsh 不动插件是升级常态），声明行也
-      // 可能被外部动过——这里做轻量对账。worker 形态不符（v2/v1 旧标记没有第
-      // 三行，一律视为不符）不能走轻量路径：该行长在产物正文里，补行/撤行覆盖
-      // 不到，必须整盘重生成——落到下方重生成分支。
-      const currentWorker = workerFlavorOf(detectHostVersionTriple())
-      if (workerFlavorCompatible(marker.worker, currentWorker)) {
+      // 跨过 workflow worker 形态 / 角色委派行形态边界（只升 dsh 不动插件是升级
+      // 常态），声明行也可能被外部动过——这里做轻量对账。worker 形态或角色行
+      // 形态不符（v3/v2/v1 旧标记缺行，一律视为不符）不能走轻量路径：这些行
+      // 长在产物正文里，补行/撤行覆盖不到，必须整盘重生成——落到下方重生成分支。
+      const hostInfo = detectHostVersionInfo()
+      const currentWorker = workerFlavorOf(hostInfo?.triple ?? null)
+      const currentRoles = rolesFlavorOf(hostInfo?.triple ?? null, hostInfo?.prerelease ?? null)
+      if (workerFlavorCompatible(marker.worker, currentWorker) && rolesFlavorCompatible(marker.roles, currentRoles)) {
         const system = await detectPresetSystem({ dshHome })
         if (shouldAbort?.()) return { installed: false, reason: PRESET_ENSURE_ABORTED }
         const presetIds = listOrchestratorPresetIds(dshHome)
@@ -481,7 +544,7 @@ export async function ensurePresetInstalled({ dshHome = resolveDshHome(), genera
           if (marker.track === 'declarative' && backfilled.length === 0) {
             return { installed: false, reason: 'preset 已由当前版本生成器产出，无需重生成' }
           }
-          writeFileSync(markerFile, formatGeneratorMarker(generatorVersion, 'declarative', currentWorker), 'utf8')
+          writeFileSync(markerFile, formatGeneratorMarker(generatorVersion, 'declarative', currentWorker, currentRoles), 'utf8')
           return backfilled.length > 0
             ? { installed: false, backfilled, reason: `宿主已切换声明行轨，补写 ${backfilled.length} 条预设声明行（preset 内容未重生成）` }
             : { installed: false, reason: '预设安装轨道标记已更新为声明行轨（内容无需重生成）' }
@@ -492,12 +555,12 @@ export async function ensurePresetInstalled({ dshHome = resolveDshHome(), genera
           if (marker.track === 'directory') {
             return { installed: false, reason: 'preset 已由当前版本生成器产出，无需重生成' }
           }
-          writeFileSync(markerFile, formatGeneratorMarker(generatorVersion, 'directory', currentWorker), 'utf8')
+          writeFileSync(markerFile, formatGeneratorMarker(generatorVersion, 'directory', currentWorker, currentRoles), 'utf8')
           return { installed: false, reason: '预设安装轨道标记已升级为带轨道格式（内容无需重生成）' }
         }
         // 声明行残留 + directory 宿主：落到下方整盘重生成
       }
-      // worker 形态不符（含旧格式标记升级到 v3）：落到下方整盘重生成
+      // worker 形态或角色行形态不符（含旧格式标记升级到 v4）：落到下方整盘重生成
     }
 
     if (shouldAbort?.()) return { installed: false, reason: PRESET_ENSURE_ABORTED }
@@ -525,16 +588,20 @@ export async function ensurePresetInstalled({ dshHome = resolveDshHome(), genera
     if (shouldAbort?.()) return { installed: false, reason: PRESET_ENSURE_ABORTED }
     mkdirSync(presetDir, { recursive: true })
     const track = result.presetSystem === 'declarative' ? 'declarative' : 'directory'
-    writeFileSync(markerFile, formatGeneratorMarker(generatorVersion, track, workerFlavorOf(state.hostVersionTriple)), 'utf8')
+    writeFileSync(markerFile, formatGeneratorMarker(generatorVersion, track, workerFlavorOf(state.hostVersionTriple), rolesFlavorOf(state.hostVersionTriple, state.hostPrerelease)), 'utf8')
     // 声明轨上整盘重生成只重建本 preset 的行：其余工作区 preset 目录若在而
     // 声明行缺（轨道翻转后首次触发本路径），一并补齐。
     const backfilled = track === 'declarative' ? backfillHomePatchRows(dshHome, listOrchestratorPresetIds(dshHome)) : []
+    // 工作区预设角色行形态换代（宿主跨 0.2.1 边界后的存量 orchestrator-<slug>
+    // 产物）：基础重生成只换了全局预设，工作区产物不跟手就会继续被守卫拒绝。
+    const migratedPresets = migrateWorkspacePresetRoles({ dshHome, state })
     return {
       installed: true,
       ...(backfilled.length > 0 ? { backfilled } : {}),
-      reason: state.existing
-        ? 'preset 缺失或由旧版生成器产出，已按现有配置重新生成'
-        : 'preset 缺失或由旧版生成器产出，已写入基础模板',
+      ...(migratedPresets.length > 0 ? { migratedPresets } : {}),
+      reason:
+        (state.existing ? 'preset 缺失或由旧版生成器产出，已按现有配置重新生成' : 'preset 缺失或由旧版生成器产出，已写入基础模板') +
+        (migratedPresets.length > 0 ? `；工作区预设角色行已换代：${migratedPresets.join('、')}` : ''),
     }
   } catch (err) {
     // 绝不抛：首装自愈是锦上添花，失败只带回 error 交调用方记日志，不拖垮插件启动。

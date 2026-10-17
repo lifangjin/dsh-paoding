@@ -58,6 +58,41 @@ export function parseVersionTriple(text) {
   return [Number(m[1]), Number(m[2]), Number(m[3])]
 }
 
+/**
+ * 解析裸版本号文本为 { triple, prerelease }：三元组同 parseVersionTriple，
+ * prerelease 保留原文（`-` 与 `+` 之间，0.2.1-rc.2 → 'rc.2'；正式版 null）。
+ * 角色委派行形态门（isPresetRoleHost）只在 0.2.1 这一个点上需要分辨
+ * prerelease——守卫是 0.2.1-rc.2 才落地的，rc.0/rc.1 仍认内联形状。
+ */
+export function parseVersionInfo(text) {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(text ?? '').trim())
+  if (!m) return null
+  return { triple: [Number(m[1]), Number(m[2]), Number(m[3])], prerelease: m[4] ?? null }
+}
+
+/** prerelease 逐 token 比较（数字 token 按数值，其余按字典序）：a≥b 返回正数。 */
+function comparePrerelease(a, b) {
+  const as = String(a).split('.')
+  const bs = String(b).split('.')
+  for (let i = 0; i < Math.max(as.length, bs.length); i++) {
+    const av = as[i]
+    const bv = bs[i]
+    if (av === undefined) return -1 // 前缀更短 = 更小（1.0.0-alpha < 1.0.0-alpha.1）
+    if (bv === undefined) return 1
+    const an = /^\d+$/.test(av)
+    const bn = /^\d+$/.test(bv)
+    if (an && bn) {
+      const d = Number(av) - Number(bv)
+      if (d !== 0) return d
+    } else if (an !== bn) {
+      return an ? -1 : 1 // semver：数字 token 恒小于字母 token
+    } else if (av !== bv) {
+      return av < bv ? -1 : 1
+    }
+  }
+  return 0
+}
+
 /** 三元组逐段与基准比较：≥ 基准返回 true（prerelease 已在上游剥掉）。 */
 function atOrAfterTriple(triple, base) {
   for (let i = 0; i < 3; i++) {
@@ -101,22 +136,35 @@ export async function detectPresetSystem({ dshHome, runtimeSystem = null } = {})
 }
 
 /**
- * 从当前进程 argv[1] 推断正在运行的宿主版本：沿脚本所在目录向上找最近的
- * package.json，name 是 @deepseek-ai/dsh 即取其 version。插件跑在宿主进程里，
- * 这比 PATH 上的 `dsh --version` 又快又准（无需子进程）；找不到（CLI / 测试 /
- * 任意非 dsh 进程）返回 null。找到的第一个 package.json 不是 dsh 即止——
- * 向上穿越无关包目录没有意义。
+ * 计入 argv rung 的宿主包名（显式集合，禁止 `@deepseek-ai/dsh-` 前缀泛匹配：
+ * dsh-persona / dsh-tool-subagent 等插件包不是宿主，误认会让插件包版本冒充
+ * 宿主版本驱动版本门控）。desktop 宿主与其打包的 dsh runtime 同版本同轨
+ * （实测 0.2.1-rc.2 两侧一致），取 dsh-desktop-host 包版本即宿主版本。
  */
-function hostVersionFromArgv() {
+const HOST_ARGV_PACKAGE_NAMES = new Set(['@deepseek-ai/dsh', '@deepseek-ai/dsh-desktop-host'])
+
+/**
+ * 从进程 argv[1]（entry 可注入供测试，默认 process.argv[1]）推断正在运行的
+ * 宿主版本：沿脚本所在目录向上找最近的 package.json，name 是宿主包名
+ * （HOST_ARGV_PACKAGE_NAMES：CLI 宿主 @deepseek-ai/dsh，或 desktop 宿主
+ * @deepseek-ai/dsh-desktop-host）即取其 version。插件跑在宿主进程里，这比
+ * PATH 上的 `dsh --version` 又快又准（无需子进程）；找不到（CLI / 测试 /
+ * 任意非宿主进程）返回 null。找到的第一个 package.json 不是宿主即止——向上
+ * 穿越无关包目录没有意义；中间层没有 package.json 则继续向上（宿主包缺
+ * 元数据时仍能命中外层 dsh 包）。desktop 宿主进程 argv[1] 指向
+ * .../node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js，向上一级即
+ * 命中 dsh-desktop-host 包——此前只认 @deepseek-ai/dsh，desktop 宿主探测
+ * 落空、错误回落 PATH 上的 dsh CLI（版本可能远低于正在运行的宿主）。
+ */
+export function hostVersionFromArgv(entry = process.argv[1]) {
   try {
-    const entry = process.argv[1]
     if (typeof entry !== 'string' || entry === '') return null
     let dir = path.dirname(path.resolve(entry))
     for (let i = 0; i < 6 && dir !== path.dirname(dir); i++) {
       const pkgPath = path.join(dir, 'package.json')
       if (existsSync(pkgPath)) {
         const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-        return pkg?.name === '@deepseek-ai/dsh' ? String(pkg.version ?? '') : null
+        return HOST_ARGV_PACKAGE_NAMES.has(pkg?.name) ? String(pkg.version ?? '') : null
       }
       dir = path.dirname(dir)
     }
@@ -126,7 +174,14 @@ function hostVersionFromArgv() {
   }
 }
 
-/** `dsh --version` 取裸版本号文本；任何失败（ENOENT / 超时 / 非零退出）返回 null。 */
+/**
+ * argv rung 之后的 CLI 回落：PATH 上 `dsh --version` 取裸版本号文本；任何失败
+ * （ENOENT / 超时 / 非零退出）返回 null。只在 argv 未命中宿主包时才会走到
+ * 这里——desktop 宿主 argv[1] 命中 dsh-desktop-host 包，不会落到本级；而
+ * PATH 上的 dsh CLI 版本可能低于正在运行的宿主（用户升了 desktop、PATH 上
+ * 还是旧 CLI，实测 desktop 0.2.1-rc.2 在跑而 PATH dsh 是 0.2.0-rc.2），本级
+ * 结果只代表「PATH 上的 CLI」，故探测优先级低于 argv。
+ */
 function dshVersionText() {
   try {
     const res = spawnSync('dsh', ['--version'], { timeout: 10_000, encoding: 'utf8' })
@@ -157,14 +212,19 @@ function dshVersionText() {
  * plugins: 落 8 空格、插件条目行落 10 空格。name/description 用 JSON.stringify
  * 落值——JSON 字符串即合法 YAML 双引号标量，换行/引号自动转义。agentYmlText
  * 先把 restrict 行的 `name: ./restrict.mjs` 与 delegation-labels 行的
- * `name: ./delegation-labels.mjs` 替换为对应绝对 file: URL（两个本地插件文件
- * 均无「相对 preset 目录」语义），再整体 +10 缩进；空行保持空行（块标量相对
+ * `name: ./delegation-labels.mjs` 替换为对应绝对 file: URL（本地插件文件
+ * 均无「相对 preset 目录」语义，必须绝对化）；0.2.1+ AgentPreset 形态的产物
+ * 另含 `name: ./role-restrict.mjs` 的角色面行（嵌套在 paoding-role-* 子声明
+ * 行的 plugins 里），同理经 roleRestrictFileUrl 绝对化——未提供该 URL 而产物
+ * 里有该行属硬错误（与 delegation-labels 同口径，防相对名字静默进 patch 让
+ * preset 挂掉），提供了而产物里没有则无害（旧形态产物照常构造）。
+ * 再整体 +10 缩进；空行保持空行（块标量相对
  * 缩进不变），`!!js` 表达式行原样保留（宿主 patch schema 支持，求值仍由
  * cordis 装载时完成）。文本里出现 delegation-labels 行而未提供
  * delegationLabelsFileUrl 时硬错误——漏传会让相对名字静默进 patch，宿主
  * 解析不了、preset 直接挂掉。
  */
-export function buildPresetRowText({ presetId, name = null, description = null, order = null, agentYmlText, restrictFileUrl, delegationLabelsFileUrl = null }) {
+export function buildPresetRowText({ presetId, name = null, description = null, order = null, agentYmlText, restrictFileUrl, delegationLabelsFileUrl = null, roleRestrictFileUrl = null }) {
   if (typeof presetId !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(presetId)) {
     throw new Error(`buildPresetRowText: 非法 presetId: ${presetId}`)
   }
@@ -174,11 +234,14 @@ export function buildPresetRowText({ presetId, name = null, description = null, 
   if (typeof restrictFileUrl !== 'string' || restrictFileUrl === '') {
     throw new Error('buildPresetRowText: restrictFileUrl 不能为空')
   }
-  const referencesLabelsRow = String(agentYmlText)
-    .split(/\r?\n/)
-    .some((line) => line.trim() === 'name: ./delegation-labels.mjs')
+  const agentLines = String(agentYmlText).split(/\r?\n/)
+  const referencesLabelsRow = agentLines.some((line) => line.trim() === 'name: ./delegation-labels.mjs')
   if (referencesLabelsRow && (typeof delegationLabelsFileUrl !== 'string' || delegationLabelsFileUrl === '')) {
     throw new Error('buildPresetRowText: agentYmlText 引用了 ./delegation-labels.mjs，但未提供 delegationLabelsFileUrl')
+  }
+  const referencesRoleRestrictRow = agentLines.some((line) => line.trim() === 'name: ./role-restrict.mjs')
+  if (referencesRoleRestrictRow && (typeof roleRestrictFileUrl !== 'string' || roleRestrictFileUrl === '')) {
+    throw new Error('buildPresetRowText: agentYmlText 引用了 ./role-restrict.mjs（0.2.1+ AgentPreset 形态），但未提供 roleRestrictFileUrl')
   }
   const lines = [
     `    - id: ${presetRowId(presetId)}`,
@@ -190,7 +253,7 @@ export function buildPresetRowText({ presetId, name = null, description = null, 
   if (typeof description === 'string' && description !== '') lines.push(`        description: ${JSON.stringify(description)}`)
   if (Number.isInteger(order)) lines.push(`        order: ${order}`)
   lines.push('        plugins:')
-  for (const line of String(agentYmlText).split(/\r?\n/)) {
+  for (const line of agentLines) {
     if (line.trim() === '') {
       lines.push('')
       continue
@@ -200,6 +263,7 @@ export function buildPresetRowText({ presetId, name = null, description = null, 
     const fileUrl =
       trimmed === 'name: ./restrict.mjs' ? restrictFileUrl
       : trimmed === 'name: ./delegation-labels.mjs' ? delegationLabelsFileUrl
+      : trimmed === 'name: ./role-restrict.mjs' ? roleRestrictFileUrl
       : null
     const replaced = fileUrl !== null ? `${line.match(/^[ \t]*/)[0]}name: ${fileUrl}` : line
     lines.push(`          ${replaced}`)
@@ -521,9 +585,36 @@ export function readPresetDirMeta(dir) {
  * 不拖垮其余补写（整盘重生成可修复）。
  * 返回实际补写成功的 presetId 列表（既没补也没撤时为空数组）。
  */
+/**
+ * 判定一份 agent.cordis.yml 产物文本的角色委派行形态（backfill 自愈的防毒
+ * 守卫用，与标记第四行同词汇表）：8 空格缩进的内联 `persona: |-` → inline
+ * （0.2.1 宿主的 dsh-tool-subagent 会拒绝）；顶层 `agentPreset: paoding-role-`
+ * 引用 → agent-preset。两者都无（角色被 roles_remove 清空且无自定义角色等）
+ * 返回 null——产物不含任何 0.2.1 守卫键，对两代宿主都安全。两种形状同时在场
+ * 视为 inline（混合/损坏产物按旧形状从严处理，交给整盘重生成修复）。
+ */
+export function detectAgentRolesFlavor(agentYmlText) {
+  if (/^        persona: \|-/m.test(agentYmlText)) return ROLES_INLINE
+  if (/^        agentPreset: paoding-role-/m.test(agentYmlText)) return ROLES_AGENT_PRESET
+  return null
+}
+
+/**
+ * 轨道迁移对账：把 $DSH_HOME/cordis.patch.yml MANAGED 块里缺失的编排类 preset
+ * 声明行按磁盘产物补写回来。只补「行缺失」：行在则零写盘（内容对账是
+ * ensurePresetInstalled 的整盘重生成路径，不在这里做）。
+ *
+ * 形态防毒守卫：补行内容 = 磁盘产物全文内联，若产物角色行形态与宿主所需
+ * （presetRolesFlavorOf(detectHostVersionTriple())）不符——典型是宿主已升
+ * 0.2.1 而磁盘还是内联形状——补出去的声明行会让 0.2.1 宿主挂编排 preset 的
+ * 新建会话直接被 tool-subagent 守卫拒绝。此时跳过该 preset 并 warn（可整盘
+ * 重生成修复），绝不按旧产物写行；反方向（宿主降级、磁盘已是新形状）同理。
+ * 守卫经 DSH_PAODING_FAKE_HOST_VERSION 可测。
+ */
 export function backfillHomePatchRows(dshHome, presetIds) {
   const rowsOnDisk = readHomePatchRows(dshHome)
   const wanted = new Set((Array.isArray(presetIds) ? presetIds : []).filter((id) => ORCHESTRATOR_PRESET_ID_RE.test(id)))
+  const hostRolesFlavor = presetRolesFlavorOf(detectHostVersionTriple())
   const rows = []
   const backfilled = []
   for (const presetId of wanted) {
@@ -531,10 +622,23 @@ export function backfillHomePatchRows(dshHome, presetIds) {
     const dir = path.join(dshHome, '.agent-presets', presetId)
     try {
       const agentYmlText = readFileSync(path.join(dir, 'agent.cordis.yml'), 'utf8')
+      // 形态防毒守卫（见上方 doc 注释）：磁盘产物形态 ≠ 宿主所需 → 不补行。
+      const diskRolesFlavor = detectAgentRolesFlavor(agentYmlText)
+      if (diskRolesFlavor !== null && diskRolesFlavor !== hostRolesFlavor) {
+        throw new Error(
+          `磁盘产物角色行形态 ${diskRolesFlavor} 与宿主所需 ${hostRolesFlavor} 不符——按旧产物补行会让 0.2.1 宿主被 tool-subagent 守卫拒绝，请整盘重生成换代`,
+        )
+      }
       const restrictFile = path.join(dir, 'restrict.mjs')
       if (!existsSync(restrictFile)) throw new Error('restrict.mjs 缺失')
       const labelsFile = path.join(dir, 'delegation-labels.mjs')
       if (!existsSync(labelsFile)) throw new Error('delegation-labels.mjs 缺失')
+      // role-restrict.mjs 仅 0.2.1+ AgentPreset 形态产物含（角色面行）——按产物
+      // 里有没有该行决定是否必需，目录轨老产物（inline 形态）不受影响。
+      const roleRestrictFile = path.join(dir, 'role-restrict.mjs')
+      if (agentYmlText.includes('name: ./role-restrict.mjs') && !existsSync(roleRestrictFile)) {
+        throw new Error('role-restrict.mjs 缺失')
+      }
       const meta = readPresetDirMeta(dir)
       rows.push(
         buildPresetRowText({
@@ -545,6 +649,7 @@ export function backfillHomePatchRows(dshHome, presetIds) {
           agentYmlText,
           restrictFileUrl: pathToFileURL(restrictFile).href,
           delegationLabelsFileUrl: pathToFileURL(labelsFile).href,
+          ...(existsSync(roleRestrictFile) ? { roleRestrictFileUrl: pathToFileURL(roleRestrictFile).href } : {}),
         }),
       )
       backfilled.push(presetId)
@@ -560,12 +665,13 @@ export function backfillHomePatchRows(dshHome, presetIds) {
 }
 
 /**
- * 解析 .generator-version 标记文本为 { version, track, worker }。v3 格式三行：
- * 首行生成器版本、次行预设安装轨道（declarative / directory）、三行 workflow
- * worker 形态（ptc / worker-thread）；旧格式（v2 两行 = 0.3.6 及以前、单行 =
- * 0.3.4 及以前）解析出 track / worker 为 null —— 恰是「宿主已换代但产物版本
- * 未动」的迁移触发态（轨道翻转、worker 换代都靠它触发自愈）。空文本 / 全空白
- * 返回 null（按未生成处理）。
+ * 解析 .generator-version 标记文本为 { version, track, worker, roles }。v4 格式
+ * 四行：首行生成器版本、次行预设安装轨道（declarative / directory）、三行
+ * workflow worker 形态（ptc / worker-thread）、四行角色委派行形态（inline /
+ * agent-preset）；v3 三行（0.4.3 及以前）解析出 roles 为 null、v2 两行
+ *（0.3.6 及以前）track / worker 也为 null —— null 恰是「宿主已换代但产物版本
+ * 未动」的迁移触发态（轨道翻转、worker 换代、角色行换代都靠它触发自愈）。
+ * 空文本 / 全空白返回 null（按未生成处理）。
  */
 export function parseGeneratorMarker(text) {
   const lines = String(text ?? '')
@@ -575,15 +681,17 @@ export function parseGeneratorMarker(text) {
   if (lines.length === 0) return null
   const track = lines[1] === 'declarative' || lines[1] === 'directory' ? lines[1] : null
   const worker = lines[2] === 'ptc' || lines[2] === 'worker-thread' ? lines[2] : null
-  return { version: lines[0], track, worker }
+  const roles = lines[3] === 'inline' || lines[3] === 'agent-preset' ? lines[3] : null
+  return { version: lines[0], track, worker, roles }
 }
 
 /**
- * 生成 .generator-version 标记文本（版本 + 轨道 + worker 形态三行，v3 格式）。
- * worker 取 WORKER_PTC / WORKER_WORKER_THREAD（允许调用方先探测再传入）。
+ * 生成 .generator-version 标记文本（版本 + 轨道 + worker 形态 + 角色形态四行，
+ * v4 格式）。worker 取 WORKER_PTC / WORKER_WORKER_THREAD、roles 取 ROLES_INLINE /
+ * ROLES_AGENT_PRESET（允许调用方先探测再传入）。
  */
-export function formatGeneratorMarker(version, presetSystem, worker) {
-  return `${version}\n${presetSystem}\n${worker}\n`
+export function formatGeneratorMarker(version, presetSystem, worker, roles) {
+  return `${version}\n${presetSystem}\n${worker}${roles ? `\n${roles}` : ''}\n`
 }
 
 // ── workflow worker 形态（宿主版本 → 生成期换行）────────────────────────────
@@ -592,6 +700,44 @@ export function formatGeneratorMarker(version, presetSystem, worker) {
 export const WORKER_PTC = 'ptc'
 export const WORKER_WORKER_THREAD = 'worker-thread'
 
+// ── 角色委派行形态（宿主版本 → 生成期换形）──────────────────────────────────
+
+/** 生成产物里角色委派行的两种形态（标记第四行的合法取值）。 */
+export const ROLES_INLINE = 'inline'
+export const ROLES_AGENT_PRESET = 'agent-preset'
+
+/**
+ * 该宿主版本的角色委派行形态：≥0.2.1（含 0.2.1-rc.*，parseVersionTriple 把
+ * prerelease 剥成 0.2.1 三元组，逐段比较天然命中）走 AgentPreset 形态——
+ * dsh-tool-subagent 从 0.2.1-rc.2 起在 apply() 硬拒配置里的 persona /
+ * toolFilter 键（报 "persona is no longer supported; configure persona and
+ * tool plugins in an Agent Preset and select it with agentPreset"），内联
+ * 形状的委派行让 0.2.1+ 宿主上挂编排 preset 的新建会话直接抛错；< 0.2.1 保持
+ * 内联形态（老宿主不认 agentPreset 键，产物零 diff 不变量随之保留）。版本
+ * 探测不到时返回 false（保守侧：保留源模板原形状），与 isPtcWorkerHost 的
+ * 保守哲学一致。
+ */
+export function isPresetRoleHost(triple, prerelease) {
+  if (!Array.isArray(triple) || triple.length !== 3 || triple.some((n) => !Number.isInteger(n))) return false
+  if (!atOrAfterTriple(triple, [0, 2, 1])) return false
+  // 0.2.1 这一个点上分辨 prerelease：tool-subagent 守卫是 0.2.1-rc.2 落地的，
+  // rc.0 / rc.1 仍认内联形状，换 agentPreset 形态反而会被当未知键拒绝。正式版
+  // （prerelease null）与更高的 triple 一律新形态；prerelease 未知（缺省
+  // undefined = 旧调用方 / 旧测试只传三元组）保持原行为按新形态处理。
+  if (triple[0] === 0 && triple[1] === 2 && triple[2] === 1 && prerelease !== null && prerelease !== undefined) {
+    return comparePrerelease(prerelease, 'rc.2') >= 0
+  }
+  return true
+}
+
+/**
+ * 生成器标记第四行的角色形态取值（composeGenerated 的 isPresetRoleHost 同一
+ * 判定，探测不到按 inline 落盘——与保守生成侧一致，重生成后产物可再次对账）。
+ */
+export function presetRolesFlavorOf(hostVersionTriple, prerelease) {
+  return isPresetRoleHost(hostVersionTriple, prerelease) ? ROLES_AGENT_PRESET : ROLES_INLINE
+}
+
 /**
  * 探测正在运行的宿主版本三元组：进程 argv 宿主版本（插件与宿主同进程时零开销
  * 且反映正在运行的宿主）> PATH 上的 `dsh --version` > null。与
@@ -599,11 +745,26 @@ export const WORKER_WORKER_THREAD = 'worker-thread'
  * 的磁盘形态没有可区分的单数包，探测不到就返回 null 由调用方按未知处理。
  */
 export function detectHostVersionTriple() {
-  const argvVersion = hostVersionFromArgv()
-  if (argvVersion !== null) return parseVersionTriple(argvVersion)
-  const versionText = dshVersionText()
-  if (versionText !== null) return parseVersionTriple(versionText)
-  return null
+  return detectHostVersionInfo()?.triple ?? null
+}
+
+/**
+ * 宿主版本信息（三元组 + prerelease 原文）：探测链与 detectHostVersionTriple
+ * 完全同源（假版本钩子 > 进程 argv 宿主版本 > PATH 上的 dsh --version），
+ * 只是 prerelease 不剥——角色委派行形态门要分辫 0.2.1-rc.1 与 0.2.1-rc.2
+ *（守卫落地点），其余门（轨道 / worker）消费 triple 即可。
+ */
+export function detectHostVersionInfo() {
+  // 测试 / 诊断钩子（与 DSH_PAODING_CONFIG / DSH_PAODING_CWD 同款环境变量惯例）：
+  // 显式假版本号最高优先，让无 dsh 进程的测试与排查能驱动版本门控分支；非法值
+  // 忽略、落回正常探测链。
+  const fake = process.env.DSH_PAODING_FAKE_HOST_VERSION
+  let versionText = null
+  if (typeof fake === 'string' && fake.trim() !== '') versionText = fake.trim()
+  if (versionText === null) versionText = hostVersionFromArgv()
+  if (versionText === null) versionText = dshVersionText()
+  if (versionText === null) return null
+  return parseVersionInfo(versionText)
 }
 
 /**

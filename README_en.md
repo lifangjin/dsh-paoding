@@ -26,7 +26,7 @@ dsh-paoding (Chinese brand 「庖丁」/ Pao Ding, from the Zhuangzi parable of 
 - **Panel in English and Chinese**: every UI string ships in both languages, auto-detected (explicit choice first, then Chinese signals — browser language, host page language, Chinese time zones — outrank English ones, since the Electron shell pins navigator to en-US regardless of the OS), switchable from the More menu and remembered.
 - **Notified of new releases, one-click upgrade in the panel**: the panel compares your local version against the latest npm registry publish (npmmirror and GitHub release as successive fallbacks) and points to the release page when a newer one is out. The Upgrade button swaps in the new version in place (profile auto-detected): regular profiles go through `dsh plugin update dsh-paoding`, while the Electron-owned desktop profile — which the dsh CLI guards against — gets a direct `pnpm add dsh-paoding@<version>` run in the profile directory, falling back to `corepack pnpm` when no bare pnpm is on PATH; a DSH restart applies it, and the orchestrator preset regenerates itself against the new version on startup. A dev checkout in link: form cannot be upgraded in place — the panel tells you how to switch back to the registry version. If the check fails (offline, rate-limited), a subdued "version check failed · retry" row stays in the header (full causes and proxy hints in its tooltip) without popping anything up.
 - **Installs and uninstalls cleanly**: no DSH source changes; active in a new session right after install, gone when you delete one directory.
-- **Works on both host generations**: DSH 0.1.5 through 0.2.0-rc.2 are all supported (0.1.5 / 0.1.6 / 0.1.7-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.1 / 0.2.0-rc.2) — the two generations discover presets differently (directory scan vs patch declaration rows), and the installer picks the right landing automatically; from 0.2.0 the workflow worker row in the orchestration composition also adapts to the host version at generation time (0.1.5 uses workflow-worker-thread, 0.1.6+ swaps to workflow-ptc). Migration happens on the first save/self-heal after a host upgrade or downgrade, all without user action.
+- **Works on both host generations**: DSH 0.1.5 through 0.2.1 are all supported (0.1.5 / 0.1.6 / 0.1.7-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.1 / 0.2.0-rc.2 / 0.2.1-rc.2+) — the two generations discover presets differently (directory scan vs patch declaration rows), and the installer picks the right landing automatically; from 0.2.0 the workflow worker row in the orchestration composition also adapts to the host version at generation time (0.1.5 uses workflow-worker-thread, 0.1.6+ swaps to workflow-ptc); from DSH 0.2.1 the role delegation rows migrate too (0.2.1's dsh-tool-subagent rejects inline persona/toolFilter — each role gets an AgentPreset holding its persona and a role-restrict tool-surface plugin, selected via agentPreset on the spawn delegation; 0.2.0 and below keep the inline shape). Migration happens on the first save/self-heal after a host upgrade or downgrade (workspace presets, orchestrator-<slug>, are regenerated in the same self-heal pass), all without user action; the 0.2.1 prereleases are subdivided further — the tool-subagent guard landed in 0.2.1-rc.2, so rc.0/rc.1 keep the inline shape.
 
 ## Screenshots
 
@@ -34,7 +34,7 @@ dsh-paoding (Chinese brand 「庖丁」/ Pao Ding, from the Zhuangzi parable of 
 
 ## Quick Start
 
-Prerequisites: **Node.js ≥ 18**, **pnpm**, and a working DSH host (**@deepseek-ai/dsh 0.1.5 – 0.2.0-rc.2**, all supported — the preset landing adapts to the host generation automatically).
+Prerequisites: **Node.js ≥ 18**, **pnpm**, and a working DSH host (**@deepseek-ai/dsh 0.1.5 – 0.2.1**, all supported — the preset landing and role-row shape adapt to the host version automatically).
 
 **The official plugin channel (the only install route)** — no clone needed; one command, then a restart:
 
@@ -95,7 +95,7 @@ Writes go through the same generation pipeline and write lock as the panel's Sav
 | Document | Contents |
 |---|---|
 | [Architecture](docs/architecture_en.md) | Why it is designed this way — overview, the cost ledger, roles and tools, mapping to DSH's native mechanisms, token governance, known limits. |
-| [Installation](docs/installation_en.md) | The single official channel (`dsh plugin add`), version support and the dual preset landing (DSH 0.1.5 – 0.2.0-rc.2), first-install automation and the version marker, upgrading, dev-checkout install, host patch detection, the Paoding Config panel, uninstalling, troubleshooting. |
+| [Installation](docs/installation_en.md) | The single official channel (`dsh plugin add`), version support and the dual preset landing (DSH 0.1.5 – 0.2.1), first-install automation and the version marker, upgrading, dev-checkout install, host patch detection, the Paoding Config panel, uninstalling, troubleshooting. |
 | [Orchestration](docs/orchestration_en.md) | Orchestration overview, how failures surface and the three recovery layers, one-shot vs continuable, context isolation. |
 | [Configuration](docs/configuration_en.md) | The full key reference, tool-entry wildcards, tuning built-in roles, main-agent tools and skills, custom roles, per-role models, per-role session and start modes, scenario templates, config export/import, health-check hints, the HTTP API. |
 

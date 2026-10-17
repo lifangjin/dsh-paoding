@@ -17,6 +17,7 @@ import path from 'node:path'
 
 import { ensurePresetInstalled } from '../plugins/paoding-config-ui/api-core.mjs'
 import { readHomePatchRows } from '../tools/lib/preset-system.mjs'
+import { normalizeTargetFields, saveConfig } from '../tools/lib/config.mjs'
 
 /** 与真实包版本无关的生成器版本（决策只看相等性）。 */
 const GEN = '0.9.9-test'
@@ -52,7 +53,20 @@ async function withEnv(configFile, fn) {
   }
 }
 
+/** withEnv + 假宿主版本（DSH_PAODING_FAKE_HOST_VERSION 探测钩子，用毕还原）。 */
+async function withHostVersion(configFile, version, fn) {
+  const prevFake = process.env.DSH_PAODING_FAKE_HOST_VERSION
+  process.env.DSH_PAODING_FAKE_HOST_VERSION = version
+  try {
+    return await withEnv(configFile, fn)
+  } finally {
+    if (prevFake === undefined) delete process.env.DSH_PAODING_FAKE_HOST_VERSION
+    else process.env.DSH_PAODING_FAKE_HOST_VERSION = prevFake
+  }
+}
+
 const markerFileOf = (dshHome) => path.join(dshHome, '.agent-presets', 'orchestrator', '.generator-version')
+const roleRestrictFileOf = (dshHome, presetId = 'orchestrator') => path.join(dshHome, '.agent-presets', presetId, 'role-restrict.mjs')
 const agentFileOf = (dshHome, presetId = 'orchestrator') => path.join(dshHome, '.agent-presets', presetId, 'agent.cordis.yml')
 const labelsFileOf = (dshHome, presetId = 'orchestrator') => path.join(dshHome, '.agent-presets', presetId, 'delegation-labels.mjs')
 
@@ -63,7 +77,7 @@ test('首装（无标记）：directory 宿主整盘重生成，标记记版本+
     assert.equal(r.installed, true)
     assert.ok(existsSync(agentFileOf(dshHome)), 'preset 三件套应落盘')
     assert.ok(existsSync(labelsFileOf(dshHome)), 'delegation-labels.mjs 应随 restrict.mjs 一起落盘')
-    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\nworker-thread\n`)
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\nworker-thread\ninline\n`)
     assert.deepEqual(readHomePatchRows(dshHome), [], 'directory 轨不得写声明行')
     assert.ok(existsSync(configFile), 'fresh 安装应落基础模板配置')
   })
@@ -75,7 +89,7 @@ test('首装（无标记）：declarative 宿主重生成 + 写声明行；再�
   await withEnv(configFile, async () => {
     const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
     assert.equal(r.installed, true)
-    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nworker-thread\n`)
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nworker-thread\ninline\n`)
     assert.deepEqual(readHomePatchRows(dshHome), [{ rowId: 'preset-orchestrator', presetId: 'orchestrator' }])
 
     // 幂等：版本轨道一致 + 行齐 → 跳过，marker 与 patch 字节级不动
@@ -114,7 +128,7 @@ test('事故主路径：只升 dsh 不动插件（旧格式标记 + 轨道翻转
     assert.deepEqual([...(r.backfilled ?? [])].sort(), ['orchestrator', 'orchestrator-ws1'])
     assert.equal(readFileSync(agentFileOf(dshHome), 'utf8'), agentBefore, 'preset 内容字节不动')
     assert.equal(readFileSync(agentFileOf(dshHome, 'orchestrator-ws1'), 'utf8'), wsAgentBefore)
-    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nworker-thread\n`, '标记升级为带轨道格式')
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nworker-thread\ninline\n`, '标记升级为带轨道格式')
     assert.deepEqual(readHomePatchRows(dshHome).map((x) => x.presetId).sort(), ['orchestrator', 'orchestrator-ws1'])
   })
 })
@@ -143,7 +157,7 @@ test('宿主降级（declarative→directory、声明行残留）→ 整盘重�
     const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
     assert.equal(r.installed, true, '残留声明行会让 0.1.6 profile 启动失败，必须走重生成撤块')
     assert.deepEqual(readHomePatchRows(dshHome), [])
-    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\nworker-thread\n`)
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\nworker-thread\ninline\n`)
   })
 })
 
@@ -212,7 +226,7 @@ test('worker 形态: 0.2.0 宿主首装 → 产物含 workflow-ptc、无旧包�
   const agentText = readFileSync(agentFileOf(dshHome), 'utf8')
   assert.ok(agentText.includes('- id: workflow-ptc'), '0.2.0 宿主产物缺 workflow-ptc 行')
   assert.ok(!agentText.includes("'@deepseek-ai/dsh-workflow-worker-thread'"), '0.2.0 宿主产物残留旧包行')
-  assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\n`)
+  assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\ninline\n`)
   // 幂等：worker 形态一致 → 轻量路径，字节不动
   const agentBefore = agentText
   const r2 = await runEnsureInFakeHost(HOST_VERSION_PTC, dshHome, configFile)
@@ -226,7 +240,7 @@ test('worker 形态: 0.1.5 宿主保留 worker-thread 行；v2 旧标记 + 0.2.0
   const r = await runEnsureInFakeHost(HOST_VERSION_WORKER_THREAD, dshHome, configFile)
   assert.equal(r.installed, true)
   assert.ok(readFileSync(agentFileOf(dshHome), 'utf8').includes("'@deepseek-ai/dsh-workflow-worker-thread'"))
-  assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\nworker-thread\n`)
+  assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndirectory\nworker-thread\ninline\n`)
   // 模拟旧版插件写的 v2 标记（无第三行）
   writeFileSync(markerFileOf(dshHome), `${GEN}\ndirectory\n`)
   // 宿主升 0.2.0：worker 形态分叉 → 整盘重生成，产物换代 + 标记升 v3
@@ -235,5 +249,169 @@ test('worker 形态: 0.1.5 宿主保留 worker-thread 行；v2 旧标记 + 0.2.0
   const agentText = readFileSync(agentFileOf(dshHome), 'utf8')
   assert.ok(agentText.includes('- id: workflow-ptc'), '重生成后仍缺 workflow-ptc 行')
   assert.ok(!agentText.includes("'@deepseek-ai/dsh-workflow-worker-thread'"), '重生成后残留旧包行')
-  assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\n`)
+  assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\ninline\n`)
+})
+
+// ── 0.2.1 角色行换代（agentPreset 形态）──────────────────────────────────────
+
+test('0.2.1 宿主首装（declarative）：agentPreset 角色形态落盘 + role-restrict.mjs 随源清单落盘 + 标记第四行', async () => {
+  const { dshHome, configFile, patchFile } = freshEnv('fresh-021')
+  makeDeclarative(dshHome)
+  await withHostVersion(configFile, '0.2.1', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, true)
+    const agentText = readFileSync(agentFileOf(dshHome), 'utf8')
+    assert.ok(agentText.includes('- id: paoding-role-search_external'), '角色子预设行应落盘')
+    assert.ok(agentText.includes('agentPreset: paoding-role-search_external'), '委派行应带 agentPreset 引用')
+    assert.ok(!/        persona: \|-/.test(agentText), '0.2.1 形态不得残留内联角色 persona（0.2.1 宿主 apply 必炸）')
+    assert.ok(existsSync(roleRestrictFileOf(dshHome)), 'role-restrict.mjs 应随 PRESET_ASIS_FILES 落盘')
+    // 完整组合：角色子预设自带 standard 基础行（6 空格缩进 = plugins 条目层级；
+    // 0.2.1 显式选择 preset 时子 agent 不继承父 preset）
+    assert.ok(agentText.includes('\n      - id: tool-bash'), '角色子预设应自带 standard 基础行')
+    // fake 0.2.1 → worker=ptc、roles=agent-preset，标记四行齐
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\nagent-preset\n`)
+    // 声明行文本应把 role-restrict 行绝对化为 file: URL（agentYmlText 引用了该行）
+    const patchText = readFileSync(patchFile, 'utf8')
+    assert.ok(patchText.includes('role-restrict.mjs') && patchText.includes('file://'), '声明行缺 role-restrict file: URL')
+  })
+})
+
+test('事故新路径：宿主 0.2.0→0.2.1 只升 dsh 不动插件（标记版本/轨道/worker 全吻合，roles=inline）→ 整盘重生成换角色形状', async () => {
+  const { dshHome, configFile } = freshEnv('upgrade-021')
+  makeDeclarative(dshHome)
+  // 0.2.0 时代落盘：内联形状 + 标记 roles=inline
+  await withHostVersion(configFile, '0.2.0', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, true)
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\ninline\n`)
+    assert.ok(/        persona: \|-/.test(readFileSync(agentFileOf(dshHome), 'utf8')), '0.2.0 落盘应为内联形状')
+  })
+  // 宿主升 0.2.1：标记 roles 与宿主所需分叉 → 轻量路径不可用，整盘重生成
+  await withHostVersion(configFile, '0.2.1', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, true, '角色行形态换代应触发整盘重生成')
+    const agentText = readFileSync(agentFileOf(dshHome), 'utf8')
+    assert.ok(agentText.includes('agentPreset: paoding-role-search_external'), '重生成后应为 agentPreset 形态')
+    assert.ok(!/        persona: \|-/.test(agentText), '重生成后不得残留内联角色 persona')
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\nagent-preset\n`)
+    // 幂等：版本轨道 worker roles 全吻合后 → 跳过，字节不动
+    const agentBefore = readFileSync(agentFileOf(dshHome), 'utf8')
+    const r2 = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r2.installed, false)
+    assert.equal(readFileSync(agentFileOf(dshHome), 'utf8'), agentBefore)
+  })
+})
+
+test('防毒兜底：磁盘产物被回滚成内联形状而标记已换代吻合 → 补行守卫拒写旧形状、标记产物不动', async () => {
+  const { dshHome, configFile, patchFile } = freshEnv('poison-belt')
+  makeDeclarative(dshHome)
+  await withHostVersion(configFile, '0.2.1', async () => {
+    // 首装：新形状 + v4 标记（roles=agent-preset）
+    const r0 = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r0.installed, true)
+
+    // 毒化磁盘：产物整体回滚成内联形状（模拟旧备份还原 / 手改），标记不动，
+    // patch 行清空（行缺失才走 ensure 轻量路径的补行）
+    writeFileSync(agentFileOf(dshHome), readFileSync(new URL('../presets/orchestrator/agent.cordis.yml', import.meta.url), 'utf8'))
+    writeFileSync(patchFile, '')
+
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, false)
+    assert.ok(!Array.isArray(r.backfilled) || r.backfilled.length === 0, '防毒守卫应拒绝按内联产物补行')
+    const patchText = readFileSync(patchFile, 'utf8')
+    assert.ok(!/        persona: \|-\n/.test(patchText), '内联 persona 行不得被补回 patch（0.2.1 宿主 apply 必炸）')
+    assert.ok(!patchText.includes('toolFilter:'), '内联 toolFilter 不得被补回 patch')
+    // 等待整盘重生成换代：标记与磁盘毒产物都不该被轻量路径改动
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\nagent-preset\n`)
+  })
+})
+
+test('v3 三行标记（旧插件自愈痕迹）+ 0.2.1 宿主：roles 视为不符 → 整盘重生成换角色形状', async () => {
+  const { dshHome, configFile } = freshEnv('v3-marker-021')
+  makeDeclarative(dshHome)
+  // 0.2.0 时代落盘内联形状
+  await withHostVersion(configFile, '0.2.0', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, true)
+  })
+  // 回写旧插件的三行标记（roles 行缺失 = 旧生成器自愈产物）
+  writeFileSync(markerFileOf(dshHome), `${GEN}\ndeclarative\nptc\n`)
+  assert.ok(/        persona: \|-\n/.test(readFileSync(agentFileOf(dshHome), 'utf8')), '前置：磁盘为内联形状')
+
+  await withHostVersion(configFile, '0.2.1', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, true, '三行标记在 0.2.1 宿主上应触发整盘重生成')
+    const agentText = readFileSync(agentFileOf(dshHome), 'utf8')
+    assert.ok(agentText.includes('agentPreset: paoding-role-search_external'), '重生成后应为 agentPreset 形态')
+    assert.ok(!/        persona: \|-\n/.test(agentText), '重生成后不得残留内联角色 persona')
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\nagent-preset\n`)
+  })
+})
+
+test('工作区预设形态换代：宿主 0.2.0→0.2.1 整盘重生成后，存量 orchestrator-<slug> 产物同步换代', async () => {
+  const { dshHome, configFile, patchFile } = freshEnv('ws-migrate')
+  makeDeclarative(dshHome)
+  const wsPath = path.join(dshHome, 'projects', 'obsidian')
+  mkdirSync(wsPath, { recursive: true })
+  const roleAssignment = { roles: { implement: { persona: '实现角色', tools: ['read', 'edit'] } } }
+  saveConfig(configFile, {
+    profile: null,
+    ...normalizeTargetFields(roleAssignment),
+    workspaces: { [wsPath]: normalizeTargetFields(roleAssignment) },
+  })
+
+  // 0.2.0 时代：基础 preset 内联形状落盘；工作区产物是旧版插件应用后的内联形状
+  //（ensure 只管基础盘，工作区盘用 cpSync 造）
+  await withHostVersion(configFile, '0.2.0', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, true)
+    assert.ok(/        persona: \|-\n/.test(readFileSync(agentFileOf(dshHome), 'utf8')), '前置：基础盘为内联形状')
+  })
+  const wsDir = path.join(dshHome, '.agent-presets', 'orchestrator-obsidian')
+  cpSync(path.join(dshHome, '.agent-presets', 'orchestrator'), wsDir, { recursive: true })
+  assert.ok(/        persona: \|-\n/.test(readFileSync(path.join(wsDir, 'agent.cordis.yml'), 'utf8')), '前置：工作区盘为内联形状')
+
+  // 宿主升 0.2.1-rc.2：基础整盘重生成，工作区产物随自愈换代（配置段原样保留）
+  await withHostVersion(configFile, '0.2.1-rc.2', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, true)
+    assert.deepEqual(r.migratedPresets, ['orchestrator-obsidian'], '工作区预设应随自愈换代')
+    assert.ok(r.reason.includes('工作区预设角色行已换代'), `reason 应点名换代：${r.reason}`)
+    const wsAgent = readFileSync(path.join(wsDir, 'agent.cordis.yml'), 'utf8')
+    assert.ok(wsAgent.includes('agentPreset: paoding-role-implement'), '工作区委派行应带 agentPreset 引用')
+    assert.ok(!/        persona: \|-\n/.test(wsAgent), '工作区产物不得残留内联 persona（0.2.1 守卫必炸）')
+    assert.ok(existsSync(roleRestrictFileOf(dshHome, 'orchestrator-obsidian')), 'role-restrict.mjs 应随工作区落盘')
+    // 声明行：基础 + 工作区两行齐、无内联形状行
+    const rowIds = readHomePatchRows(dshHome).map((r2) => r2.rowId).sort()
+    assert.deepEqual(rowIds, ['preset-orchestrator', 'preset-orchestrator-obsidian'])
+    const patchText = readFileSync(patchFile, 'utf8')
+    assert.ok(!patchText.includes('toolFilter:'), 'patch 不得残留内联 toolFilter')
+    // 配置 workspaces 段原样保留（只换代产物，不回写配置）
+    const configText = readFileSync(configFile, 'utf8')
+    assert.ok(configText.includes(wsPath), '配置 workspaces 条目应原样保留')
+    // 基础盘同步换代（同一轮自愈）
+    assert.ok(!/        persona: \|-\n/.test(readFileSync(agentFileOf(dshHome), 'utf8')), '基础盘应为 agentPreset 形态')
+
+    // 幂等：形态齐了再跑 → 跳过、字节不动、无 migratedPresets
+    const wsBefore = readFileSync(path.join(wsDir, 'agent.cordis.yml'), 'utf8')
+    const r2 = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r2.installed, false)
+    assert.ok(!Array.isArray(r2.migratedPresets) || r2.migratedPresets.length === 0, '形态吻合不应再动工作区盘')
+    assert.equal(readFileSync(path.join(wsDir, 'agent.cordis.yml'), 'utf8'), wsBefore)
+  })
+})
+
+test('宿主 0.2.1-rc.1（守卫未落地）：标记 roles=inline 与所需 inline 相符 → 轻量路径跳过，不换代', async () => {
+  const { dshHome, configFile } = freshEnv('rc1-light')
+  makeDeclarative(dshHome)
+  await withHostVersion(configFile, '0.2.0', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, true)
+  })
+  await withHostVersion(configFile, '0.2.1-rc.1', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, false, 'rc.1 宿主所需形态仍是 inline，不该重生成')
+    assert.ok(/        persona: \|-\n/.test(readFileSync(agentFileOf(dshHome), 'utf8')), '内联产物应原样保留')
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\ninline\n`, '标记不动')
+  })
 })

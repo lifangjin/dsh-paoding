@@ -7,7 +7,8 @@
  * 保留、JSON.stringify 转义）、home patch 托管块手术（空文件建块 / 用户内容
  * 逐字节保留 / 同 rowId 替换不重复 / 多 preset 共存 / strip 单行与整块 /
  * 损坏块拒绝写盘）、detectPresetSystem 降级链（runtimeSystem 直通 / 进程 argv
- * 宿主版本 rung / dsh --version 不可执行时按单数包存在性探测）、generateAndInstall
+ * 宿主版本 rung / dsh --version 不可执行时按单数包存在性探测）、hostVersionFromArgv
+ * desktop 宿主 argv 形态（dsh-desktop-host 计入宿主、插件包名不误认）、generateAndInstall
  * 双轨集成冒烟（declarative 落盘三件套 + home patch 托管块；directory 撤残留
  * 声明块自愈）、轨道迁移对账（标记 v2 解析 / 编排类目录清单 / 按目录补行 /
  * 孤儿行撤行 / 产物不全跳过）。
@@ -24,15 +25,24 @@ import {
   MANAGED_BEGIN,
   MANAGED_END,
   PRESET_ROW_NAME,
+  ROLES_AGENT_PRESET,
+  ROLES_INLINE,
   backfillHomePatchRows,
   buildPresetRowText,
+  detectAgentRolesFlavor,
+  detectHostVersionInfo,
+  detectHostVersionTriple,
   detectPresetSystem,
   formatGeneratorMarker,
+  hostVersionFromArgv,
+  isPresetRoleHost,
   isPtcWorkerHost,
   listOrchestratorPresetIds,
   parseGeneratorMarker,
+  parseVersionInfo,
   parseVersionTriple,
   isDeclarativeTriple,
+  presetRolesFlavorOf,
   presetRowId,
   readHomePatchRows,
   readPresetDirMeta,
@@ -437,17 +447,18 @@ test('generateAndInstall: directory 轨撤残留托管块自愈，用户内容�
 
 // ── 轨道迁移对账（标记 v2 / 目录清单 / 补行 / 撤行）─────────────────────────
 
-test('parseGeneratorMarker/formatGeneratorMarker: v3 往返、旧格式 track/worker=null、空文本 null', () => {
-  assert.deepEqual(parseGeneratorMarker(formatGeneratorMarker('0.3.7', 'declarative', 'ptc')), { version: '0.3.7', track: 'declarative', worker: 'ptc' })
-  assert.deepEqual(parseGeneratorMarker(formatGeneratorMarker('0.3.7', 'directory', 'worker-thread')), { version: '0.3.7', track: 'directory', worker: 'worker-thread' })
+test('parseGeneratorMarker/formatGeneratorMarker: v3 往返、旧格式 track/worker/roles=null、空文本 null', () => {
+  // v3 三参调用（无第四行）：解析 roles=null（v4 起解析形状恒含 roles 键）
+  assert.deepEqual(parseGeneratorMarker(formatGeneratorMarker('0.3.7', 'declarative', 'ptc')), { version: '0.3.7', track: 'declarative', worker: 'ptc', roles: null })
+  assert.deepEqual(parseGeneratorMarker(formatGeneratorMarker('0.3.7', 'directory', 'worker-thread')), { version: '0.3.7', track: 'directory', worker: 'worker-thread', roles: null })
   // v2（0.3.6 及以前：版本 + 轨道两行）——worker 形态换代事故的迁移触发态
-  assert.deepEqual(parseGeneratorMarker('0.3.6\ndeclarative\n'), { version: '0.3.6', track: 'declarative', worker: null })
+  assert.deepEqual(parseGeneratorMarker('0.3.6\ndeclarative\n'), { version: '0.3.6', track: 'declarative', worker: null, roles: null })
   // 旧格式（0.3.4 及以前：单行版本）——轨道翻转事故的迁移触发态
-  assert.deepEqual(parseGeneratorMarker('0.3.4\n'), { version: '0.3.4', track: null, worker: null })
-  assert.deepEqual(parseGeneratorMarker('0.3.4'), { version: '0.3.4', track: null, worker: null })
-  // 次行不是合法轨道值 → track null（宽容：不至于把整个标记作废）；第三行同理
-  assert.deepEqual(parseGeneratorMarker('0.3.5\nbogus\n'), { version: '0.3.5', track: null, worker: null })
-  assert.deepEqual(parseGeneratorMarker('0.3.7\ndeclarative\nbogus\n'), { version: '0.3.7', track: 'declarative', worker: null })
+  assert.deepEqual(parseGeneratorMarker('0.3.4\n'), { version: '0.3.4', track: null, worker: null, roles: null })
+  assert.deepEqual(parseGeneratorMarker('0.3.4'), { version: '0.3.4', track: null, worker: null, roles: null })
+  // 次行不是合法轨道值 → track null（宽容：不至于把整个标记作废）；第三/四行同理
+  assert.deepEqual(parseGeneratorMarker('0.3.5\nbogus\n'), { version: '0.3.5', track: null, worker: null, roles: null })
+  assert.deepEqual(parseGeneratorMarker('0.3.7\ndeclarative\nbogus\n'), { version: '0.3.7', track: 'declarative', worker: null, roles: null })
   assert.equal(parseGeneratorMarker(''), null)
   assert.equal(parseGeneratorMarker(null), null)
   assert.equal(parseGeneratorMarker('   \n  \n'), null)
@@ -588,4 +599,230 @@ test('detectPresetSystem: 进程 argv 宿主版本探测（插件与宿主同进
     assert.equal(res.status, 0, `${dir}: driver 应正常退出（stderr: ${res.stderr}）`)
     assert.equal(res.stdout, expected)
   }
+})
+
+// hostVersionFromArgv 读真实文件系统：用临时目录构造真实包布局 + 注入 entry
+// （函数提供 entry 默认参数 = process.argv[1]，测试无需子进程 / 不碰全局 argv）。
+
+test('hostVersionFromArgv: desktop 宿主 argv[1] 命中 dsh-desktop-host 包；宿主包缺 package.json 时向上穿越照常命中', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'dsh-paoding-argvhost-'))
+  const nm = path.join(root, 'node_modules', '@deepseek-ai')
+  // desktop 宿主真实形态：argv[1] = <dsh>/node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js，
+  // 向上一级命中 dsh-desktop-host/package.json（实测 0.2.1-rc.2 desktop 宿主
+  // name=@deepseek-ai/dsh-desktop-host、与其打包的 dsh runtime 同版本同轨）
+  // → 取包版本即宿主版本。修前此形态返回 null，错误回落 PATH 上的旧 CLI。
+  const desktopDir = path.join(nm, 'dsh-desktop-host')
+  mkdirSync(path.join(desktopDir, 'lib'), { recursive: true })
+  writeFileSync(path.join(desktopDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-desktop-host', version: '0.2.1-rc.2' }))
+  const desktopEntry = path.join(desktopDir, 'lib', 'index.js')
+  writeFileSync(desktopEntry, 'export {}')
+  assert.equal(hostVersionFromArgv(desktopEntry), '0.2.1-rc.2', 'desktop 宿主 argv 应命中 dsh-desktop-host 包版本')
+  // 上游 parseVersionTriple 剥 prerelease → [0,2,1]：版本门控按 0.2.1 走
+  assert.deepEqual(parseVersionTriple(hostVersionFromArgv(desktopEntry)), [0, 2, 1])
+
+  // CLI 宿主形态回归：argv[1] 在 @deepseek-ai/dsh 包内照旧命中
+  const cliDir = path.join(nm, 'dsh')
+  mkdirSync(path.join(cliDir, 'lib'), { recursive: true })
+  writeFileSync(path.join(cliDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.7-rc.1' }))
+  const cliEntry = path.join(cliDir, 'lib', 'index.js')
+  writeFileSync(cliEntry, 'export {}')
+  assert.equal(hostVersionFromArgv(cliEntry), '0.1.7-rc.1')
+
+  // 入口所在层无 package.json（desktop-host 包缺元数据等）：继续向上命中最近
+  // 宿主包——「非宿主即止」只对找到的 package.json 生效，缺元数据不得落空
+  writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.0' }))
+  const bareEntry = path.join(root, 'bare-host', 'lib', 'index.js')
+  mkdirSync(path.join(root, 'bare-host', 'lib'), { recursive: true })
+  writeFileSync(bareEntry, 'export {}')
+  assert.equal(hostVersionFromArgv(bareEntry), '0.2.0')
+})
+
+test('hostVersionFromArgv: 插件包名（dsh-personal / dsh-tool-subagent）不得误认宿主；空 entry / 无 package.json 落 null', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'dsh-paoding-argvplugin-'))
+  const nm = path.join(root, 'node_modules', '@deepseek-ai')
+  // 宿主名用显式集合，不做 @deepseek-ai/dsh-* 前缀泛匹配：插件包版本不得冒充宿主版本
+  for (const name of ['dsh-personal', 'dsh-tool-subagent']) {
+    const dir = path.join(nm, name)
+    mkdirSync(path.join(dir, 'lib'), { recursive: true })
+    writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: `@deepseek-ai/${name}`, version: '9.9.9' }))
+    const entry = path.join(dir, 'lib', 'index.js')
+    writeFileSync(entry, 'export {}')
+    assert.equal(hostVersionFromArgv(entry), null, `插件包 @deepseek-ai/${name} 不是宿主`)
+  }
+  // 非 @deepseek-ai 域的任意包同理落空
+  const otherDir = path.join(root, 'node_modules', 'some-tool')
+  mkdirSync(otherDir, { recursive: true })
+  writeFileSync(path.join(otherDir, 'package.json'), JSON.stringify({ name: 'some-tool', version: '1.0.0' }))
+  const otherEntry = path.join(otherDir, 'index.js')
+  writeFileSync(otherEntry, 'export {}')
+  assert.equal(hostVersionFromArgv(otherEntry), null)
+  // 空 / 非字符串 entry（CLI / 测试进程无宿主脚本）→ null
+  assert.equal(hostVersionFromArgv(''), null)
+  assert.equal(hostVersionFromArgv(null), null)
+  // 路径上任何一层都没有 package.json → null（临时目录向上是系统缓存区，无宿主包）
+  assert.equal(hostVersionFromArgv(path.join(root, 'no', 'such', 'entry.js')), null)
+})
+
+// ── 0.2.1 角色委派行形态（版本门控 / 标记 v4 / role-restrict URL）────────────
+
+test('isPresetRoleHost/presetRolesFlavorOf: 0.2.1 边界（rc 剥离后逐段比较），null/非法保守内联', () => {
+  assert.equal(isPresetRoleHost([0, 2, 0]), false)
+  assert.equal(isPresetRoleHost([0, 2, 1]), true)
+  assert.equal(isPresetRoleHost([0, 2, 2]), true)
+  assert.equal(isPresetRoleHost([1, 0, 0]), true)
+  assert.equal(isPresetRoleHost(null), false)
+  assert.equal(isPresetRoleHost(undefined), false)
+  assert.equal(isPresetRoleHost([0, 2]), false)
+  assert.equal(isPresetRoleHost(['0', '2', '1']), false)
+  assert.equal(presetRolesFlavorOf([0, 2, 0]), ROLES_INLINE)
+  assert.equal(presetRolesFlavorOf([0, 2, 1]), ROLES_AGENT_PRESET)
+  assert.equal(presetRolesFlavorOf(null), ROLES_INLINE)
+  // rc 预发布归并：parseVersionTriple 把 0.2.1-rc.2 剥成 [0,2,1]
+  assert.deepEqual(parseVersionTriple('0.2.1-rc.2'), [0, 2, 1])
+  assert.equal(presetRolesFlavorOf(parseVersionTriple('0.2.1-rc.2')), ROLES_AGENT_PRESET)
+  assert.equal(presetRolesFlavorOf(parseVersionTriple('0.2.1-rc.1')), ROLES_AGENT_PRESET)
+})
+
+test('parseGeneratorMarker/formatGeneratorMarker: v4 四行往返；v3 三参调用（无角色行）roles=null；第四行 bogus → null', () => {
+  assert.deepEqual(
+    parseGeneratorMarker(formatGeneratorMarker('0.4.4', 'declarative', 'ptc', ROLES_AGENT_PRESET)),
+    { version: '0.4.4', track: 'declarative', worker: 'ptc', roles: 'agent-preset' },
+  )
+  assert.deepEqual(
+    parseGeneratorMarker(formatGeneratorMarker('0.4.4', 'directory', 'worker-thread', ROLES_INLINE)),
+    { version: '0.4.4', track: 'directory', worker: 'worker-thread', roles: 'inline' },
+  )
+  // v3 时代三参调用：不写第四行，解析 roles=null（老标记 + 新宿主 → 自愈重生成）
+  assert.deepEqual(parseGeneratorMarker(formatGeneratorMarker('0.4.3', 'declarative', 'ptc')), {
+    version: '0.4.3',
+    track: 'declarative',
+    worker: 'ptc',
+    roles: null,
+  })
+  // 第四行不是合法角色形态值 → roles null（宽容，不整标记作废）
+  assert.deepEqual(parseGeneratorMarker('0.4.4\ndeclarative\nptc\nbogus\n'), {
+    version: '0.4.4',
+    track: 'declarative',
+    worker: 'ptc',
+    roles: null,
+  })
+})
+
+test('buildPresetRowText: role-restrict 行换绝对 file: URL；产物引用该行而缺 URL 时硬错误', () => {
+  const agentYmlText = [
+    '- id: role-restrict',
+    '  name: ./role-restrict.mjs',
+    '  config:',
+    '    allow:',
+    '      - read',
+  ].join('\n')
+  const row = buildPresetRowText({
+    presetId: 'orchestrator',
+    agentYmlText,
+    restrictFileUrl: 'file:///tmp/orchestrator/restrict.mjs',
+    roleRestrictFileUrl: pathToFileURL('/tmp/orchestrator/role-restrict.mjs').href,
+  })
+  assert.ok(row.includes(`            name: ${pathToFileURL('/tmp/orchestrator/role-restrict.mjs').href}`), 'role-restrict 行应换绝对 file: URL 且缩进 +10')
+  assert.equal(row.includes('./role-restrict.mjs'), false)
+  // 引用 ./role-restrict.mjs 而漏传 URL → 硬错误（与 delegation-labels 同口径）
+  assert.throws(
+    () => buildPresetRowText({
+      presetId: 'orchestrator',
+      agentYmlText,
+      restrictFileUrl: 'file:///tmp/orchestrator/restrict.mjs',
+    }),
+    /引用了 \.\/role-restrict\.mjs（0\.2\.1\+ AgentPreset 形态），但未提供 roleRestrictFileUrl/,
+  )
+  // 产物不含 role-restrict 行（旧形状）时缺 URL 无妨
+  const legacyRow = buildPresetRowText({
+    presetId: 'orchestrator',
+    agentYmlText: "- id: tool-bash\n  name: '@deepseek-ai/dsh-tool-bash'",
+    restrictFileUrl: 'file:///tmp/orchestrator/restrict.mjs',
+  })
+  assert.ok(legacyRow.includes('tool-bash'))
+})
+
+// ── 0.2.1 角色行形态：产物形状判定 + backfill 防毒守卫 ──────────────────────
+
+/** 假宿主版本（DSH_PAODING_FAKE_HOST_VERSION 探测钩子，用毕还原）。 */
+async function withFakeHost(version, fn) {
+  const prev = process.env.DSH_PAODING_FAKE_HOST_VERSION
+  process.env.DSH_PAODING_FAKE_HOST_VERSION = version
+  try {
+    return await fn()
+  } finally {
+    if (prev === undefined) delete process.env.DSH_PAODING_FAKE_HOST_VERSION
+    else process.env.DSH_PAODING_FAKE_HOST_VERSION = prev
+  }
+}
+
+test('detectAgentRolesFlavor: 内联→inline、agentPreset→agent-preset、两无→null、混合→从严 inline', () => {
+  assert.equal(detectAgentRolesFlavor('a\n        persona: |-\n          x\n'), ROLES_INLINE)
+  assert.equal(detectAgentRolesFlavor('- id: delegation\n  config:\n        agentPreset: paoding-role-implement\n'), ROLES_AGENT_PRESET)
+  assert.equal(detectAgentRolesFlavor('- id: tool-bash\n  name: x\n'), null, '无角色行（角色清空）对两代宿主都安全')
+  assert.equal(
+    detectAgentRolesFlavor('        persona: |-\n          x\n        agentPreset: paoding-role-implement\n'),
+    ROLES_INLINE,
+    '混合/损坏产物按旧形状从严，交给整盘重生成',
+  )
+})
+
+test('backfillHomePatchRows: 形态防毒——0.2.1 宿主拒绝按内联产物补行（零写盘），0.2.0 宿主照常补', async () => {
+  const { dshHome, patchFile } = freshEnv('bf-poison')
+  // 真实管线在 0.2.0 假宿主下产出内联形状四件套
+  await withFakeHost('0.2.0', async () => {
+    const state = await collectState({ dshHome, configFile: path.join(dshHome, 'c.yml'), cwd: dshHome, runtimeFacts: { presetSystem: 'directory' } })
+    generateAndInstall(state, structuredClone(state.suggested), {})
+  })
+  assert.ok(existsSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'role-restrict.mjs')))
+  assert.ok(!existsSync(patchFile), 'directory 轨安装不写 patch')
+
+  // 宿主 0.2.1 + 磁盘内联形状：守卫必须拒绝补行（补出去 0.2.1 宿主 apply 即炸）
+  await withFakeHost('0.2.1', async () => {
+    assert.deepEqual(backfillHomePatchRows(dshHome, listOrchestratorPresetIds(dshHome)), [], '内联产物在 0.2.1 宿主上不得补行')
+  })
+  assert.ok(!existsSync(patchFile), '防毒守卫必须零写盘')
+
+  // 宿主 0.2.0 + 同一份内联磁盘：照常补行（内联 persona 随产物全文内联进声明行）
+  await withFakeHost('0.2.0', async () => {
+    assert.deepEqual(backfillHomePatchRows(dshHome, listOrchestratorPresetIds(dshHome)).sort(), ['orchestrator'])
+  })
+  const patchText = readFileSync(patchFile, 'utf8')
+  assert.ok(/        persona: \|-\n/.test(patchText), '0.2.0 宿主补行应含内联 persona（旧形状产物原样内联）')
+
+  // 两无形态（角色清空的产物）不含守卫键：0.2.1 宿主上照常补行
+  const { dshHome: d5, patchFile: p5 } = freshEnv('bf-nullflavor')
+  mkdirSync(path.join(d5, '.agent-presets', 'orchestrator'), { recursive: true })
+  writeFileSync(path.join(d5, '.agent-presets', 'orchestrator', 'agent.cordis.yml'), "- id: tool-bash\n  name: '@deepseek-ai/dsh-tool-bash'\n")
+  cpSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'preset.yml'), path.join(d5, '.agent-presets', 'orchestrator', 'preset.yml'))
+  cpSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'restrict.mjs'), path.join(d5, '.agent-presets', 'orchestrator', 'restrict.mjs'))
+  cpSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'delegation-labels.mjs'), path.join(d5, '.agent-presets', 'orchestrator', 'delegation-labels.mjs'))
+  await withFakeHost('0.2.1', async () => {
+    assert.deepEqual(backfillHomePatchRows(d5, listOrchestratorPresetIds(d5)), ['orchestrator'], '两无形态不含 0.2.1 守卫键，可安全补行')
+  })
+  assert.ok(existsSync(p5))
+})
+
+test('0.2.1 角色行形态门的 prerelease 边界：守卫 0.2.1-rc.2 落地，rc.0/rc.1 保持内联', () => {
+  assert.equal(isPresetRoleHost([0, 2, 1], 'rc.0'), false)
+  assert.equal(isPresetRoleHost([0, 2, 1], 'rc.1'), false, 'rc.1 仍认内联形状，换代反而会被拒')
+  assert.equal(isPresetRoleHost([0, 2, 1], 'rc.2'), true, '守卫落地点')
+  assert.equal(isPresetRoleHost([0, 2, 1], 'rc.10'), true, 'rc.N 按数值比较')
+  assert.equal(isPresetRoleHost([0, 2, 1], null), true, '0.2.1 正式版：新形态')
+  assert.equal(isPresetRoleHost([0, 2, 1]), true, 'prerelease 未知（旧调用方只传三元组）：保持原行为')
+  assert.equal(isPresetRoleHost([0, 2, 2], 'rc.1'), true, 'triple 越过 0.2.1 一律新形态（更高版本的 rc 也带守卫）')
+  assert.equal(isPresetRoleHost([0, 2, 0], 'rc.9'), false)
+  assert.equal(presetRolesFlavorOf([0, 2, 1], 'rc.1'), ROLES_INLINE)
+  assert.equal(presetRolesFlavorOf([0, 2, 1], 'rc.2'), ROLES_AGENT_PRESET)
+})
+
+test('parseVersionInfo / detectHostVersionInfo：prerelease 原文保留，探测链与三元组版同源', async () => {
+  assert.deepEqual(parseVersionInfo('0.2.1-rc.2'), { triple: [0, 2, 1], prerelease: 'rc.2' })
+  assert.deepEqual(parseVersionInfo('v1.2.3+build.7'), { triple: [1, 2, 3], prerelease: null })
+  assert.deepEqual(parseVersionInfo('0.1.7-rc.1'), { triple: [0, 1, 7], prerelease: 'rc.1' })
+  assert.equal(parseVersionInfo('nonsense'), null)
+  await withFakeHost('0.2.1-rc.1', async () => {
+    assert.deepEqual(detectHostVersionInfo(), { triple: [0, 2, 1], prerelease: 'rc.1' })
+    assert.deepEqual(detectHostVersionTriple(), [0, 2, 1], '三元组视图照旧剥 prerelease（worker/轨道门不受影响）')
+  })
 })

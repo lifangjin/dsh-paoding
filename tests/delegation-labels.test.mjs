@@ -160,8 +160,8 @@ test('assertPresetSourceFiles: delegation-labels.mjs 与 restrict.mjs 同口径�
   }
 })
 
-test('PRESET_ASIS_FILES 清单钉死：原样复制件 = preset.yml + restrict.mjs + delegation-labels.mjs', () => {
-  assert.deepEqual([...PRESET_ASIS_FILES], ['preset.yml', 'restrict.mjs', 'delegation-labels.mjs'])
+test('PRESET_ASIS_FILES 清单钉死：原样复制件 = preset.yml + restrict.mjs + delegation-labels.mjs + role-restrict.mjs', () => {
+  assert.deepEqual([...PRESET_ASIS_FILES], ['preset.yml', 'restrict.mjs', 'delegation-labels.mjs', 'role-restrict.mjs'])
 })
 
 test('安装链路: generateAndInstall 物化四件套，生成文本与声明行都带 roles 映射 / 绝对 URL', async () => {

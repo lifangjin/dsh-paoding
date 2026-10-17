@@ -19,6 +19,9 @@ import { KNOWN_MCP_TOOLS, isMcpEntry, resolveMCP } from '../tools/lib/host.mjs'
 import { detectSkills, findSkillMeta } from '../tools/lib/skills.mjs'
 import { baseAssignments, resolveAssignments, smartDefaults } from '../tools/lib/alloc.mjs'
 import { assignSlugs } from '../tools/lib/workspaces.mjs'
+import { existsSync } from 'node:fs'
+import { SRC_DIR } from '../tools/lib/util.mjs'
+import { PRESET_ASIS_FILES } from '../tools/lib/state.mjs'
 
 // ── host: isMcpEntry 精确匹配 ───────────────────────────────────────────────
 
@@ -228,4 +231,9 @@ test('assignSlugs: 同 basename 加 hash；slug 恰撞名时唯一性重试', ()
   assert.equal(m2.get('/a/proj'), m1.get('/a/proj'), '同输入下 slug 应稳定')
   assert.equal(m2.get('/b/proj'), bSlug, '同输入下 slug 应稳定')
   assert.notEqual(m2.get(cPath), bSlug, '撞名路径未做唯一性重试')
+})
+
+test('role-restrict.mjs 源文件随包存在（0.2.1 AgentPreset 形态硬依赖；assertPresetSourceFiles 缺它即拒装）', () => {
+  assert.ok(PRESET_ASIS_FILES.includes('role-restrict.mjs'), 'PRESET_ASIS_FILES 应收录 role-restrict.mjs')
+  assert.ok(existsSync(path.join(SRC_DIR, 'role-restrict.mjs')), `${SRC_DIR}/role-restrict.mjs 缺失（曾经漏 git add，新 clone 会拒装）`)
 })
