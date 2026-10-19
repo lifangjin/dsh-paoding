@@ -73,6 +73,7 @@ roles:                  # toolName -> { persona?, tools[] }
       You are the external-research agent. Web research only — never modify files.
     tools:
       - web_search
+      - web_fetch
       - mcp__tavily__tavily_search
       - mcp__tavily__tavily_crawl
       - mcp__tavily__tavily_extract
@@ -138,10 +139,13 @@ skills:                 # skill -> 分配给的角色（写进角色 persona 的
     search_external:
       tools:
         - web_search
+        - web_fetch
         - mcp__tavily__tavily_*   # 生成时展开为 search/crawl/extract/map/research（以实际检测为准）
   ```
 
   `main_agent_extra` 与自定义角色的 `tools` 同样支持。配置文件里模式条目原样存取（配置面板回显不受影响），只有生成的 preset 里落的是展开后的具体名。
+
+  > 宿主 0.2.1-rc.2 起可在 **设置 → 网页搜索** 开启 DeepSeek Search / Fetch API：`web_search` / `web_fetch` 的名字不变，后方 provider 自动切换到官方新后端——无需改动庖丁配置，角色 allow 里的这两个名字照常生效。
 
 示例（替换 `implement` 的 persona 与 tools）：下方 tools 与静态默认一致——注意它不含 `str_replace_editor`（原因见 8.2）。显式写出 tools 等于固定意图：将来静态源怎么改都不再影响本角色：
 
@@ -350,7 +354,7 @@ fork 的语义（如实说明）：
 | 内部搜索（热路径） | `glob` `grep` `read` `read_image` `bash` |
 | 协调 | `todo_write` `ask_user_question` `get_goal` `create_goal` `update_goal` `exit_plan_mode` `job_output` `job_list` `job_kill` |
 
-对照说明：`web_search`、全部 `mcp__tavily__*`、`write` / `edit` / `str_replace_editor`、`skill`、`workflow`、`ralph`、未过滤的 `subagent` 委派等**刻意不在**主 agent 面上（host 工具如 codegraph / `memory_search` / mnemon 同理不硬编码进源码，需要时用 `main_agent_extra` 勾选，见 3.2）。另外 `restrict.mjs` 在注册层对主 agent deny 了 `skill`（目录注入守卫查的是注册面而非模型可见面），主 agent 的技能目录注入随之归零。
+对照说明：`web_search` / `web_fetch`、全部 `mcp__tavily__*`、`write` / `edit` / `str_replace_editor`、`skill`、`workflow`、`ralph`、未过滤的 `subagent` 委派等**刻意不在**主 agent 面上（host 工具如 codegraph / `memory_search` / mnemon 同理不硬编码进源码，需要时用 `main_agent_extra` 勾选，见 3.2）。另外 `restrict.mjs` 在注册层对主 agent deny 了 `skill`（目录注入守卫查的是注册面而非模型可见面），主 agent 的技能目录注入随之归零。
 
 ### 3.2 追加工具：main_agent_extra
 

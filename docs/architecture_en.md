@@ -70,6 +70,7 @@ allow lists are in the "Roles & tool surfaces" section below):
             │                   │                   │                   │               
             ▼                   ▼                   ▼                   ▼               
     web_search           read/read_image      read/read_image      glob/grep/read
+    web_fetch
     mcp__tavily__*       glob/grep/bash       write/edit           read_image/bash
     (5 tools)            skill/web_search     glob/grep/bash       ask_user_question
     glob/grep/read       ask_user_question    skill/web_search     todo_write
@@ -90,8 +91,8 @@ In the diagram:
   ask_user_question / get_goal / create_goal / update_goal / exit_plan_mode / job_output / job_list /
   job_kill);
 - Four arrows fan out to the **role sub-agents**, each created on demand (cold path). search_external
-  carries web_search, the five `mcp__tavily__*` tools, plus glob/grep/read and ask_user_question, with no
-  write/edit; design carries read/read_image/glob/grep/bash/skill/web_search plus coordination tools;
+  carries web_search, web_fetch, the five `mcp__tavily__*` tools, plus glob/grep/read and ask_user_question,
+  with no write/edit; design carries read/read_image/glob/grep/bash/skill/web_search plus coordination tools;
   implement carries read/read_image/write/edit/glob/grep/bash/skill/web_search plus coordination and
   goal tools;
   search_internal_deep carries the full read-only internal-search surface (glob/grep/read/read_image/bash
@@ -107,7 +108,7 @@ measured calibration; figures are order-of-magnitude estimates):
 |---|---|---|---|
 | Monolithic (status quo, untrimmed) | All 60 tools | **~16.2k** | Paid in full on every request |
 | Orchestrator main agent | 21-entry whitelist (∩ registry) | **~5.5k** | ↓66%; zero delegation latency for internal search |
-| search_external sub-agent | 10 allowed entries | ~3.0k | Paid only when web research actually runs |
+| search_external sub-agent | 11 allowed entries | ~3.0k | Paid only when web research actually runs |
 | design sub-agent | 12 allowed entries | ~3.3k | Paid only when a design task is delegated |
 | implement sub-agent | 17 allowed entries | ~3.8k | Paid only when an implementation task is delegated |
 | search_internal_deep sub-agent | 10 allowed entries | not separately estimated | Paid only when a deep repo search is delegated |
@@ -160,7 +161,7 @@ memory_search / mnemon_* etc.) are "install-time facts" — when the main agent 
 `main_agent_extra` in the configuration file `$DSH_HOME/dsh-paoding.config.yml`, the generator injects the
 still-enabled ones into the restrict `config.allow` based on runtime detection, and disabled ones are
 dropped automatically (see [docs/configuration_en.md](configuration_en.md)). The main agent's default surface
-therefore excludes `web_search`, every `mcp__tavily__*`, `write` / `edit` / `str_replace_editor`, `skill`,
+therefore excludes `web_search` / `web_fetch`, every `mcp__tavily__*`, `write` / `edit` / `str_replace_editor`, `skill`,
 `workflow`, `ralph`, and the unfiltered `subagent` / `subagent_fork` — either because they belong to role
 sub-agents or because their cost is deliberately zeroed out.
 
@@ -184,7 +185,7 @@ For example, a `ppt` agent carrying the `html-ppt` skill gives slide-making its 
 
 | Delegation tool | Instance ID | Persona in one sentence | Load cost |
 |---|---|---|---|
-| `search_external` | `delegation-search-external` | Web research only (web_search + tavily), never modifies files; returns a structured research summary (findings, sources, open questions) | ~3.0k, only when delegated |
+| `search_external` | `delegation-search-external` | Web research only (web_search + web_fetch + tavily), never modifies files; returns a structured research summary (findings, sources, open questions) | ~3.0k, only when delegated |
 | `design` | `delegation-design` | Produces UI/UX designs, wireframes and frontend specs; may load design skills (frontend-design, html-ppt) via the skill tool; reads reference material first, delivers a spec, does not implement final code | ~3.3k, only when delegated |
 | `implement` | `delegation-implement` | Writes and edits code: read surrounding context → surgical change → verify (build/test/grep); does not redesign architecture | ~3.8k, only when delegated |
 | `search_internal_deep` | `delegation-search-internal-deep` | Repository exploration only: never modifies files, never uses the network; handles tasks too heavy for the main agent's context (whole-repo grep dumps, full-file reads beyond a page, cross-directory symbol/definition tracking); returns condensed summaries only | not separately estimated, only when delegated |
@@ -213,12 +214,12 @@ on disk silently, and fail at runtime with unknown tools at child creation — s
 note for that role below; see
 [docs/configuration_en.md](configuration_en.md)).
 
-**`search_external` (external research, 10 entries)**
+**`search_external` (external research, 11 entries)**
 
 | Field | Value |
 |---|---|
 | Persona job | Web research only, returning a structured research summary (findings, sources, open questions); never modifies files |
-| toolFilter.allow | `web_search`, `mcp__tavily__tavily_search`, `mcp__tavily__tavily_crawl`, `mcp__tavily__tavily_extract`, `mcp__tavily__tavily_map`, `mcp__tavily__tavily_research`, `glob`, `grep`, `read`, `ask_user_question` |
+| toolFilter.allow | `web_search`, `web_fetch`, `mcp__tavily__tavily_search`, `mcp__tavily__tavily_crawl`, `mcp__tavily__tavily_extract`, `mcp__tavily__tavily_map`, `mcp__tavily__tavily_research`, `glob`, `grep`, `read`, `ask_user_question` |
 | Load cost | ~3.0k tokens, incurred only when web research actually runs |
 
 **`design` (design, 12 entries)**

@@ -24,7 +24,7 @@
  * 停用即自动清除。本文件只保留 dsh 核心工具。
  *
  * What the main agent deliberately does NOT see (all costs drop to zero for
- * its requests): web_search, every mcp__tavily__*, write / edit /
+ * its requests): web_search, web_fetch, every mcp__tavily__*, write / edit /
  * str_replace_editor, skill (+ its ~1.3k-token catalog), workflow, ralph,
  * ssh_*, mcp__tablepro__*, describe_image, and the unfiltered subagent /
  * subagent_fork delegations.

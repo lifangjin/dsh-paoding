@@ -10,7 +10,7 @@
 dsh-paoding 把 DSH 从「单体 agent 全量加载工具」改造成「主 agent 编排 + 角色子 agent 分工」。分工遵循任务纹理：
 
 - **热路径——内部文件问题不委派。** 找代码、查引用、读文件这类问题由主 agent 自己用只读工具解决：`glob` / `grep` / `read` / `read_image` / `bash` 全部在主 agent 白名单内，零委派往返延迟。persona 文案里的 `codegraph` 是 host MCP 工具，仅在安装期检测到 codegraph 服务器并经 `main_agent_extra` 注入后才真正可用（详见[配置](configuration.md)与[安装](installation.md)）。
-- **冷路径——只干自己那活的角色子 agent。** 外部调研委派 `search_external`（只带 `web_search` + tavily 五工具 + 本地只读）、UI/前端设计委派 `design`（读参考 + 设计技能 + 出 spec，不写最终代码）、代码实现委派 `implement`（读上下文 → 精准修改 → 验证）、超大仓库全量探索委派 `search_internal_deep`（第四角色，2026-09 加入，见下节与[架构](architecture.md)）。每个子 agent 只在真正被委派的那一次才加载工具面（按需加载）。
+- **冷路径——只干自己那活的角色子 agent。** 外部调研委派 `search_external`（只带 `web_search` / `web_fetch` + tavily 五工具 + 本地只读）、UI/前端设计委派 `design`（读参考 + 设计技能 + 出 spec，不写最终代码）、代码实现委派 `implement`（读上下文 → 精准修改 → 验证）、超大仓库全量探索委派 `search_internal_deep`（第四角色，2026-09 加入，见下节与[架构](architecture.md)）。每个子 agent 只在真正被委派的那一次才加载工具面（按需加载）。
 - **运行中指挥。** 子 agent 运行期间，主 agent 可用 `send_message` 追加指示、`list_agents` 查看状态、`interrupt_agent` 叫停（三者由 `dsh-tool-subagent-control` 注册，属「子 agent 管理」工具面）。
 - **完成后只集成摘要。** 主 agent 从不把子 agent 的完整上下文倒进自己的上下文——它只收一份摘要（见第 5 节「上下文隔离」）。
 
@@ -22,7 +22,7 @@ dsh-paoding 把 DSH 从「单体 agent 全量加载工具」改造成「主 agen
 | 子 agent 管理 | `send_message` / `list_agents` / `interrupt_agent` |
 | 内部搜索（热路径） | `glob` / `grep` / `read` / `read_image` / `bash` |
 | 协调 | `todo_write` / `ask_user_question` / `get_goal` / `create_goal` / `update_goal` / `exit_plan_mode` / `job_output` / `job_list` / `job_kill` |
-| 主 agent 刻意看不到（节选，全文见 `restrict.mjs` 头注释） | `web_search`、`mcp__tavily__*`、`write` / `edit` / `str_replace_editor`、`skill`、`workflow`、`ralph`、`ssh_*`、`mcp__tablepro__*`、`describe_image`、裸 `subagent` / `subagent_fork` |
+| 主 agent 刻意看不到（节选，全文见 `restrict.mjs` 头注释） | `web_search` / `web_fetch`、`mcp__tavily__*`、`write` / `edit` / `str_replace_editor`、`skill`、`workflow`、`ralph`、`ssh_*`、`mcp__tablepro__*`、`describe_image`、裸 `subagent` / `subagent_fork` |
 
 每请求工具开销（估算，随注册面浮动）：主 agent 全量 ~16.2k tokens → 白名单后 ~5.5k；`search_external` ~3.0k / `design` ~3.3k / `implement` ~3.8k，仅在真正委派时发生（数值来源：`agent.cordis.yml` 头部注释）。
 

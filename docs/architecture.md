@@ -58,6 +58,7 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
         │               │               │               │
         ▼               ▼               ▼               ▼
    web_search       read/read_image  read/read_image  glob/grep/read/
+   web_fetch
    mcp__tavily__*   glob/grep/bash/  write/edit/      read_image/bash/
    (5 个)           skill/           glob/grep/bash/  ask_user_question/
    glob/grep/read   web_search       skill/web_search todo_write/
@@ -78,7 +79,7 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 |---|---|---|---|
 | 单体（现状，未裁剪） | 60 工具全量 | **~16.2k** | 每请求固定注入 |
 | 编排主 agent | 21 项白名单（∩ 注册面） | **~5.5k** | ↓66%；内部搜索零委派延迟 |
-| search_external 子 agent | 10 项 allow | ~3.0k | 仅实际联网调研时才产生 |
+| search_external 子 agent | 11 项 allow | ~3.0k | 仅实际联网调研时才产生 |
 | design 子 agent | 12 项 allow | ~3.3k | 仅实际委派设计时才产生 |
 | implement 子 agent | 17 项 allow | ~3.8k | 仅实际委派实现时才产生 |
 | search_internal_deep 子 agent | 10 项 allow | 未单独估算 | 仅实际委派全仓深搜时才产生 |
@@ -123,7 +124,7 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 **host 工具不在白名单常量内硬编码**：`mcp__*` 与插件工具（codegraph / memory_search / mnemon_* 等）
 是"检测期事实"——主 agent 需要时经配置文件 `$DSH_HOME/dsh-paoding.config.yml` 的 `main_agent_extra`
 勾选，生成层按运行时检测把仍启用的注入 restrict 的 `config.allow`，停用即自动清除（详见
-[docs/configuration.md](configuration.md)）。因此主 agent 的默认面**不包含** `web_search`、全部
+[docs/configuration.md](configuration.md)）。因此主 agent 的默认面**不包含** `web_search` / `web_fetch`、全部
 `mcp__tavily__*`、`write` / `edit` / `str_replace_editor`、`skill`、`workflow`、`ralph` 及未过滤的
 `subagent` / `subagent_fork`——这些要么属于角色子 agent，要么成本被刻意清零。
 
@@ -142,7 +143,7 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 
 | 委派工具 | 实例 ID | persona 一句话职责 | 加载成本 |
 |---|---|---|---|
-| `search_external` | `delegation-search-external` | 只做联网调研（web_search + tavily），绝不改文件；返回结构化研究摘要（发现、来源、待答问题） | ~3.0k，仅委派时 |
+| `search_external` | `delegation-search-external` | 只做联网调研（web_search + web_fetch + tavily），绝不改文件；返回结构化研究摘要（发现、来源、待答问题） | ~3.0k，仅委派时 |
 | `design` | `delegation-design` | 产出 UI/UX 设计、线框与前端 spec，可用 skill 工具加载设计技能（frontend-design、html-ppt）；先读参考再交付 spec，不写最终代码 | ~3.3k，仅委派时 |
 | `implement` | `delegation-implement` | 写与改代码：先读上下文 → 精准修改 → 验证（build/test/grep）；不改架构 | ~3.8k，仅委派时 |
 | `search_internal_deep` | `delegation-search-internal-deep` | 只做仓库探索：不改文件、不联网；处理主 agent 上下文装不下的任务（全仓 grep dump、超页大文件通读、跨目录符号/定义追踪），只回浓缩摘要 | 未单独估算，仅委派时 |
@@ -157,12 +158,12 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 **不做**库存对账：手写进去、两头都不占的名字不会被剔除，会静默落盘、运行时以 unknown tools 拒创建
 （与下方该角色的 codegraph 注同一口径），见 [docs/configuration.md](configuration.md)）。
 
-**`search_external`（外部调研，10 项）**
+**`search_external`（外部调研，11 项）**
 
 | 字段 | 值 |
 |---|---|
 | persona 职责 | 只做联网调研并返回结构化研究摘要（发现、来源、待答问题）；绝不修改文件 |
-| toolFilter.allow | `web_search`、`mcp__tavily__tavily_search`、`mcp__tavily__tavily_crawl`、`mcp__tavily__tavily_extract`、`mcp__tavily__tavily_map`、`mcp__tavily__tavily_research`、`glob`、`grep`、`read`、`ask_user_question` |
+| toolFilter.allow | `web_search`、`web_fetch`、`mcp__tavily__tavily_search`、`mcp__tavily__tavily_crawl`、`mcp__tavily__tavily_extract`、`mcp__tavily__tavily_map`、`mcp__tavily__tavily_research`、`glob`、`grep`、`read`、`ask_user_question` |
 | 加载成本 | ~3.0k tokens，仅实际联网调研时发生 |
 
 **`design`（设计，12 项）**

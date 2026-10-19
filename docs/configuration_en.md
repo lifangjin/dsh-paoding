@@ -73,6 +73,7 @@ roles:                  # toolName -> { persona?, tools[] }
       You are the external-research agent. Web research only — never modify files.
     tools:
       - web_search
+      - web_fetch
       - mcp__tavily__tavily_search
       - mcp__tavily__tavily_crawl
       - mcp__tavily__tavily_extract
@@ -138,10 +139,13 @@ Of the four built-in delegation roles, the installer (the `ROLES` constant) mana
     search_external:
       tools:
         - web_search
+        - web_fetch
         - mcp__tavily__tavily_*   # expanded at generation to search/crawl/extract/map/research (per actual detection)
   ```
 
   `main_agent_extra` and custom-role `tools` support them too. Pattern entries are stored and read back verbatim in the config file (the config panel renders them fine); only the generated preset contains the expanded concrete names.
+
+  > Host 0.2.1-rc.2 and later can enable the DeepSeek Search / Fetch API under **Settings → Web Search**: `web_search` / `web_fetch` keep their names while the provider behind them switches to the official new backend — no 庖丁 (Paoding) config change needed, and both names in a role's allow list keep working as-is.
 
 Example — replacing `implement`'s persona and tools. The `tools` below match the static default — note that it does **not** contain `str_replace_editor` (why: see 8.2). Writing `tools` out explicitly freezes the intent: later changes to the static source no longer affect this role:
 
@@ -350,7 +354,7 @@ The `MAIN_AGENT_ALLOW` constant in `restrict.mjs` is the **base** (21 names) tha
 | Internal search (hot path) | `glob` `grep` `read` `read_image` `bash` |
 | Coordination | `todo_write` `ask_user_question` `get_goal` `create_goal` `update_goal` `exit_plan_mode` `job_output` `job_list` `job_kill` |
 
-For orientation: `web_search`, every `mcp__tavily__*`, `write` / `edit` / `str_replace_editor`, `skill`, `workflow`, `ralph`, and the unfiltered `subagent` delegation are **deliberately absent** from the main-agent surface (host tools such as codegraph / `memory_search` / mnemon are likewise not hard-coded into the source — opt them in via `main_agent_extra`, see 3.2). `restrict.mjs` also denies `skill` at the registry level for the main agent (the catalog-injection guard checks registry visibility, not the model-facing list), which brings the main agent's skill-catalog token tax to zero.
+For orientation: `web_search` / `web_fetch`, every `mcp__tavily__*`, `write` / `edit` / `str_replace_editor`, `skill`, `workflow`, `ralph`, and the unfiltered `subagent` delegation are **deliberately absent** from the main-agent surface (host tools such as codegraph / `memory_search` / mnemon are likewise not hard-coded into the source — opt them in via `main_agent_extra`, see 3.2). `restrict.mjs` also denies `skill` at the registry level for the main agent (the catalog-injection guard checks registry visibility, not the model-facing list), which brings the main agent's skill-catalog token tax to zero.
 
 ### 3.2 Appending tools: main_agent_extra
 

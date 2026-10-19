@@ -243,11 +243,12 @@
         toolName: search_external
         backgroundMode: one-shot
         persona: |-
-          You are the external-research agent. Your job is web research only — use web_search and the tavily tools; you never modify files. Search the web, extract key facts, and return a concise structured research summary (findings, sources, open questions).
+          You are the external-research agent. Your job is web research only — use web_search, web_fetch and the tavily tools; you never modify files. Search the web, extract key facts, and return a concise structured research summary (findings, sources, open questions).
           On tool failure, do not retry a denied operation: report the failure compactly — what you completed, the exact error, which tool/permission you lack, and your suggested next step — so the orchestrator can re-delegate or adjust.
         toolFilter:
           allow:
             - web_search
+            - web_fetch
             - mcp__tavily__tavily_search
             - mcp__tavily__tavily_crawl
             - mcp__tavily__tavily_extract
