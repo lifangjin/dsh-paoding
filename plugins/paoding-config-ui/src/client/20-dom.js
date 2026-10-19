@@ -16,8 +16,10 @@
 
     // projBadge（可选）：项目级技能角标文案（如「项目」），仅技能项在
     // 工作区视角下、该技能来自工作区项目根时传入；其余网格不传不渲染。
+    // data-pd-tool：工具显示名打点——供 applyToolFilter 做筛选匹配（q 透传
+    // getAttribute，React 不感知），与 title 悬浮提示内容一致。
     function toolItem(tool, tag, checked, disabled, onChange, key, projBadge) {
-      return h("label", { key: key, className: "omd-toolItem", title: tool },
+      return h("label", { key: key, className: "omd-toolItem", title: tool, "data-pd-tool": tool },
         h("input", {
           type: "checkbox",
           className: "omd-check",
@@ -29,6 +31,68 @@
         h("span", { className: "omd-toolName" }, tool),
         tag ? h("span", { className: "omd-toolTag" + (tag === "mcp" || tag === "plugin" ? " omd-toolTagHost" : "") }, tag) : null,
         projBadge ? h("span", { className: "omd-skillProj" }, projBadge) : null);
+    }
+
+    // ── 工具网格筛选（超过 8 项的分组在网格上方给一个行内筛选框）────────────
+    // 触发阈值：分组超过 8 项才出现筛选框（短网格不必多一个输入框）。
+    var TOOL_FILTER_MIN = 8;
+
+    // 工具网格（可选筛选框 + 网格本体）：items 超过阈值时在外面包一层
+    // .omd-toolFilterWrap（输入框 + 网格），否则原样返回网格节点。不引入任何
+    // 状态管道——筛选 oninput 直接改 DOM 显隐（见 applyToolFilter），整卡重
+    // 渲染会吃掉输入框焦点，这个交互必须绕开 React。
+    // renderItem：单工具 → 节点（toolItem 调用点原样搬进来）；emptyNode：
+    // 空列表占位（原「暂无 …」节点），空组照旧渲染、无筛选框。空占位作直接
+    // 子节点传入（不进数组），与改造前调用点的 children 形状一致，不触发
+    // React 的数组 key 警告。
+    function toolGridOf(tools, renderItem, emptyNode) {
+      var grid;
+      if (tools.length) {
+        grid = h.apply(null, ["div", { className: "omd-toolGrid" }].concat(tools.map(renderItem)));
+      } else {
+        grid = h("div", { className: "omd-toolGrid" }, emptyNode || null);
+      }
+      if (tools.length <= TOOL_FILTER_MIN) return grid;
+      return h("div", { className: "omd-toolFilterWrap" },
+        h("input", {
+          type: "text",
+          className: "omd-toolFilter",
+          placeholder: t("panel.toolFilter"),
+          spellCheck: false,
+          onInput: function (e) { applyToolFilter(e.target); },
+        }),
+        grid);
+    }
+
+    // 筛选 oninput：从输入框向上取包裹层，按 data-pd-tool（工具显示名）做
+    // 大小写不敏感子串匹配，逐项切 display——纯 DOM 操作不触发重渲染，输入框
+    // 焦点不丢；清空输入恢复全部显示。
+    function applyToolFilter(input) {
+      var wrap = input && input.parentNode;
+      if (!wrap || !wrap.querySelectorAll) return;
+      var q = String(input.value || "").toLowerCase();
+      var items = wrap.querySelectorAll("label[data-pd-tool]");
+      for (var i = 0; i < items.length; i++) {
+        var name = items[i].getAttribute("data-pd-tool") || "";
+        items[i].style.display = q !== "" && name.toLowerCase().indexOf(q) === -1 ? "none" : "";
+      }
+    }
+
+    // ── 工具面瘦身统计（state.slim / preview.slim → 一行文案）───────────────
+    // 瘦身百分比：pct = total>0 ? round((1-main/total)*100) : 0（total=0 防除零）。
+    function slimPctOf(slim) {
+      var total = slim && typeof slim.total === "number" ? slim.total : 0;
+      var main = slim && typeof slim.main === "number" ? slim.main : 0;
+      return total > 0 ? Math.round((1 - main / total) * 100) : 0;
+    }
+
+    // 一行统计文案（页头与预览弹窗共用同一拼法，防漂移）。
+    function slimLineText(slim) {
+      return t("slim.line", {
+        main: slim && typeof slim.main === "number" ? slim.main : 0,
+        total: slim && typeof slim.total === "number" ? slim.total : 0,
+        pct: slimPctOf(slim),
+      });
     }
 
     var DEFAULT_ROLES = ["search_external", "design", "implement"];

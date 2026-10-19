@@ -93,6 +93,7 @@ window.__ModuleLoader__.load({
     //    ver.*（版本更新卡）/ models.* / tpl.*（场景模板）/ ws.*（工作区）/
     //    panel.*（配置面板正文）/ role.*（角色卡与委派行标题）/ warn.*（体检
     //    告警卡）/ nav.*（侧栏入口与页头壳）/ menu.*（页头「更多」菜单与升级）/
+    //    slim.*（工具面瘦身统计）/ diff.*（预览「本次变更」结构化差分）/
     //    common.*（跨片段复用的短词）。
     //  - t(key, params)：按当前语言取文案，params 做 {name} 插值（split/join
     //    而非 replace，避免替换串里的 $ 模式被二次解释）。缺 key 原样返回 key
@@ -455,6 +456,51 @@ window.__ModuleLoader__.load({
       "menu.upgradedHot": { zh: "✅ 已升级到 {v}，刷新页面即生效（preset 会自动按新版重生成）", en: "✅ Upgraded to {v} — refresh the page to apply (the preset regenerates itself against it)" },
       "menu.errTail": { zh: "：{tail}", en: ": {tail}" },
       "menu.langTip": { zh: "切换界面语言", en: "Switch UI language" },
+
+      // ── 工具筛选（角色卡工具网格超过 8 项时，网格上方的行内筛选框）─────────
+      "panel.toolFilter": { zh: "筛选工具…", en: "Filter tools…" },
+
+      // ── 工具面瘦身统计（state.slim / preview.slim 的一行统计）──────────────
+      "slim.line": { zh: "主 agent 工具面 {main}/{total} 个（瘦身 {pct}%）", en: "Main agent tool surface: {main}/{total} tools (down {pct}%)" },
+      // 预览弹窗里的第二口径小注：preview.slim 按本次提交（未保存）配置计算，
+      // 与页头按已保存配置的一行区分开。
+      "slim.pendingNote": { zh: "（按当前未保存配置）", en: " (per the current unsaved config)" },
+
+      // ── 预览「本次变更」区块（preview.diff 结构化差分的渲染文案）───────────
+      // 服务端 diff 是纯结构零文案（tools/lib/config.mjs diffAssignments），
+      // 全部措辞在这里收口；mainAgent.modelChanged 恒 false，不设键不渲染。
+      "diff.heading": { zh: "本次变更", en: "Changes this time" },
+      "diff.unchanged": { zh: "与上次保存的配置一致", en: "Identical to the last saved config." },
+      "diff.mainToolsAdded": { zh: "主 agent 新带 {n} 个工具：{list}", en: "Main agent now carries {n} more tools: {list}" },
+      "diff.mainToolsRemoved": { zh: "主 agent 移除 {n} 个工具：{list}", en: "Main agent drops {n} tools: {list}" },
+      "diff.mainPersona": { zh: "主 agent 人设追加有变化", en: "Main agent persona addendum changed" },
+      "diff.mainSkills": { zh: "主 agent 技能分配有变化", en: "Main agent skill assignment changed" },
+      "diff.roleAdded": { zh: "新增角色「{name}」", en: "Role \"{name}\" added" },
+      "diff.roleRemoved": { zh: "移除角色「{name}」", en: "Role \"{name}\" removed" },
+      "diff.roleChanged": { zh: "角色「{name}」变更：{details}", en: "Role \"{name}\" changed: {details}" },
+      "diff.roleTools": { zh: "工具 +{added} -{removed}", en: "tools +{added} -{removed}" },
+      "diff.rolePersona": { zh: "persona 变化", en: "persona changed" },
+      "diff.roleModel": { zh: "专用模型变化", en: "dedicated model changed" },
+      "diff.roleStartMode": { zh: "启动方式变化", en: "start mode changed" },
+      "diff.roleBgMode": { zh: "后台续跑变化", en: "background session mode changed" },
+      "diff.rolesRemoveAdded": { zh: "移除内置角色 {n} 个：{list}", en: "Removed {n} built-in roles: {list}" },
+      "diff.rolesRemoveRemoved": { zh: "恢复内置角色 {n} 个：{list}", en: "Restored {n} built-in roles: {list}" },
+      // main_agent_extra 通道明细（主 agent 合并视图之外的通道拆分，一并列出）
+      "diff.mainExtraAdded": { zh: "主 agent 附加工具新增 {n} 个：{list}", en: "Main agent extra tools added ({n}): {list}" },
+      "diff.mainExtraRemoved": { zh: "主 agent 附加工具移除 {n} 个：{list}", en: "Main agent extra tools removed ({n}): {list}" },
+
+      // ── 恢复备份（页头「更多」菜单 → 备份列表弹层 → 二次确认 → POST restore）
+      "menu.restoreItem": { zh: "恢复备份…", en: "Restore backup…" },
+      "menu.backupTitle": { zh: "恢复备份", en: "Restore backup" },
+      "menu.backupLoading": { zh: "加载备份列表…", en: "Loading backups…" },
+      "menu.backupEmpty": { zh: "暂无备份", en: "No backups yet" },
+      "menu.backupBadResponse": { zh: "备份列表响应格式异常", en: "Unexpected backup list response" },
+      "menu.backupListFail": { zh: "备份列表拉取失败：{msg}", en: "Failed to load backups: {msg}" },
+      "menu.restoreTitle": { zh: "确认恢复此备份", en: "Restore this backup" },
+      "menu.restoreBody": { zh: "将用备份「{name}」覆盖当前配置，覆盖前当前配置会先自动备份。", en: "Backup \"{name}\" will overwrite the current config; the current config is backed up automatically first." },
+      "menu.restoreConfirm": { zh: "覆盖恢复", en: "Overwrite & restore" },
+      "menu.restored": { zh: "已恢复备份 {name}，恢复前的配置已自动存为 bak-1", en: "Restored backup {name} — the previous config was saved as bak-1 automatically" },
+      "menu.restoreFail": { zh: "恢复失败：{msg}", en: "Restore failed: {msg}" },
     };
     // ── 样式注入（幂等）─────────────────────────────────────────────────
     //
@@ -498,8 +544,10 @@ window.__ModuleLoader__.load({
 
     // projBadge（可选）：项目级技能角标文案（如「项目」），仅技能项在
     // 工作区视角下、该技能来自工作区项目根时传入；其余网格不传不渲染。
+    // data-pd-tool：工具显示名打点——供 applyToolFilter 做筛选匹配（q 透传
+    // getAttribute，React 不感知），与 title 悬浮提示内容一致。
     function toolItem(tool, tag, checked, disabled, onChange, key, projBadge) {
-      return h("label", { key: key, className: "omd-toolItem", title: tool },
+      return h("label", { key: key, className: "omd-toolItem", title: tool, "data-pd-tool": tool },
         h("input", {
           type: "checkbox",
           className: "omd-check",
@@ -511,6 +559,68 @@ window.__ModuleLoader__.load({
         h("span", { className: "omd-toolName" }, tool),
         tag ? h("span", { className: "omd-toolTag" + (tag === "mcp" || tag === "plugin" ? " omd-toolTagHost" : "") }, tag) : null,
         projBadge ? h("span", { className: "omd-skillProj" }, projBadge) : null);
+    }
+
+    // ── 工具网格筛选（超过 8 项的分组在网格上方给一个行内筛选框）────────────
+    // 触发阈值：分组超过 8 项才出现筛选框（短网格不必多一个输入框）。
+    var TOOL_FILTER_MIN = 8;
+
+    // 工具网格（可选筛选框 + 网格本体）：items 超过阈值时在外面包一层
+    // .omd-toolFilterWrap（输入框 + 网格），否则原样返回网格节点。不引入任何
+    // 状态管道——筛选 oninput 直接改 DOM 显隐（见 applyToolFilter），整卡重
+    // 渲染会吃掉输入框焦点，这个交互必须绕开 React。
+    // renderItem：单工具 → 节点（toolItem 调用点原样搬进来）；emptyNode：
+    // 空列表占位（原「暂无 …」节点），空组照旧渲染、无筛选框。空占位作直接
+    // 子节点传入（不进数组），与改造前调用点的 children 形状一致，不触发
+    // React 的数组 key 警告。
+    function toolGridOf(tools, renderItem, emptyNode) {
+      var grid;
+      if (tools.length) {
+        grid = h.apply(null, ["div", { className: "omd-toolGrid" }].concat(tools.map(renderItem)));
+      } else {
+        grid = h("div", { className: "omd-toolGrid" }, emptyNode || null);
+      }
+      if (tools.length <= TOOL_FILTER_MIN) return grid;
+      return h("div", { className: "omd-toolFilterWrap" },
+        h("input", {
+          type: "text",
+          className: "omd-toolFilter",
+          placeholder: t("panel.toolFilter"),
+          spellCheck: false,
+          onInput: function (e) { applyToolFilter(e.target); },
+        }),
+        grid);
+    }
+
+    // 筛选 oninput：从输入框向上取包裹层，按 data-pd-tool（工具显示名）做
+    // 大小写不敏感子串匹配，逐项切 display——纯 DOM 操作不触发重渲染，输入框
+    // 焦点不丢；清空输入恢复全部显示。
+    function applyToolFilter(input) {
+      var wrap = input && input.parentNode;
+      if (!wrap || !wrap.querySelectorAll) return;
+      var q = String(input.value || "").toLowerCase();
+      var items = wrap.querySelectorAll("label[data-pd-tool]");
+      for (var i = 0; i < items.length; i++) {
+        var name = items[i].getAttribute("data-pd-tool") || "";
+        items[i].style.display = q !== "" && name.toLowerCase().indexOf(q) === -1 ? "none" : "";
+      }
+    }
+
+    // ── 工具面瘦身统计（state.slim / preview.slim → 一行文案）───────────────
+    // 瘦身百分比：pct = total>0 ? round((1-main/total)*100) : 0（total=0 防除零）。
+    function slimPctOf(slim) {
+      var total = slim && typeof slim.total === "number" ? slim.total : 0;
+      var main = slim && typeof slim.main === "number" ? slim.main : 0;
+      return total > 0 ? Math.round((1 - main / total) * 100) : 0;
+    }
+
+    // 一行统计文案（页头与预览弹窗共用同一拼法，防漂移）。
+    function slimLineText(slim) {
+      return t("slim.line", {
+        main: slim && typeof slim.main === "number" ? slim.main : 0,
+        total: slim && typeof slim.total === "number" ? slim.total : 0,
+        pct: slimPctOf(slim),
+      });
     }
 
     var DEFAULT_ROLES = ["search_external", "design", "implement"];
@@ -1172,6 +1282,85 @@ window.__ModuleLoader__.load({
         h("div", { className: "omd-section" }, rows));
     }
 
+    // ── 预览「本次变更」区块（preview.diff 结构化差分的渲染）─────────────────
+    // 服务端 preview 响应的 diff 是纯结构零文案（tools/lib/config.mjs
+    // diffAssignments），客户端在此按块渲染成可读行，全部措辞走 t() 字典：
+    //   - changed=false → 一行「与上次保存的配置一致」；
+    //   - changed=true → 主 agent（新带/移除工具 + persona/技能变化；modelChanged
+    //     恒 false 不渲染）→ 各角色（新增/移除/变更，变更细分 +N -N 工具、
+    //     persona、专用模型、启动方式、后台续跑）→ roles_remove（删/恢复内置
+    //     角色）→ main_extra（附加工具通道增删明细）逐块完整列出（预览区本就
+    //     在整页滚动流里，行多不怕）。
+    // apply 确认流程刻意不加本区块：预览才是「看一眼」的时刻，确认弹窗保持
+    // 一屏说清。行按语义着色：净新增（绿）/ 净移除（红）/ 变更明细（中性）。
+    function diffLineOf(text, tone) {
+      return h("div", {
+        className: "omd-diffLine" +
+          (tone === "add" ? " omd-diffLineAdd" : tone === "del" ? " omd-diffLineDel" : ""),
+      }, text);
+    }
+
+    // 工具/角色名列表串（按既有 listSep 口径连接）；调用方先判空再取。
+    function diffListStr(list) {
+      return (list || []).join(t("common.listSep"));
+    }
+
+    function diffBlockOf(diff) {
+      if (!diff || typeof diff !== "object") return null; // 老服务端无 diff 字段：整块零占位
+      var lines = [];
+      if (diff.changed) {
+        // 主 agent：extra 增删与 remove 增删已由服务端合并成净增减视图
+        //（toolsAdded / toolsRemoved），直接按净变化渲染。
+        var ma = diff.mainAgent || {};
+        if (ma.toolsAdded && ma.toolsAdded.length) {
+          lines.push(diffLineOf(t("diff.mainToolsAdded", { n: ma.toolsAdded.length, list: diffListStr(ma.toolsAdded) }), "add"));
+        }
+        if (ma.toolsRemoved && ma.toolsRemoved.length) {
+          lines.push(diffLineOf(t("diff.mainToolsRemoved", { n: ma.toolsRemoved.length, list: diffListStr(ma.toolsRemoved) }), "del"));
+        }
+        if (ma.personaChanged) lines.push(diffLineOf(t("diff.mainPersona")));
+        if (ma.skillsChanged) lines.push(diffLineOf(t("diff.mainSkills")));
+        // 角色：新增 / 移除 / 变更（变更行细分到维度，逐维度本地化）。
+        (diff.roles || []).forEach(function (r) {
+          if (!r || !r.name) return;
+          if (r.op === "added") { lines.push(diffLineOf(t("diff.roleAdded", { name: r.name }), "add")); return; }
+          if (r.op === "removed") { lines.push(diffLineOf(t("diff.roleRemoved", { name: r.name }), "del")); return; }
+          var details = [];
+          if ((r.toolsAdded && r.toolsAdded.length) || (r.toolsRemoved && r.toolsRemoved.length)) {
+            details.push(t("diff.roleTools", { added: (r.toolsAdded || []).length, removed: (r.toolsRemoved || []).length }));
+          }
+          if (r.personaChanged) details.push(t("diff.rolePersona"));
+          if (r.modelChanged) details.push(t("diff.roleModel"));
+          if (r.startModeChanged) details.push(t("diff.roleStartMode"));
+          if (r.backgroundModeChanged) details.push(t("diff.roleBgMode"));
+          if (details.length) {
+            lines.push(diffLineOf(t("diff.roleChanged", { name: r.name, details: details.join(t("common.listSep")) })));
+          }
+        });
+        // roles_remove：新增 = 删除的内置角色（净移除）；移除 = 恢复（净新增）。
+        var rr = diff.rolesRemove || {};
+        if (rr.added && rr.added.length) {
+          lines.push(diffLineOf(t("diff.rolesRemoveAdded", { n: rr.added.length, list: diffListStr(rr.added) }), "del"));
+        }
+        if (rr.removed && rr.removed.length) {
+          lines.push(diffLineOf(t("diff.rolesRemoveRemoved", { n: rr.removed.length, list: diffListStr(rr.removed) }), "add"));
+        }
+        // main_extra 通道明细（主 agent 合并视图之外的通道拆分，按任务要求一并列出）。
+        var me = diff.mainExtra || {};
+        if (me.added && me.added.length) {
+          lines.push(diffLineOf(t("diff.mainExtraAdded", { n: me.added.length, list: diffListStr(me.added) }), "add"));
+        }
+        if (me.removed && me.removed.length) {
+          lines.push(diffLineOf(t("diff.mainExtraRemoved", { n: me.removed.length, list: diffListStr(me.removed) }), "del"));
+        }
+      }
+      return h("div", { className: "omd-diffBlock" },
+        h("div", { className: "omd-diffHeading" }, t("diff.heading")),
+        diff.changed && lines.length
+          ? h("div", { className: "omd-diffLines" }, lines)
+          : h("div", { className: "omd-diffNone" }, t("diff.unchanged")));
+    }
+
     // ── 主面板 ─────────────────────────────────────────────────────────────
 
     function ConfigPanel(props) {
@@ -1199,6 +1388,11 @@ window.__ModuleLoader__.load({
       // 状态挂在页头 PageShell（版本号展示在标题旁），经 props 下发：
       // setVerInfo 供 loadVersion 回写页头（版本号与更新卡都在 PageShell）。
       var setVerInfo = props && props.setVerInfo;
+      // 工具面瘦身统计（state.slim = 按已保存配置算的 {total, main}）：呈现区
+      // 同样挂在页头 PageShell（副标题下一行，版本号/更新卡同区），经 props
+      // 下发 setSlimInfo 供 load / doRescan / doApply 回写。null = 老服务端
+      // 无该字段 / 尚未取到，页头一行零占位。
+      var setSlimInfo = props && props.setSlimInfo;
       // 导入配置后的整体刷新入口：ConfigPanel 把 load 注册给页头（PageShell 的
       // 「更多 → 导入配置」成功后调用）。面板与页头分属两棵子树，props 只能
       // 单向传「注册函数」，刷新动作反过来经 ref 回调触达。
@@ -1346,6 +1540,9 @@ window.__ModuleLoader__.load({
         api("state").then(function (d) {
           setData(d);
           setAssign(buildTargetAssignments(d, activeWsRef.current));
+          // 页头瘦身统计跟着 state 走（state.slim 按已保存的全局配置计算，与
+          // 工作区视角无关）；老服务端无 slim 字段时置 null 隐藏该行。
+          if (typeof setSlimInfo === "function") setSlimInfo(d && d.slim ? d.slim : null);
         }).catch(function (err) { setError(err.message); });
       }, [api, buildTargetAssignments]);
 
@@ -1990,6 +2187,10 @@ window.__ModuleLoader__.load({
                 return w && (w.level === "error" || w.level === "warn");
               }).length;
               var warnTail = t("panel.warnTail", { n: warnItems.length });
+              // 全局应用成功：页头瘦身统计改按本次提交配置（apply 响应自带
+              // slim，与落盘内容同口径）；工作区应用不动全局配置，下方 state
+              // 回拉自带 slim，不在额外设值。
+              if (!wsPath && r && r.slim && typeof setSlimInfo === "function") setSlimInfo(r.slim);
               if (wsPath) {
                 // 工作区应用：点明生成的 preset id，提示去预设选择器选用（工作区
                 // 预设不会自动成为默认，须在新建会话时显式选择）。体检 bad 时
@@ -2003,6 +2204,7 @@ window.__ModuleLoader__.load({
                 api("state").then(function (d) {
                   setData(d);
                   setAssign(buildTargetAssignments(d, activeWsRef.current));
+                  if (typeof setSlimInfo === "function") setSlimInfo(d && d.slim ? d.slim : null);
                 }).catch(function () { /* 静默：落盘已成功，仅展示层暂旧 */ });
               } else {
                 var gMsg = t("panel.appliedGlobal", { summary: badCount > 0 ? warnTail : summary })
@@ -2034,6 +2236,8 @@ window.__ModuleLoader__.load({
         api("rescan", {}).then(function (d) {
           setData(d);
           setAssign(buildTargetAssignments(d, activeWsRef.current));
+          // 重扫后的 state 自带瘦身统计，页头一行同步刷新（字段缺失则隐藏）。
+          if (typeof setSlimInfo === "function") setSlimInfo(d && d.slim ? d.slim : null);
           // 回调参数 d 即重扫后的新 state，直接报数字，补回原徽标条的信息量
           toast.ok(t("panel.rescanned", { n: (d.inventory || []).length, m: (d.skills || []).length }));
         }).catch(function (err) { toast.err(err.message); }).finally(function () {
@@ -2929,11 +3133,12 @@ window.__ModuleLoader__.load({
         if (isMain) {
           body.push(mainNameBlock());
           body.push(h("div", { className: "omd-glabel" }, t("panel.baseToolsMain")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            (data.restrictBase || []).map(function (t) {
-              return toolItem(t, "base", (a.main_agent_remove || []).indexOf(t) === -1, busy,
-                function (e) { setMainRemove(t, e.target.checked); }, t);
-            })));
+          // 三组工具网格都走 toolGridOf：超过 8 项的组自动带行内筛选框
+          //（oninput 纯 DOM 切显隐，见 20 片段 toolGridOf / applyToolFilter）。
+          body.push(toolGridOf(data.restrictBase || [], function (t) {
+            return toolItem(t, "base", (a.main_agent_remove || []).indexOf(t) === -1, busy,
+              function (e) { setMainRemove(t, e.target.checked); }, t);
+          }));
           // host 检测库存按角色卡同口径拆两组：mcp__ 前缀 → 「MCP 工具」，
           // 其余（mnemon_* 等插件直注册工具）→ 「插件工具」。勾选逻辑不变，
           // 都写入 main_agent_extra。
@@ -2941,21 +3146,15 @@ window.__ModuleLoader__.load({
           var mainMcpTools = mainInv.filter(function (t) { return hostTool(t); });
           var mainPluginTools = mainInv.filter(function (t) { return !hostTool(t); });
           body.push(h("div", { className: "omd-glabel" }, t("panel.mcpToolsMain")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            mainMcpTools.length
-              ? mainMcpTools.map(function (t) {
-                  return toolItem(t, "mcp", a.main_agent_extra.indexOf(t) !== -1, busy,
-                    function (e) { setMainExtra(t, e.target.checked); }, t);
-                })
-              : h("div", { className: "omd-empty" }, t("panel.noMcp"))));
+          body.push(toolGridOf(mainMcpTools, function (t) {
+            return toolItem(t, "mcp", a.main_agent_extra.indexOf(t) !== -1, busy,
+              function (e) { setMainExtra(t, e.target.checked); }, t);
+          }, h("div", { className: "omd-empty" }, t("panel.noMcp"))));
           body.push(h("div", { className: "omd-glabel" }, t("panel.pluginToolsMain")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            mainPluginTools.length
-              ? mainPluginTools.map(function (t) {
-                  return toolItem(t, "plugin", a.main_agent_extra.indexOf(t) !== -1, busy,
-                    function (e) { setMainExtra(t, e.target.checked); }, t);
-                })
-              : h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
+          body.push(toolGridOf(mainPluginTools, function (t) {
+            return toolItem(t, "plugin", a.main_agent_extra.indexOf(t) !== -1, busy,
+              function (e) { setMainExtra(t, e.target.checked); }, t);
+          }, h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
           body.push(h("div", { className: "omd-glabel" }, t("panel.skillsMain")));
           body.push(gridSkills.length
             ? h("div", null,
@@ -2997,30 +3196,22 @@ window.__ModuleLoader__.load({
           var pluginTools = candidates.filter(function (t) { return !hostTool(t) && inv.indexOf(t) !== -1; });
           var baseTools = candidates.filter(function (t) { return !hostTool(t) && inv.indexOf(t) === -1; });
           var checked = a.roles[name].tools;
+          // 三组网格同走 toolGridOf（超 8 项自动带筛选框，与主 agent 卡同款）。
           body.push(h("div", { className: "omd-glabel" }, t("panel.baseTools")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            baseTools.length
-              ? baseTools.map(function (t) {
-                  return toolItem(t, "base", checked.indexOf(t) !== -1, busy,
-                    function (e) { setRoleTools(name, t, e.target.checked); }, t);
-                })
-              : h("div", { className: "omd-empty" }, t("panel.none"))));
+          body.push(toolGridOf(baseTools, function (t) {
+            return toolItem(t, "base", checked.indexOf(t) !== -1, busy,
+              function (e) { setRoleTools(name, t, e.target.checked); }, t);
+          }, h("div", { className: "omd-empty" }, t("panel.none"))));
           body.push(h("div", { className: "omd-glabel" }, t("panel.mcpTools")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            mcpTools.length
-              ? mcpTools.map(function (t) {
-                  return toolItem(t, "mcp", checked.indexOf(t) !== -1, busy,
-                    function (e) { setRoleTools(name, t, e.target.checked); }, t);
-                })
-              : h("div", { className: "omd-empty" }, t("panel.noMcp"))));
+          body.push(toolGridOf(mcpTools, function (t) {
+            return toolItem(t, "mcp", checked.indexOf(t) !== -1, busy,
+              function (e) { setRoleTools(name, t, e.target.checked); }, t);
+          }, h("div", { className: "omd-empty" }, t("panel.noMcp"))));
           body.push(h("div", { className: "omd-glabel" }, t("panel.pluginTools")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            pluginTools.length
-              ? pluginTools.map(function (t) {
-                  return toolItem(t, "plugin", checked.indexOf(t) !== -1, busy,
-                    function (e) { setRoleTools(name, t, e.target.checked); }, t);
-                })
-              : h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
+          body.push(toolGridOf(pluginTools, function (t) {
+            return toolItem(t, "plugin", checked.indexOf(t) !== -1, busy,
+              function (e) { setRoleTools(name, t, e.target.checked); }, t);
+          }, h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
           body.push(personaBlock(name));
         }
 
@@ -3203,6 +3394,14 @@ window.__ModuleLoader__.load({
             (preview.roleResults || []).map(function (r) {
               return " · " + r.role + ": " + r.intent.length + " → " + r.kept.length;
             }).join("")),
+          // 「本次变更」区块：服务端 diff 到场才渲染（老服务端零占位）；
+          // unchanged 一行、changed 完整列出（见 70 片段 diffBlockOf）。
+          diffBlockOf(preview.diff),
+          // 瘦身统计（按本次提交配置算的预览口径）：与页头「按已保存配置」的
+          // 一行区分，随行标注「按当前未保存配置」。apply 确认流程不加区块。
+          preview.slim ? h("div", { className: "omd-slimLine" },
+            slimLineText(preview.slim),
+            h("span", { className: "omd-slimNote" }, t("slim.pendingNote"))) : null,
           h("pre", { className: "omd-pre" }, preview.text)) : null,
 
         // 悬浮操作坞（sticky bottom：按钮常驻滚动容器底部，改完配置无需滚回顶部再操作）
@@ -3729,6 +3928,41 @@ window.__ModuleLoader__.load({
       });
     }
 
+    // ── 恢复备份（页头「更多」菜单 → 备份列表弹层 → 二次确认 → POST restore）──
+    // 服务端契约（api-core.mjs / index.mjs 已落地）：
+    //   GET  config/backups → { ok, backups: [{file, mtimeMs, size}] }（新→旧，可空）
+    //   POST config/restore { file } → { ok }；422 文件名非法/备份坏、404 不存在、
+    //   409 有 apply 在跑（{ error } 信封，客户端按既有错误 toast 惯例呈现）。
+    // 行三段：bak-N 徽标（从文件名 .bak-N 尾缀解析，解析不出原样显示文件名）+
+    // 本地时间（mtimeMs 按 UI 语言格式化）+ 大小（B/KB/MB 三档）。
+
+    // 备份徽标：file 恒为 basename（服务端保证），形如
+    // 「<配置文件名>.bak-1」→ 「bak-1」；形状不对原样透出（不猜）。
+    function backupTagOf(file) {
+      var m = String(file || "").match(/\.bak-(\d+)$/);
+      return m ? "bak-" + m[1] : String(file || "");
+    }
+
+    // 本地时间：toLocaleString 按当前 UI 语言取 locale（zh → zh-CN / en → en-US
+    // ——Electron 外壳 navigator 语言被钉成应用 locale，不可作格式化依据），
+    // 24 小时制免「上午/下午」占宽；Intl 缺失的老内核逐层回落实现缺省格式。
+    function backupTimeText(ms) {
+      var d = new Date(typeof ms === "number" ? ms : 0);
+      try {
+        return d.toLocaleString(pdLang() === "en" ? "en-US" : "zh-CN", { hour12: false });
+      } catch (err) {
+        try { return d.toLocaleString(); } catch (err2) { return String(d); }
+      }
+    }
+
+    // 大小：B / KB / MB 三档（配置文件量级远用不上 GB），KB 以上留一位小数。
+    function backupSizeText(bytes) {
+      var n = typeof bytes === "number" && isFinite(bytes) && bytes >= 0 ? bytes : 0;
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+      return (n / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
     // 确认弹窗层：订阅 70 片段的 confirmCtrl 单例（照 makeFooterEntry 的
     // useState + subscribe 写法），渲染 confirmModalOf。挂在 PageShell 根数组
     // 末尾——fixed 全屏遮罩覆盖整页，面板（删除角色 / 保存并应用）与页头
@@ -3772,6 +4006,10 @@ window.__ModuleLoader__.load({
       // 版本检测重试进行中（页头失败行的「重试」按钮禁用态）：与升级三态分开，
       // 检测失败重试不该锁升级（升级预检在服务端另做一次，不依赖这份 verInfo）。
       var _vb = useState(false), verRetryBusy = _vb[0], setVerRetryBusy = _vb[1];
+      // 工具面瘦身统计（state.slim = 按已保存配置算的 {total, main}，ConfigPanel
+      // 的 load / doRescan / doApply 经 props.setSlimInfo 回写）：副标题下一行，
+      // 版本号 / 更新卡同区呈现。null = 未取到 / 老服务端无字段，整行零占位。
+      var _sl = useState(null), slimInfo = _sl[0], setSlimInfo = _sl[1];
       // 语言切换 tick：页头文案（标题 / 副标题 / 菜单 / 语言项）走 t()，切换后
       // 需整体重渲染一次；ConfigPanel 内部另有 registerReload 整页重拉。
       var _lg = useState(0), langTick = _lg[0], setLangTick = _lg[1];
@@ -3862,6 +4100,127 @@ window.__ModuleLoader__.load({
         });
       }
 
+      // ── 恢复备份：备份列表弹层 ────────────────────────────────────────────
+      // 打开即拉 GET config/backups（服务端已按新→旧排好，客户端不再排序）；
+      // 行点击走 confirmCtrl 二次确认（覆盖前当前配置会先自动备份，danger 红钮
+      // 与导入同款门槛），确认后 POST config/restore——成功 toast + 面板既有
+      // 刷新路径（reloadRef 重拉 state 重建 assign，预览 / 提示卡一并作废，
+      // 委派行显示名跟着重注册）；409 / 422 / 404 按既有错误 toast 惯例呈现
+      //（本地前缀 + 服务端 message 原文），弹层留着方便换一个备份再试。
+      var _bko = useState(false), bkOpen = _bko[0], setBkOpen = _bko[1];
+      var _bkl = useState([]), bkList = _bkl[0], setBkList = _bkl[1];
+      // bkBusy 双语义：列表拉取中（弹层显示加载行）/ 恢复请求在途（行全禁用，
+      // 防双击重复回滚）。
+      var _bkb = useState(false), bkBusy = _bkb[0], setBkBusy = _bkb[1];
+      var _bke = useState(""), bkErr = _bke[0], setBkErr = _bke[1];
+
+      function openBackupModal() {
+        setMoreOpen(false);
+        setBkOpen(true);
+        setBkList([]);
+        setBkErr("");
+        setBkBusy(true);
+        paodingApi("config/backups").then(function (d) {
+          if (!d || d.ok !== true || !Array.isArray(d.backups)) throw new Error(t("menu.backupBadResponse"));
+          setBkList(d.backups);
+        }).catch(function (err) {
+          setBkErr(t("menu.backupListFail", { msg: err.message }));
+        }).finally(function () {
+          setBkBusy(false);
+        });
+      }
+
+      // 关弹层：恢复请求在途时不收（请求自见分晓，中途关层容易误以为没生效）。
+      function closeBackupModal() {
+        if (bkBusy) return;
+        setBkOpen(false);
+      }
+
+      function pickBackup(item) {
+        if (!item || typeof item.file !== "string" || item.file === "" || bkBusy) return;
+        confirmCtrl.ask({
+          title: t("menu.restoreTitle"),
+          body: t("menu.restoreBody", { name: backupTagOf(item.file) }),
+          danger: true,
+          confirmText: t("menu.restoreConfirm"),
+          onConfirm: function () {
+            setBkBusy(true);
+            paodingApi("config/restore", { file: item.file }).then(function () {
+              toast.ok(t("menu.restored", { name: backupTagOf(item.file) }));
+              setBkOpen(false);
+              // 面板既有刷新路径（与「导入配置」同款）：重拉 state 重建 assign；
+              // 显示名 / 角色名单可能被回滚改变，事件流委派行键控注册跟着刷新。
+              if (typeof reloadRef.current === "function") reloadRef.current();
+              refreshDelegateRows();
+            }).catch(function (err) {
+              toast.err(t("menu.restoreFail", { msg: err.message }));
+            }).finally(function () {
+              setBkBusy(false);
+            });
+          },
+        });
+      }
+
+      // 备份弹层开着时的 Esc 分层（捕获级，与 ConfirmLayer 同款思路）：只收
+      // 弹层本身；二次确认框开着时放行——ConfirmLayer 的监听（注册在前）先
+      // stopPropagation 并只关确认框，这里不重复收弹层。
+      useEffect(function () {
+        if (!bkOpen) return;
+        var onKey = function (e) {
+          if (!e || e.key !== "Escape") return;
+          if (confirmCtrl.getSnapshot().req) return; // 确认框优先：让它自己的监听去收
+          e.stopPropagation();
+          closeBackupModal();
+        };
+        document.addEventListener("keydown", onKey, true);
+        return function () { document.removeEventListener("keydown", onKey, true); };
+      }, [bkOpen, bkBusy]);
+
+      // 备份列表弹层（结构对齐 confirmModalOf 的 pd-modal* 家族）：整行可点
+      // 按钮列表（bak 徽标 + 本地时间 + 大小，服务端已按新→旧排好）；拉取中
+      // 一行加载文案、空列表「暂无备份」、失败一行原因（不弹 toast，弹层里
+      // 就地交代）。body 高度封顶出滚，备份链再长也不顶破视口。
+      function backupModalOf() {
+        if (!bkOpen) return null;
+        var rows = bkList.map(function (it, i) {
+          return h("button", {
+            type: "button",
+            key: it && typeof it.file === "string" && it.file ? it.file : "bak-" + i,
+            className: "pd-backupItem",
+            disabled: bkBusy,
+            title: it && typeof it.file === "string" ? it.file : undefined,
+            onClick: function () { pickBackup(it); },
+          },
+            h("span", { className: "pd-backupTag" }, backupTagOf(it && it.file)),
+            h("span", { className: "pd-backupTime" }, backupTimeText(it && it.mtimeMs)),
+            h("span", { className: "pd-backupSize" }, backupSizeText(it && it.size)));
+        });
+        return h("div", {
+            className: "pd-modalMask",
+            // 只点遮罩空白处才收（与 confirmModalOf 同款 mousedown 判据）
+            onMouseDown: function (e) { if (e.target === e.currentTarget) closeBackupModal(); },
+          },
+          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": t("menu.backupTitle") },
+            h("div", { className: "pd-modalHeader" },
+              h("h2", { className: "pd-modalTitle" }, t("menu.backupTitle")),
+              h("button", {
+                type: "button", className: "pd-modalClose", "aria-label": t("common.close"),
+                onClick: closeBackupModal,
+              }, h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
+            h("div", { className: "pd-modalBody" },
+              bkErr
+                ? h("div", { className: "omd-status omd-statusError" },
+                    h("span", { className: "omd-statusIcon" }, "⛔"),
+                    h("span", { className: "omd-statusText" }, bkErr))
+                : bkBusy && !bkList.length
+                  ? h("div", { className: "pd-backupEmpty" }, t("menu.backupLoading"))
+                  : bkList.length
+                    ? h("div", { className: "pd-backupList" }, rows)
+                    : h("div", { className: "pd-backupEmpty" }, t("menu.backupEmpty"))),
+            h("div", { className: "pd-modalFooter" },
+              h(P.Button, { variant: "outline", size: "md", disabled: bkBusy, onClick: closeBackupModal }, t("common.close")))));
+      }
+
       // 菜单开着时 Esc 只收菜单（捕获级先于 PageShell 的关页监听，与
       // ConfigPanel 弹窗的 Esc 分层同款）；点菜单外空白处收菜单。
       useEffect(function () {
@@ -3924,7 +4283,10 @@ window.__ModuleLoader__.load({
                   : null),
               versionRowOf(verInfo, { busy: upgBusy, onUpgrade: doUpgrade, note: upgNote, error: upgErr, onRetry: doRetryVersion, retryBusy: verRetryBusy })),
             h("p", { className: "pd-pageSubtitle" },
-              t("menu.subtitle"))),
+              t("menu.subtitle")),
+            // 工具面瘦身统计一行：按已保存的全局配置（state.slim，见 setSlimInfo
+            // 回写点）；数据未就绪 / 老服务端无该字段时零占位。
+            slimInfo ? h("p", { className: "pd-slimLine" }, slimLineText(slimInfo)) : null),
           // 页头「更多」菜单：整份配置文件的导出 / 导入（低频操作收进来，页头
           // 不添第二排按钮）。定位锚点用相对定位的薄包裹层，下拉复用工作区
           // 「更多」的 omd-tabMenu / omd-tabMenuItem 既有样式；靠右对齐（inline
@@ -3956,6 +4318,13 @@ window.__ModuleLoader__.load({
                 disabled: expBusy || impBusy,
                 onClick: pickImportFile,
               }, h("span", { className: "omd-tabText" }, impBusy ? t("menu.importing") : t("menu.importItem"))),
+              // 恢复备份：弹备份列表（行点选 → confirmCtrl 二次确认 → POST
+              // restore，见 openBackupModal / pickBackup / backupModalOf）。
+              h("button", {
+                type: "button", role: "menuitem", className: "omd-tabMenuItem",
+                disabled: expBusy || impBusy,
+                onClick: openBackupModal,
+              }, h("span", { className: "omd-tabText" }, t("menu.restoreItem"))),
               // 语言切换项：label 刻意不进字典——按当前语言显示「另一端」的叫法，
               // 中文界面显示 English，英文界面显示中文（语言名用母语写才认得出）。
               h("button", {
@@ -3983,7 +4352,11 @@ window.__ModuleLoader__.load({
             title: t("nav.closeTip"),
             onClick: function () { if (typeof onClose === "function") onClose(); },
           }, h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
-        h(ConfigPanel, { setVerInfo: setVerInfo, registerReload: registerReload }),
+        h(ConfigPanel, { setVerInfo: setVerInfo, setSlimInfo: setSlimInfo, registerReload: registerReload }),
+        // 恢复备份弹层：fixed 遮罩不占布局流；置于 ConfirmLayer 之前——两者
+        // 遮罩同为 z-60，按 DOM 顺序叠放，行点选后的二次确认框必须盖在列表
+        // 弹层之上。
+        backupModalOf(),
         // 反馈 toast 宿主：订阅模块级 toast 控制器，悬浮于操作坞上方
         h(ToastHost),
         // 通用确认弹窗层：订阅 confirmCtrl（发起方见各 confirmCtrl.ask 调用点），

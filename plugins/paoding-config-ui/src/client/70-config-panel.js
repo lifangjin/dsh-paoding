@@ -115,6 +115,85 @@
         h("div", { className: "omd-section" }, rows));
     }
 
+    // ── 预览「本次变更」区块（preview.diff 结构化差分的渲染）─────────────────
+    // 服务端 preview 响应的 diff 是纯结构零文案（tools/lib/config.mjs
+    // diffAssignments），客户端在此按块渲染成可读行，全部措辞走 t() 字典：
+    //   - changed=false → 一行「与上次保存的配置一致」；
+    //   - changed=true → 主 agent（新带/移除工具 + persona/技能变化；modelChanged
+    //     恒 false 不渲染）→ 各角色（新增/移除/变更，变更细分 +N -N 工具、
+    //     persona、专用模型、启动方式、后台续跑）→ roles_remove（删/恢复内置
+    //     角色）→ main_extra（附加工具通道增删明细）逐块完整列出（预览区本就
+    //     在整页滚动流里，行多不怕）。
+    // apply 确认流程刻意不加本区块：预览才是「看一眼」的时刻，确认弹窗保持
+    // 一屏说清。行按语义着色：净新增（绿）/ 净移除（红）/ 变更明细（中性）。
+    function diffLineOf(text, tone) {
+      return h("div", {
+        className: "omd-diffLine" +
+          (tone === "add" ? " omd-diffLineAdd" : tone === "del" ? " omd-diffLineDel" : ""),
+      }, text);
+    }
+
+    // 工具/角色名列表串（按既有 listSep 口径连接）；调用方先判空再取。
+    function diffListStr(list) {
+      return (list || []).join(t("common.listSep"));
+    }
+
+    function diffBlockOf(diff) {
+      if (!diff || typeof diff !== "object") return null; // 老服务端无 diff 字段：整块零占位
+      var lines = [];
+      if (diff.changed) {
+        // 主 agent：extra 增删与 remove 增删已由服务端合并成净增减视图
+        //（toolsAdded / toolsRemoved），直接按净变化渲染。
+        var ma = diff.mainAgent || {};
+        if (ma.toolsAdded && ma.toolsAdded.length) {
+          lines.push(diffLineOf(t("diff.mainToolsAdded", { n: ma.toolsAdded.length, list: diffListStr(ma.toolsAdded) }), "add"));
+        }
+        if (ma.toolsRemoved && ma.toolsRemoved.length) {
+          lines.push(diffLineOf(t("diff.mainToolsRemoved", { n: ma.toolsRemoved.length, list: diffListStr(ma.toolsRemoved) }), "del"));
+        }
+        if (ma.personaChanged) lines.push(diffLineOf(t("diff.mainPersona")));
+        if (ma.skillsChanged) lines.push(diffLineOf(t("diff.mainSkills")));
+        // 角色：新增 / 移除 / 变更（变更行细分到维度，逐维度本地化）。
+        (diff.roles || []).forEach(function (r) {
+          if (!r || !r.name) return;
+          if (r.op === "added") { lines.push(diffLineOf(t("diff.roleAdded", { name: r.name }), "add")); return; }
+          if (r.op === "removed") { lines.push(diffLineOf(t("diff.roleRemoved", { name: r.name }), "del")); return; }
+          var details = [];
+          if ((r.toolsAdded && r.toolsAdded.length) || (r.toolsRemoved && r.toolsRemoved.length)) {
+            details.push(t("diff.roleTools", { added: (r.toolsAdded || []).length, removed: (r.toolsRemoved || []).length }));
+          }
+          if (r.personaChanged) details.push(t("diff.rolePersona"));
+          if (r.modelChanged) details.push(t("diff.roleModel"));
+          if (r.startModeChanged) details.push(t("diff.roleStartMode"));
+          if (r.backgroundModeChanged) details.push(t("diff.roleBgMode"));
+          if (details.length) {
+            lines.push(diffLineOf(t("diff.roleChanged", { name: r.name, details: details.join(t("common.listSep")) })));
+          }
+        });
+        // roles_remove：新增 = 删除的内置角色（净移除）；移除 = 恢复（净新增）。
+        var rr = diff.rolesRemove || {};
+        if (rr.added && rr.added.length) {
+          lines.push(diffLineOf(t("diff.rolesRemoveAdded", { n: rr.added.length, list: diffListStr(rr.added) }), "del"));
+        }
+        if (rr.removed && rr.removed.length) {
+          lines.push(diffLineOf(t("diff.rolesRemoveRemoved", { n: rr.removed.length, list: diffListStr(rr.removed) }), "add"));
+        }
+        // main_extra 通道明细（主 agent 合并视图之外的通道拆分，按任务要求一并列出）。
+        var me = diff.mainExtra || {};
+        if (me.added && me.added.length) {
+          lines.push(diffLineOf(t("diff.mainExtraAdded", { n: me.added.length, list: diffListStr(me.added) }), "add"));
+        }
+        if (me.removed && me.removed.length) {
+          lines.push(diffLineOf(t("diff.mainExtraRemoved", { n: me.removed.length, list: diffListStr(me.removed) }), "del"));
+        }
+      }
+      return h("div", { className: "omd-diffBlock" },
+        h("div", { className: "omd-diffHeading" }, t("diff.heading")),
+        diff.changed && lines.length
+          ? h("div", { className: "omd-diffLines" }, lines)
+          : h("div", { className: "omd-diffNone" }, t("diff.unchanged")));
+    }
+
     // ── 主面板 ─────────────────────────────────────────────────────────────
 
     function ConfigPanel(props) {
@@ -142,6 +221,11 @@
       // 状态挂在页头 PageShell（版本号展示在标题旁），经 props 下发：
       // setVerInfo 供 loadVersion 回写页头（版本号与更新卡都在 PageShell）。
       var setVerInfo = props && props.setVerInfo;
+      // 工具面瘦身统计（state.slim = 按已保存配置算的 {total, main}）：呈现区
+      // 同样挂在页头 PageShell（副标题下一行，版本号/更新卡同区），经 props
+      // 下发 setSlimInfo 供 load / doRescan / doApply 回写。null = 老服务端
+      // 无该字段 / 尚未取到，页头一行零占位。
+      var setSlimInfo = props && props.setSlimInfo;
       // 导入配置后的整体刷新入口：ConfigPanel 把 load 注册给页头（PageShell 的
       // 「更多 → 导入配置」成功后调用）。面板与页头分属两棵子树，props 只能
       // 单向传「注册函数」，刷新动作反过来经 ref 回调触达。
@@ -289,6 +373,9 @@
         api("state").then(function (d) {
           setData(d);
           setAssign(buildTargetAssignments(d, activeWsRef.current));
+          // 页头瘦身统计跟着 state 走（state.slim 按已保存的全局配置计算，与
+          // 工作区视角无关）；老服务端无 slim 字段时置 null 隐藏该行。
+          if (typeof setSlimInfo === "function") setSlimInfo(d && d.slim ? d.slim : null);
         }).catch(function (err) { setError(err.message); });
       }, [api, buildTargetAssignments]);
 
@@ -933,6 +1020,10 @@
                 return w && (w.level === "error" || w.level === "warn");
               }).length;
               var warnTail = t("panel.warnTail", { n: warnItems.length });
+              // 全局应用成功：页头瘦身统计改按本次提交配置（apply 响应自带
+              // slim，与落盘内容同口径）；工作区应用不动全局配置，下方 state
+              // 回拉自带 slim，不在额外设值。
+              if (!wsPath && r && r.slim && typeof setSlimInfo === "function") setSlimInfo(r.slim);
               if (wsPath) {
                 // 工作区应用：点明生成的 preset id，提示去预设选择器选用（工作区
                 // 预设不会自动成为默认，须在新建会话时显式选择）。体检 bad 时
@@ -946,6 +1037,7 @@
                 api("state").then(function (d) {
                   setData(d);
                   setAssign(buildTargetAssignments(d, activeWsRef.current));
+                  if (typeof setSlimInfo === "function") setSlimInfo(d && d.slim ? d.slim : null);
                 }).catch(function () { /* 静默：落盘已成功，仅展示层暂旧 */ });
               } else {
                 var gMsg = t("panel.appliedGlobal", { summary: badCount > 0 ? warnTail : summary })
@@ -977,6 +1069,8 @@
         api("rescan", {}).then(function (d) {
           setData(d);
           setAssign(buildTargetAssignments(d, activeWsRef.current));
+          // 重扫后的 state 自带瘦身统计，页头一行同步刷新（字段缺失则隐藏）。
+          if (typeof setSlimInfo === "function") setSlimInfo(d && d.slim ? d.slim : null);
           // 回调参数 d 即重扫后的新 state，直接报数字，补回原徽标条的信息量
           toast.ok(t("panel.rescanned", { n: (d.inventory || []).length, m: (d.skills || []).length }));
         }).catch(function (err) { toast.err(err.message); }).finally(function () {

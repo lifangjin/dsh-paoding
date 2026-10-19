@@ -869,11 +869,12 @@
         if (isMain) {
           body.push(mainNameBlock());
           body.push(h("div", { className: "omd-glabel" }, t("panel.baseToolsMain")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            (data.restrictBase || []).map(function (t) {
-              return toolItem(t, "base", (a.main_agent_remove || []).indexOf(t) === -1, busy,
-                function (e) { setMainRemove(t, e.target.checked); }, t);
-            })));
+          // 三组工具网格都走 toolGridOf：超过 8 项的组自动带行内筛选框
+          //（oninput 纯 DOM 切显隐，见 20 片段 toolGridOf / applyToolFilter）。
+          body.push(toolGridOf(data.restrictBase || [], function (t) {
+            return toolItem(t, "base", (a.main_agent_remove || []).indexOf(t) === -1, busy,
+              function (e) { setMainRemove(t, e.target.checked); }, t);
+          }));
           // host 检测库存按角色卡同口径拆两组：mcp__ 前缀 → 「MCP 工具」，
           // 其余（mnemon_* 等插件直注册工具）→ 「插件工具」。勾选逻辑不变，
           // 都写入 main_agent_extra。
@@ -881,21 +882,15 @@
           var mainMcpTools = mainInv.filter(function (t) { return hostTool(t); });
           var mainPluginTools = mainInv.filter(function (t) { return !hostTool(t); });
           body.push(h("div", { className: "omd-glabel" }, t("panel.mcpToolsMain")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            mainMcpTools.length
-              ? mainMcpTools.map(function (t) {
-                  return toolItem(t, "mcp", a.main_agent_extra.indexOf(t) !== -1, busy,
-                    function (e) { setMainExtra(t, e.target.checked); }, t);
-                })
-              : h("div", { className: "omd-empty" }, t("panel.noMcp"))));
+          body.push(toolGridOf(mainMcpTools, function (t) {
+            return toolItem(t, "mcp", a.main_agent_extra.indexOf(t) !== -1, busy,
+              function (e) { setMainExtra(t, e.target.checked); }, t);
+          }, h("div", { className: "omd-empty" }, t("panel.noMcp"))));
           body.push(h("div", { className: "omd-glabel" }, t("panel.pluginToolsMain")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            mainPluginTools.length
-              ? mainPluginTools.map(function (t) {
-                  return toolItem(t, "plugin", a.main_agent_extra.indexOf(t) !== -1, busy,
-                    function (e) { setMainExtra(t, e.target.checked); }, t);
-                })
-              : h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
+          body.push(toolGridOf(mainPluginTools, function (t) {
+            return toolItem(t, "plugin", a.main_agent_extra.indexOf(t) !== -1, busy,
+              function (e) { setMainExtra(t, e.target.checked); }, t);
+          }, h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
           body.push(h("div", { className: "omd-glabel" }, t("panel.skillsMain")));
           body.push(gridSkills.length
             ? h("div", null,
@@ -937,30 +932,22 @@
           var pluginTools = candidates.filter(function (t) { return !hostTool(t) && inv.indexOf(t) !== -1; });
           var baseTools = candidates.filter(function (t) { return !hostTool(t) && inv.indexOf(t) === -1; });
           var checked = a.roles[name].tools;
+          // 三组网格同走 toolGridOf（超 8 项自动带筛选框，与主 agent 卡同款）。
           body.push(h("div", { className: "omd-glabel" }, t("panel.baseTools")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            baseTools.length
-              ? baseTools.map(function (t) {
-                  return toolItem(t, "base", checked.indexOf(t) !== -1, busy,
-                    function (e) { setRoleTools(name, t, e.target.checked); }, t);
-                })
-              : h("div", { className: "omd-empty" }, t("panel.none"))));
+          body.push(toolGridOf(baseTools, function (t) {
+            return toolItem(t, "base", checked.indexOf(t) !== -1, busy,
+              function (e) { setRoleTools(name, t, e.target.checked); }, t);
+          }, h("div", { className: "omd-empty" }, t("panel.none"))));
           body.push(h("div", { className: "omd-glabel" }, t("panel.mcpTools")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            mcpTools.length
-              ? mcpTools.map(function (t) {
-                  return toolItem(t, "mcp", checked.indexOf(t) !== -1, busy,
-                    function (e) { setRoleTools(name, t, e.target.checked); }, t);
-                })
-              : h("div", { className: "omd-empty" }, t("panel.noMcp"))));
+          body.push(toolGridOf(mcpTools, function (t) {
+            return toolItem(t, "mcp", checked.indexOf(t) !== -1, busy,
+              function (e) { setRoleTools(name, t, e.target.checked); }, t);
+          }, h("div", { className: "omd-empty" }, t("panel.noMcp"))));
           body.push(h("div", { className: "omd-glabel" }, t("panel.pluginTools")));
-          body.push(h("div", { className: "omd-toolGrid" },
-            pluginTools.length
-              ? pluginTools.map(function (t) {
-                  return toolItem(t, "plugin", checked.indexOf(t) !== -1, busy,
-                    function (e) { setRoleTools(name, t, e.target.checked); }, t);
-                })
-              : h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
+          body.push(toolGridOf(pluginTools, function (t) {
+            return toolItem(t, "plugin", checked.indexOf(t) !== -1, busy,
+              function (e) { setRoleTools(name, t, e.target.checked); }, t);
+          }, h("div", { className: "omd-empty" }, t("panel.noPlugin"))));
           body.push(personaBlock(name));
         }
 
@@ -1143,6 +1130,14 @@
             (preview.roleResults || []).map(function (r) {
               return " · " + r.role + ": " + r.intent.length + " → " + r.kept.length;
             }).join("")),
+          // 「本次变更」区块：服务端 diff 到场才渲染（老服务端零占位）；
+          // unchanged 一行、changed 完整列出（见 70 片段 diffBlockOf）。
+          diffBlockOf(preview.diff),
+          // 瘦身统计（按本次提交配置算的预览口径）：与页头「按已保存配置」的
+          // 一行区分，随行标注「按当前未保存配置」。apply 确认流程不加区块。
+          preview.slim ? h("div", { className: "omd-slimLine" },
+            slimLineText(preview.slim),
+            h("span", { className: "omd-slimNote" }, t("slim.pendingNote"))) : null,
           h("pre", { className: "omd-pre" }, preview.text)) : null,
 
         // 悬浮操作坞（sticky bottom：按钮常驻滚动容器底部，改完配置无需滚回顶部再操作）

@@ -364,6 +364,37 @@
   padding: 2px 0;
 }
 
+/* 工具分组筛选框：分组超过 8 项时，网格上方一行小输入框。oninput 直改
+   网格单项显隐（纯 DOM，不走重渲染——重渲染会吃掉输入框焦点），观感取
+   omd-nameInput 同族（边框 / 圆角 / 字号 token 一致），尺寸更紧凑。 */
+.omd-toolFilterWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+}
+
+.omd-toolFilter {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  transition: border-color 0.16s ease;
+}
+
+.omd-toolFilter:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+.omd-toolFilter::placeholder { color: var(--dsw-alias-label-tertiary); }
+
 .omd-toolItem {
   display: flex;
   align-items: center;
@@ -602,6 +633,64 @@
   color: var(--dsw-alias-state-success-primary);
   overflow-wrap: anywhere;
 }
+
+/* 预览「本次变更」区块：preview.diff 的结构化差分行（净新增绿 / 净移除红 /
+   变更明细中性），卡片观感同 omd-pre（描边浅底圆角），行多随预览区滚动。 */
+.omd-diffBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 8px 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.omd-diffHeading {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.omd-diffLines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.omd-diffLine {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.omd-diffLineAdd { color: var(--dsw-alias-state-success-primary); }
+
+.omd-diffLineDel { color: var(--dsw-alias-state-error-primary); }
+
+.omd-diffNone {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 预览里的瘦身统计一行（按本次提交配置算）：与页头 pd-slimLine 同语义，
+   尾随「按当前未保存配置」小注再弱一档。 */
+.omd-slimLine {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.omd-slimNote { color: var(--dsw-alias-label-tertiary); }
 
 .omd-pre {
   box-sizing: border-box;
@@ -1286,6 +1375,16 @@ html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskbo
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 工具面瘦身统计一行：副标题之下（版本号 / 更新卡同区），按已保存配置算
+   的一行弱化小字；数字用等宽数位避免加载 / 应用后跳动。 */
+.pd-slimLine {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
 .pd-closeBtn {
   flex: none;
   display: inline-flex;
@@ -1455,6 +1554,82 @@ html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskbo
 .pd-modalFooter .pd-dangerBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ── 恢复备份弹层：备份清单行（bak 徽标 + 本地时间 + 大小，整行可点）──── */
+/* 列表高度封顶出滚：备份链随每次 apply / restore 前滚一格，再长不顶破视口。 */
+.pd-backupList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.pd-backupItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.pd-backupItem:hover:not(:disabled) {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 6%, transparent);
+}
+
+.pd-backupItem:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+.pd-backupItem:disabled { opacity: 0.55; cursor: default; }
+
+.pd-backupTag {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.pd-backupTime {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.pd-backupSize {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 加载中 / 暂无备份：一行居中弱化文案（omd-empty 的弹窗版）。 */
+.pd-backupEmpty {
+  padding: 12px 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+  text-align: center;
 }
 
 /* ── Toast 反馈（fixed 悬浮于操作坞上方）──────────────────────────────── */

@@ -71,6 +71,41 @@
       });
     }
 
+    // ── 恢复备份（页头「更多」菜单 → 备份列表弹层 → 二次确认 → POST restore）──
+    // 服务端契约（api-core.mjs / index.mjs 已落地）：
+    //   GET  config/backups → { ok, backups: [{file, mtimeMs, size}] }（新→旧，可空）
+    //   POST config/restore { file } → { ok }；422 文件名非法/备份坏、404 不存在、
+    //   409 有 apply 在跑（{ error } 信封，客户端按既有错误 toast 惯例呈现）。
+    // 行三段：bak-N 徽标（从文件名 .bak-N 尾缀解析，解析不出原样显示文件名）+
+    // 本地时间（mtimeMs 按 UI 语言格式化）+ 大小（B/KB/MB 三档）。
+
+    // 备份徽标：file 恒为 basename（服务端保证），形如
+    // 「<配置文件名>.bak-1」→ 「bak-1」；形状不对原样透出（不猜）。
+    function backupTagOf(file) {
+      var m = String(file || "").match(/\.bak-(\d+)$/);
+      return m ? "bak-" + m[1] : String(file || "");
+    }
+
+    // 本地时间：toLocaleString 按当前 UI 语言取 locale（zh → zh-CN / en → en-US
+    // ——Electron 外壳 navigator 语言被钉成应用 locale，不可作格式化依据），
+    // 24 小时制免「上午/下午」占宽；Intl 缺失的老内核逐层回落实现缺省格式。
+    function backupTimeText(ms) {
+      var d = new Date(typeof ms === "number" ? ms : 0);
+      try {
+        return d.toLocaleString(pdLang() === "en" ? "en-US" : "zh-CN", { hour12: false });
+      } catch (err) {
+        try { return d.toLocaleString(); } catch (err2) { return String(d); }
+      }
+    }
+
+    // 大小：B / KB / MB 三档（配置文件量级远用不上 GB），KB 以上留一位小数。
+    function backupSizeText(bytes) {
+      var n = typeof bytes === "number" && isFinite(bytes) && bytes >= 0 ? bytes : 0;
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+      return (n / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
     // 确认弹窗层：订阅 70 片段的 confirmCtrl 单例（照 makeFooterEntry 的
     // useState + subscribe 写法），渲染 confirmModalOf。挂在 PageShell 根数组
     // 末尾——fixed 全屏遮罩覆盖整页，面板（删除角色 / 保存并应用）与页头
@@ -114,6 +149,10 @@
       // 版本检测重试进行中（页头失败行的「重试」按钮禁用态）：与升级三态分开，
       // 检测失败重试不该锁升级（升级预检在服务端另做一次，不依赖这份 verInfo）。
       var _vb = useState(false), verRetryBusy = _vb[0], setVerRetryBusy = _vb[1];
+      // 工具面瘦身统计（state.slim = 按已保存配置算的 {total, main}，ConfigPanel
+      // 的 load / doRescan / doApply 经 props.setSlimInfo 回写）：副标题下一行，
+      // 版本号 / 更新卡同区呈现。null = 未取到 / 老服务端无字段，整行零占位。
+      var _sl = useState(null), slimInfo = _sl[0], setSlimInfo = _sl[1];
       // 语言切换 tick：页头文案（标题 / 副标题 / 菜单 / 语言项）走 t()，切换后
       // 需整体重渲染一次；ConfigPanel 内部另有 registerReload 整页重拉。
       var _lg = useState(0), langTick = _lg[0], setLangTick = _lg[1];
@@ -204,6 +243,127 @@
         });
       }
 
+      // ── 恢复备份：备份列表弹层 ────────────────────────────────────────────
+      // 打开即拉 GET config/backups（服务端已按新→旧排好，客户端不再排序）；
+      // 行点击走 confirmCtrl 二次确认（覆盖前当前配置会先自动备份，danger 红钮
+      // 与导入同款门槛），确认后 POST config/restore——成功 toast + 面板既有
+      // 刷新路径（reloadRef 重拉 state 重建 assign，预览 / 提示卡一并作废，
+      // 委派行显示名跟着重注册）；409 / 422 / 404 按既有错误 toast 惯例呈现
+      //（本地前缀 + 服务端 message 原文），弹层留着方便换一个备份再试。
+      var _bko = useState(false), bkOpen = _bko[0], setBkOpen = _bko[1];
+      var _bkl = useState([]), bkList = _bkl[0], setBkList = _bkl[1];
+      // bkBusy 双语义：列表拉取中（弹层显示加载行）/ 恢复请求在途（行全禁用，
+      // 防双击重复回滚）。
+      var _bkb = useState(false), bkBusy = _bkb[0], setBkBusy = _bkb[1];
+      var _bke = useState(""), bkErr = _bke[0], setBkErr = _bke[1];
+
+      function openBackupModal() {
+        setMoreOpen(false);
+        setBkOpen(true);
+        setBkList([]);
+        setBkErr("");
+        setBkBusy(true);
+        paodingApi("config/backups").then(function (d) {
+          if (!d || d.ok !== true || !Array.isArray(d.backups)) throw new Error(t("menu.backupBadResponse"));
+          setBkList(d.backups);
+        }).catch(function (err) {
+          setBkErr(t("menu.backupListFail", { msg: err.message }));
+        }).finally(function () {
+          setBkBusy(false);
+        });
+      }
+
+      // 关弹层：恢复请求在途时不收（请求自见分晓，中途关层容易误以为没生效）。
+      function closeBackupModal() {
+        if (bkBusy) return;
+        setBkOpen(false);
+      }
+
+      function pickBackup(item) {
+        if (!item || typeof item.file !== "string" || item.file === "" || bkBusy) return;
+        confirmCtrl.ask({
+          title: t("menu.restoreTitle"),
+          body: t("menu.restoreBody", { name: backupTagOf(item.file) }),
+          danger: true,
+          confirmText: t("menu.restoreConfirm"),
+          onConfirm: function () {
+            setBkBusy(true);
+            paodingApi("config/restore", { file: item.file }).then(function () {
+              toast.ok(t("menu.restored", { name: backupTagOf(item.file) }));
+              setBkOpen(false);
+              // 面板既有刷新路径（与「导入配置」同款）：重拉 state 重建 assign；
+              // 显示名 / 角色名单可能被回滚改变，事件流委派行键控注册跟着刷新。
+              if (typeof reloadRef.current === "function") reloadRef.current();
+              refreshDelegateRows();
+            }).catch(function (err) {
+              toast.err(t("menu.restoreFail", { msg: err.message }));
+            }).finally(function () {
+              setBkBusy(false);
+            });
+          },
+        });
+      }
+
+      // 备份弹层开着时的 Esc 分层（捕获级，与 ConfirmLayer 同款思路）：只收
+      // 弹层本身；二次确认框开着时放行——ConfirmLayer 的监听（注册在前）先
+      // stopPropagation 并只关确认框，这里不重复收弹层。
+      useEffect(function () {
+        if (!bkOpen) return;
+        var onKey = function (e) {
+          if (!e || e.key !== "Escape") return;
+          if (confirmCtrl.getSnapshot().req) return; // 确认框优先：让它自己的监听去收
+          e.stopPropagation();
+          closeBackupModal();
+        };
+        document.addEventListener("keydown", onKey, true);
+        return function () { document.removeEventListener("keydown", onKey, true); };
+      }, [bkOpen, bkBusy]);
+
+      // 备份列表弹层（结构对齐 confirmModalOf 的 pd-modal* 家族）：整行可点
+      // 按钮列表（bak 徽标 + 本地时间 + 大小，服务端已按新→旧排好）；拉取中
+      // 一行加载文案、空列表「暂无备份」、失败一行原因（不弹 toast，弹层里
+      // 就地交代）。body 高度封顶出滚，备份链再长也不顶破视口。
+      function backupModalOf() {
+        if (!bkOpen) return null;
+        var rows = bkList.map(function (it, i) {
+          return h("button", {
+            type: "button",
+            key: it && typeof it.file === "string" && it.file ? it.file : "bak-" + i,
+            className: "pd-backupItem",
+            disabled: bkBusy,
+            title: it && typeof it.file === "string" ? it.file : undefined,
+            onClick: function () { pickBackup(it); },
+          },
+            h("span", { className: "pd-backupTag" }, backupTagOf(it && it.file)),
+            h("span", { className: "pd-backupTime" }, backupTimeText(it && it.mtimeMs)),
+            h("span", { className: "pd-backupSize" }, backupSizeText(it && it.size)));
+        });
+        return h("div", {
+            className: "pd-modalMask",
+            // 只点遮罩空白处才收（与 confirmModalOf 同款 mousedown 判据）
+            onMouseDown: function (e) { if (e.target === e.currentTarget) closeBackupModal(); },
+          },
+          h("div", { className: "pd-modalCard", role: "dialog", "aria-modal": "true", "aria-label": t("menu.backupTitle") },
+            h("div", { className: "pd-modalHeader" },
+              h("h2", { className: "pd-modalTitle" }, t("menu.backupTitle")),
+              h("button", {
+                type: "button", className: "pd-modalClose", "aria-label": t("common.close"),
+                onClick: closeBackupModal,
+              }, h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
+            h("div", { className: "pd-modalBody" },
+              bkErr
+                ? h("div", { className: "omd-status omd-statusError" },
+                    h("span", { className: "omd-statusIcon" }, "⛔"),
+                    h("span", { className: "omd-statusText" }, bkErr))
+                : bkBusy && !bkList.length
+                  ? h("div", { className: "pd-backupEmpty" }, t("menu.backupLoading"))
+                  : bkList.length
+                    ? h("div", { className: "pd-backupList" }, rows)
+                    : h("div", { className: "pd-backupEmpty" }, t("menu.backupEmpty"))),
+            h("div", { className: "pd-modalFooter" },
+              h(P.Button, { variant: "outline", size: "md", disabled: bkBusy, onClick: closeBackupModal }, t("common.close")))));
+      }
+
       // 菜单开着时 Esc 只收菜单（捕获级先于 PageShell 的关页监听，与
       // ConfigPanel 弹窗的 Esc 分层同款）；点菜单外空白处收菜单。
       useEffect(function () {
@@ -266,7 +426,10 @@
                   : null),
               versionRowOf(verInfo, { busy: upgBusy, onUpgrade: doUpgrade, note: upgNote, error: upgErr, onRetry: doRetryVersion, retryBusy: verRetryBusy })),
             h("p", { className: "pd-pageSubtitle" },
-              t("menu.subtitle"))),
+              t("menu.subtitle")),
+            // 工具面瘦身统计一行：按已保存的全局配置（state.slim，见 setSlimInfo
+            // 回写点）；数据未就绪 / 老服务端无该字段时零占位。
+            slimInfo ? h("p", { className: "pd-slimLine" }, slimLineText(slimInfo)) : null),
           // 页头「更多」菜单：整份配置文件的导出 / 导入（低频操作收进来，页头
           // 不添第二排按钮）。定位锚点用相对定位的薄包裹层，下拉复用工作区
           // 「更多」的 omd-tabMenu / omd-tabMenuItem 既有样式；靠右对齐（inline
@@ -298,6 +461,13 @@
                 disabled: expBusy || impBusy,
                 onClick: pickImportFile,
               }, h("span", { className: "omd-tabText" }, impBusy ? t("menu.importing") : t("menu.importItem"))),
+              // 恢复备份：弹备份列表（行点选 → confirmCtrl 二次确认 → POST
+              // restore，见 openBackupModal / pickBackup / backupModalOf）。
+              h("button", {
+                type: "button", role: "menuitem", className: "omd-tabMenuItem",
+                disabled: expBusy || impBusy,
+                onClick: openBackupModal,
+              }, h("span", { className: "omd-tabText" }, t("menu.restoreItem"))),
               // 语言切换项：label 刻意不进字典——按当前语言显示「另一端」的叫法，
               // 中文界面显示 English，英文界面显示中文（语言名用母语写才认得出）。
               h("button", {
@@ -325,7 +495,11 @@
             title: t("nav.closeTip"),
             onClick: function () { if (typeof onClose === "function") onClose(); },
           }, h("span", { className: "pd-closeGlyph", "aria-hidden": "true" }, "×"))),
-        h(ConfigPanel, { setVerInfo: setVerInfo, registerReload: registerReload }),
+        h(ConfigPanel, { setVerInfo: setVerInfo, setSlimInfo: setSlimInfo, registerReload: registerReload }),
+        // 恢复备份弹层：fixed 遮罩不占布局流；置于 ConfirmLayer 之前——两者
+        // 遮罩同为 z-60，按 DOM 顺序叠放，行点选后的二次确认框必须盖在列表
+        // 弹层之上。
+        backupModalOf(),
         // 反馈 toast 宿主：订阅模块级 toast 控制器，悬浮于操作坞上方
         h(ToastHost),
         // 通用确认弹窗层：订阅 confirmCtrl（发起方见各 confirmCtrl.ask 调用点），

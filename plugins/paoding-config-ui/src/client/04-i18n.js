@@ -8,6 +8,7 @@
     //    ver.*（版本更新卡）/ models.* / tpl.*（场景模板）/ ws.*（工作区）/
     //    panel.*（配置面板正文）/ role.*（角色卡与委派行标题）/ warn.*（体检
     //    告警卡）/ nav.*（侧栏入口与页头壳）/ menu.*（页头「更多」菜单与升级）/
+    //    slim.*（工具面瘦身统计）/ diff.*（预览「本次变更」结构化差分）/
     //    common.*（跨片段复用的短词）。
     //  - t(key, params)：按当前语言取文案，params 做 {name} 插值（split/join
     //    而非 replace，避免替换串里的 $ 模式被二次解释）。缺 key 原样返回 key
@@ -370,4 +371,49 @@
       "menu.upgradedHot": { zh: "✅ 已升级到 {v}，刷新页面即生效（preset 会自动按新版重生成）", en: "✅ Upgraded to {v} — refresh the page to apply (the preset regenerates itself against it)" },
       "menu.errTail": { zh: "：{tail}", en: ": {tail}" },
       "menu.langTip": { zh: "切换界面语言", en: "Switch UI language" },
+
+      // ── 工具筛选（角色卡工具网格超过 8 项时，网格上方的行内筛选框）─────────
+      "panel.toolFilter": { zh: "筛选工具…", en: "Filter tools…" },
+
+      // ── 工具面瘦身统计（state.slim / preview.slim 的一行统计）──────────────
+      "slim.line": { zh: "主 agent 工具面 {main}/{total} 个（瘦身 {pct}%）", en: "Main agent tool surface: {main}/{total} tools (down {pct}%)" },
+      // 预览弹窗里的第二口径小注：preview.slim 按本次提交（未保存）配置计算，
+      // 与页头按已保存配置的一行区分开。
+      "slim.pendingNote": { zh: "（按当前未保存配置）", en: " (per the current unsaved config)" },
+
+      // ── 预览「本次变更」区块（preview.diff 结构化差分的渲染文案）───────────
+      // 服务端 diff 是纯结构零文案（tools/lib/config.mjs diffAssignments），
+      // 全部措辞在这里收口；mainAgent.modelChanged 恒 false，不设键不渲染。
+      "diff.heading": { zh: "本次变更", en: "Changes this time" },
+      "diff.unchanged": { zh: "与上次保存的配置一致", en: "Identical to the last saved config." },
+      "diff.mainToolsAdded": { zh: "主 agent 新带 {n} 个工具：{list}", en: "Main agent now carries {n} more tools: {list}" },
+      "diff.mainToolsRemoved": { zh: "主 agent 移除 {n} 个工具：{list}", en: "Main agent drops {n} tools: {list}" },
+      "diff.mainPersona": { zh: "主 agent 人设追加有变化", en: "Main agent persona addendum changed" },
+      "diff.mainSkills": { zh: "主 agent 技能分配有变化", en: "Main agent skill assignment changed" },
+      "diff.roleAdded": { zh: "新增角色「{name}」", en: "Role \"{name}\" added" },
+      "diff.roleRemoved": { zh: "移除角色「{name}」", en: "Role \"{name}\" removed" },
+      "diff.roleChanged": { zh: "角色「{name}」变更：{details}", en: "Role \"{name}\" changed: {details}" },
+      "diff.roleTools": { zh: "工具 +{added} -{removed}", en: "tools +{added} -{removed}" },
+      "diff.rolePersona": { zh: "persona 变化", en: "persona changed" },
+      "diff.roleModel": { zh: "专用模型变化", en: "dedicated model changed" },
+      "diff.roleStartMode": { zh: "启动方式变化", en: "start mode changed" },
+      "diff.roleBgMode": { zh: "后台续跑变化", en: "background session mode changed" },
+      "diff.rolesRemoveAdded": { zh: "移除内置角色 {n} 个：{list}", en: "Removed {n} built-in roles: {list}" },
+      "diff.rolesRemoveRemoved": { zh: "恢复内置角色 {n} 个：{list}", en: "Restored {n} built-in roles: {list}" },
+      // main_agent_extra 通道明细（主 agent 合并视图之外的通道拆分，一并列出）
+      "diff.mainExtraAdded": { zh: "主 agent 附加工具新增 {n} 个：{list}", en: "Main agent extra tools added ({n}): {list}" },
+      "diff.mainExtraRemoved": { zh: "主 agent 附加工具移除 {n} 个：{list}", en: "Main agent extra tools removed ({n}): {list}" },
+
+      // ── 恢复备份（页头「更多」菜单 → 备份列表弹层 → 二次确认 → POST restore）
+      "menu.restoreItem": { zh: "恢复备份…", en: "Restore backup…" },
+      "menu.backupTitle": { zh: "恢复备份", en: "Restore backup" },
+      "menu.backupLoading": { zh: "加载备份列表…", en: "Loading backups…" },
+      "menu.backupEmpty": { zh: "暂无备份", en: "No backups yet" },
+      "menu.backupBadResponse": { zh: "备份列表响应格式异常", en: "Unexpected backup list response" },
+      "menu.backupListFail": { zh: "备份列表拉取失败：{msg}", en: "Failed to load backups: {msg}" },
+      "menu.restoreTitle": { zh: "确认恢复此备份", en: "Restore this backup" },
+      "menu.restoreBody": { zh: "将用备份「{name}」覆盖当前配置，覆盖前当前配置会先自动备份。", en: "Backup \"{name}\" will overwrite the current config; the current config is backed up automatically first." },
+      "menu.restoreConfirm": { zh: "覆盖恢复", en: "Overwrite & restore" },
+      "menu.restored": { zh: "已恢复备份 {name}，恢复前的配置已自动存为 bak-1", en: "Restored backup {name} — the previous config was saved as bak-1 automatically" },
+      "menu.restoreFail": { zh: "恢复失败：{msg}", en: "Restore failed: {msg}" },
     };
