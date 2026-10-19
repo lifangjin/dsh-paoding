@@ -466,6 +466,16 @@ window.__ModuleLoader__.load({
       // 与页头按已保存配置的一行区分开。
       "slim.pendingNote": { zh: "（按当前未保存配置）", en: " (per the current unsaved config)" },
 
+      // ── 委派效果卡（GET stats 的只读紧凑表，页头瘦身行之下）───────────────
+      "del.cardTitle": { zh: "委派效果", en: "Delegation stats" },
+      "del.colRole": { zh: "角色", en: "Role" },
+      "del.colCalls": { zh: "调用", en: "Calls" },
+      "del.colAvg": { zh: "均耗时", en: "Avg" },
+      "del.colFailed": { zh: "失败", en: "Failed" },
+      "del.colLastUsed": { zh: "最近使用", en: "Last used" },
+      "del.totalRoles": { zh: "共 {n} 个角色", en: "{n} roles in total" },
+      "del.empty": { zh: "暂无委派记录", en: "No delegation records yet" },
+
       // ── 预览「本次变更」区块（preview.diff 结构化差分的渲染文案）───────────
       // 服务端 diff 是纯结构零文案（tools/lib/config.mjs diffAssignments），
       // 全部措辞在这里收口；mainAgent.modelChanged 恒 false，不设键不渲染。
@@ -621,6 +631,70 @@ window.__ModuleLoader__.load({
         total: slim && typeof slim.total === "number" ? slim.total : 0,
         pct: slimPctOf(slim),
       });
+    }
+
+    // ── 委派效果卡（GET stats → 页头瘦身行之下的只读紧凑表）────────────────
+    // 数据由 86 PageShell 首屏渲染完后懒加载（不阻塞开面板）；服务缺失 / 拉取
+    // 失败 / 响应异常时整卡不渲染（delegationCardOf 返回 null），不打扰。
+
+    // 均耗时人话格式：1 分内「1.2s」（两位数以上取整秒），1 小时内「3m05s」，
+    // 更长「2h07m」。非正数一律 0s。
+    function delegDurationText(ms) {
+      if (!(ms > 0)) return "0s";
+      var s = ms / 1000;
+      if (s < 60) return (s >= 10 ? String(Math.round(s)) : s.toFixed(1)) + "s";
+      var m = Math.floor(s / 60);
+      if (m < 60) return m + "m" + String(Math.round(s % 60)).padStart(2, "0") + "s";
+      return Math.floor(m / 60) + "h" + String(m % 60).padStart(2, "0") + "m";
+    }
+
+    // 最近使用时间：当年「MM-DD HH:mm」，跨年「YYYY-MM-DD」——纯数字中性格式，
+    // 不进字典也不吃 i18n。
+    function delegWhenText(ms) {
+      var d = new Date(ms);
+      if (isNaN(d.getTime())) return "—";
+      var two = function (n) { return String(n).padStart(2, "0"); };
+      var now = new Date();
+      if (d.getFullYear() !== now.getFullYear()) {
+        return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate());
+      }
+      return two(d.getMonth() + 1) + "-" + two(d.getDate()) + " " + two(d.getHours()) + ":" + two(d.getMinutes());
+    }
+
+    // 卡片渲染：stats 缺失 / ok!==true / roles 非数组 → null（整卡零占位）。
+    // delegatedSessions=0 渲染标题 + 一行空文案；有数据渲染紧凑表（表头 +
+    // 最多 8 行，超出给「共 N 个角色」尾行），失败数 >0 标红提醒。
+    function delegationCardOf(stats) {
+      if (!stats || stats.ok !== true || !Array.isArray(stats.roles)) return null;
+      var head = h("div", { className: "pd-delegTitle" }, t("del.cardTitle"));
+      if (!stats.delegatedSessions) {
+        return h("div", { className: "pd-delegCard" }, head,
+          h("div", { className: "pd-delegEmpty" }, t("del.empty")));
+      }
+      var cols = [
+        ["pd-delegRole", t("del.colRole")],
+        ["pd-delegNum", t("del.colCalls")],
+        ["pd-delegNum", t("del.colAvg")],
+        ["pd-delegNum", t("del.colFailed")],
+        ["pd-delegWhen", t("del.colLastUsed")],
+      ];
+      var headerRow = h("div", { className: "pd-delegRow pd-delegHeaderRow" }, cols.map(function (c, i) {
+        return h("span", { key: "h" + i, className: c[0] }, c[1]);
+      }));
+      var shown = stats.roles.slice(0, 8);
+      var rows = shown.map(function (r) {
+        return h("div", { className: "pd-delegRow", key: r.role },
+          h("span", { className: "pd-delegRole", title: r.role }, r.role),
+          h("span", { className: "pd-delegNum" }, String(r.calls)),
+          h("span", { className: "pd-delegNum" }, delegDurationText(r.avgMs)),
+          h("span", { className: "pd-delegNum" + (r.failures > 0 ? " pd-delegFail" : "") }, String(r.failures)),
+          h("span", { className: "pd-delegWhen" }, delegWhenText(r.lastUsedAt)));
+      });
+      var tail = stats.roles.length > shown.length
+        ? h("div", { className: "pd-delegMore" }, t("del.totalRoles", { n: stats.roles.length }))
+        : null;
+      return h("div", { className: "pd-delegCard" }, head,
+        h.apply(null, ["div", { className: "pd-delegTable" }, headerRow].concat(rows)), tail);
     }
 
     var DEFAULT_ROLES = ["search_external", "design", "implement"];
@@ -4010,6 +4084,18 @@ window.__ModuleLoader__.load({
       // 的 load / doRescan / doApply 经 props.setSlimInfo 回写）：副标题下一行，
       // 版本号 / 更新卡同区呈现。null = 未取到 / 老服务端无字段，整行零占位。
       var _sl = useState(null), slimInfo = _sl[0], setSlimInfo = _sl[1];
+      // 委派效果统计（GET stats，页头瘦身行之下）：懒加载——本 effect 在首屏
+      // 渲染完成后才发请求，不阻塞开面板（state 全量检测照旧先行）。只读展示
+      // 拉一次不重试；服务缺失 / 拉取失败 / 响应异常一律维持 null 整卡不渲染，
+      // 不为锦上添花的统计打扰使用。卸载后丢弃在途响应防置迟数据。
+      var _st = useState(null), delStats = _st[0], setDelStats = _st[1];
+      useEffect(function () {
+        var alive = true;
+        paodingApi("stats").then(function (d) {
+          if (alive && d && d.ok === true) setDelStats(d);
+        }).catch(function () { /* 静默降级：整卡不渲染 */ });
+        return function () { alive = false; };
+      }, []);
       // 语言切换 tick：页头文案（标题 / 副标题 / 菜单 / 语言项）走 t()，切换后
       // 需整体重渲染一次；ConfigPanel 内部另有 registerReload 整页重拉。
       var _lg = useState(0), langTick = _lg[0], setLangTick = _lg[1];
@@ -4286,7 +4372,10 @@ window.__ModuleLoader__.load({
               t("menu.subtitle")),
             // 工具面瘦身统计一行：按已保存的全局配置（state.slim，见 setSlimInfo
             // 回写点）；数据未就绪 / 老服务端无该字段时零占位。
-            slimInfo ? h("p", { className: "pd-slimLine" }, slimLineText(slimInfo)) : null),
+            slimInfo ? h("p", { className: "pd-slimLine" }, slimLineText(slimInfo)) : null,
+            // 委派效果卡：紧贴瘦身行之下（delegationCardOf 自判，统计没拉到 /
+            // 服务缺失时返回 null 整卡不渲染）。
+            delegationCardOf(delStats)),
           // 页头「更多」菜单：整份配置文件的导出 / 导入（低频操作收进来，页头
           // 不添第二排按钮）。定位锚点用相对定位的薄包裹层，下拉复用工作区
           // 「更多」的 omd-tabMenu / omd-tabMenuItem 既有样式；靠右对齐（inline

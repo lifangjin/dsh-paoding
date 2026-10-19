@@ -381,6 +381,16 @@
       // 与页头按已保存配置的一行区分开。
       "slim.pendingNote": { zh: "（按当前未保存配置）", en: " (per the current unsaved config)" },
 
+      // ── 委派效果卡（GET stats 的只读紧凑表，页头瘦身行之下）───────────────
+      "del.cardTitle": { zh: "委派效果", en: "Delegation stats" },
+      "del.colRole": { zh: "角色", en: "Role" },
+      "del.colCalls": { zh: "调用", en: "Calls" },
+      "del.colAvg": { zh: "均耗时", en: "Avg" },
+      "del.colFailed": { zh: "失败", en: "Failed" },
+      "del.colLastUsed": { zh: "最近使用", en: "Last used" },
+      "del.totalRoles": { zh: "共 {n} 个角色", en: "{n} roles in total" },
+      "del.empty": { zh: "暂无委派记录", en: "No delegation records yet" },
+
       // ── 预览「本次变更」区块（preview.diff 结构化差分的渲染文案）───────────
       // 服务端 diff 是纯结构零文案（tools/lib/config.mjs diffAssignments），
       // 全部措辞在这里收口；mainAgent.modelChanged 恒 false，不设键不渲染。

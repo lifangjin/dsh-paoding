@@ -95,6 +95,70 @@
       });
     }
 
+    // ── 委派效果卡（GET stats → 页头瘦身行之下的只读紧凑表）────────────────
+    // 数据由 86 PageShell 首屏渲染完后懒加载（不阻塞开面板）；服务缺失 / 拉取
+    // 失败 / 响应异常时整卡不渲染（delegationCardOf 返回 null），不打扰。
+
+    // 均耗时人话格式：1 分内「1.2s」（两位数以上取整秒），1 小时内「3m05s」，
+    // 更长「2h07m」。非正数一律 0s。
+    function delegDurationText(ms) {
+      if (!(ms > 0)) return "0s";
+      var s = ms / 1000;
+      if (s < 60) return (s >= 10 ? String(Math.round(s)) : s.toFixed(1)) + "s";
+      var m = Math.floor(s / 60);
+      if (m < 60) return m + "m" + String(Math.round(s % 60)).padStart(2, "0") + "s";
+      return Math.floor(m / 60) + "h" + String(m % 60).padStart(2, "0") + "m";
+    }
+
+    // 最近使用时间：当年「MM-DD HH:mm」，跨年「YYYY-MM-DD」——纯数字中性格式，
+    // 不进字典也不吃 i18n。
+    function delegWhenText(ms) {
+      var d = new Date(ms);
+      if (isNaN(d.getTime())) return "—";
+      var two = function (n) { return String(n).padStart(2, "0"); };
+      var now = new Date();
+      if (d.getFullYear() !== now.getFullYear()) {
+        return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate());
+      }
+      return two(d.getMonth() + 1) + "-" + two(d.getDate()) + " " + two(d.getHours()) + ":" + two(d.getMinutes());
+    }
+
+    // 卡片渲染：stats 缺失 / ok!==true / roles 非数组 → null（整卡零占位）。
+    // delegatedSessions=0 渲染标题 + 一行空文案；有数据渲染紧凑表（表头 +
+    // 最多 8 行，超出给「共 N 个角色」尾行），失败数 >0 标红提醒。
+    function delegationCardOf(stats) {
+      if (!stats || stats.ok !== true || !Array.isArray(stats.roles)) return null;
+      var head = h("div", { className: "pd-delegTitle" }, t("del.cardTitle"));
+      if (!stats.delegatedSessions) {
+        return h("div", { className: "pd-delegCard" }, head,
+          h("div", { className: "pd-delegEmpty" }, t("del.empty")));
+      }
+      var cols = [
+        ["pd-delegRole", t("del.colRole")],
+        ["pd-delegNum", t("del.colCalls")],
+        ["pd-delegNum", t("del.colAvg")],
+        ["pd-delegNum", t("del.colFailed")],
+        ["pd-delegWhen", t("del.colLastUsed")],
+      ];
+      var headerRow = h("div", { className: "pd-delegRow pd-delegHeaderRow" }, cols.map(function (c, i) {
+        return h("span", { key: "h" + i, className: c[0] }, c[1]);
+      }));
+      var shown = stats.roles.slice(0, 8);
+      var rows = shown.map(function (r) {
+        return h("div", { className: "pd-delegRow", key: r.role },
+          h("span", { className: "pd-delegRole", title: r.role }, r.role),
+          h("span", { className: "pd-delegNum" }, String(r.calls)),
+          h("span", { className: "pd-delegNum" }, delegDurationText(r.avgMs)),
+          h("span", { className: "pd-delegNum" + (r.failures > 0 ? " pd-delegFail" : "") }, String(r.failures)),
+          h("span", { className: "pd-delegWhen" }, delegWhenText(r.lastUsedAt)));
+      });
+      var tail = stats.roles.length > shown.length
+        ? h("div", { className: "pd-delegMore" }, t("del.totalRoles", { n: stats.roles.length }))
+        : null;
+      return h("div", { className: "pd-delegCard" }, head,
+        h.apply(null, ["div", { className: "pd-delegTable" }, headerRow].concat(rows)), tail);
+    }
+
     var DEFAULT_ROLES = ["search_external", "design", "implement"];
     // 内置角色默认 persona 首行「身份主语」（仅用于 UI 占位与提示文案；实际生效值
     // 由后端 SRC 模板 persona 首行决定）。「显示名」= 替换该主语（其余不动）。

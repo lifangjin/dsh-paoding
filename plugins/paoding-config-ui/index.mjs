@@ -45,6 +45,7 @@ import { collectModelRefs } from '../../tools/lib/health.mjs'
 import { diffAssignments, loadConfig } from '../../tools/lib/config.mjs'
 import { detectSkills } from '../../tools/lib/skills.mjs'
 import { collectRuntimeFacts, detectHmrOf } from './runtime-inventory.mjs'
+import { collectDelegationStats } from './stats-core.mjs'
 import { getVersionInfo } from '../../tools/lib/version.mjs'
 import { runUpgrade } from '../../tools/lib/upgrade.mjs'
 
@@ -446,6 +447,23 @@ export async function apply(ctx) {
           //（sessionPersistence + sessionQuery 双服务在场的免 inject 探测，
           // 面板据此显隐可续模式的警告；缺失只警告，preview/apply 不拦截）。
           json(res, 200, stateResponse(ctx, await stateWithRuntimeFacts(ctx)))
+          return
+        }
+
+        if (route === 'stats' && req.method === 'GET') {
+          // 委派效果统计（GET stats?days=30&project=<slug>）：宿主
+          // sessionPersistence 服务逐会话冷读抽摘要聚合（A 路，见
+          // stats-core.mjs 文件头——服务面、slug 口径与失败判据的实测证据都在
+          // 那里）。服务经 ctx.reflect 软探测（绝不进 inject 数组：硬注入会让
+          // 缺服务的老宿主在挂载时就炸），拿不到回 { ok:false,
+          // reason:'persistence-unavailable' }，客户端整卡不渲染。project
+          // 缺省 = 当前面板项目（cwd → projectKey 换算），days 缺省 30 上限
+          // 365；project 非法在核心层抛 422（外层 catch 统一回 { error }）。
+          // 路由注册在既有 /api/paoding 前缀下，上方信任围栏自动覆盖本路由。
+          json(res, 200, await collectDelegationStats(ctx, {
+            project: url.searchParams.get('project') ?? undefined,
+            days: url.searchParams.get('days') ?? undefined,
+          }))
           return
         }
 

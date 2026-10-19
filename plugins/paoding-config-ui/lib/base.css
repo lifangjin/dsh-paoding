@@ -1385,6 +1385,75 @@ html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskbo
   font-variant-numeric: tabular-nums;
 }
 
+/* 委派效果卡：页头瘦身统计行之下的只读紧凑表（GET stats 懒加载，服务缺失 /
+   拉取失败整卡不渲染）。行内五列网格——角色名占余宽可截断，数字列定宽右对
+   齐，最近使用列偏右；数字等宽数位防跳动，失败 >0 标红提醒。 */
+.pd-delegCard {
+  margin: 10px 0 0;
+  padding: 10px 12px 8px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+}
+
+.pd-delegTitle {
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.pd-delegTable {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pd-delegRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px 56px 44px 88px;
+  gap: 0 10px;
+  align-items: baseline;
+}
+
+.pd-delegHeaderRow {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.pd-delegRole {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pd-delegNum {
+  text-align: right;
+}
+
+.pd-delegFail {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.pd-delegWhen {
+  text-align: right;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.pd-delegMore {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.pd-delegEmpty {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .pd-closeBtn {
   flex: none;
   display: inline-flex;
