@@ -12,7 +12,8 @@
  * healthCheck 的 preset_drift 判定（同一份 dry-run 对比，不另立标准）。
  *
  * 依赖 config（loadConfig）/ yaml（loadYaml）/ alloc（autoAssignments）/
- * state（collectState）/ workspaces（assignSlugs / presetIdOf）/
+ * state（collectState）/ lifecycle（workspacePresetOrphans，孤儿目录判据与
+ * 清理侧同源）/
  * preset-system（轨道、托管块、标记）与 health（healthCheck）；被 cli 引用。
  * 零运行时依赖（node:fs / node:path / node:url）。
  */
@@ -22,7 +23,7 @@ import { loadConfig } from './config.mjs'
 import { loadYaml } from './yaml.mjs'
 import { autoAssignments } from './alloc.mjs'
 import { collectState } from './state.mjs'
-import { assignSlugs, presetIdOf } from './workspaces.mjs'
+import { workspacePresetOrphans } from './lifecycle.mjs'
 import {
   MANAGED_BEGIN,
   MANAGED_END,
@@ -31,7 +32,6 @@ import {
   detectPresetSystem,
   isDeclarativeTriple,
   isPtcWorkerHost,
-  listOrchestratorPresetIds,
   parseGeneratorMarker,
   presetRolesFlavorOf,
   readHomePatchRows,
@@ -57,16 +57,6 @@ function managedMarkerLines(text) {
       .split(/\r?\n/)
       .map((l) => l.trim())
   )
-}
-
-/** 孤儿工作区预设目录对账：配置 workspaces 键组统一过 assignSlugs（与生成层
- * 同源，slug 稳定），得到「配置在册」的 presetId 集合；目录有、名册无 → 孤儿。 */
-function workspacePresetOrphans(dshHome, config) {
-  const dirs = listOrchestratorPresetIds(dshHome).filter((id) => id !== 'orchestrator')
-  if (dirs.length === 0) return { dirs, orphans: [] }
-  const wsPaths = Object.keys(config?.workspaces ?? {})
-  const inRegister = new Set([...assignSlugs(wsPaths).values()].map(presetIdOf))
-  return { dirs, orphans: dirs.filter((id) => !inRegister.has(id)) }
 }
 
 /**

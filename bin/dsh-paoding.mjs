@@ -15,16 +15,27 @@ const REFUSE =
 const usage = `dsh-paoding 安装快捷方式（等价于 dsh plugin --profile <name> add dsh-paoding@<version>）
 
 用法：npx dsh-paoding@latest [--profile <name>]
-      npx dsh-paoding@latest doctor [--profile <name>] [--config <file>]
+      npx dsh-paoding@latest doctor [--profile <name>] [--config <file>] [--fix] [--yes]
+      npx dsh-paoding@latest uninstall [--purge] [--yes] [--config <file>]
 
 子命令：
-  doctor            本机安装体检（只读）：配置文件 / 预设轨道 / 托管声明行 /
+  doctor            本机安装体检（默认只读）：配置文件 / 预设轨道 / 托管声明行 /
                     孤儿工作区预设 / 预设漂移 / 版本标记，结尾给汇总；
-                    有错误级发现时退出码 1。
+                    有错误级发现时退出码 1。--fix 对其中可安全自动修的两类动手
+                    （孤儿预设目录、孤儿/过期声明行；写盘前备份 .bak-1），其余
+                    发现只给处理建议，输出逐项标注「已修 / 需手动」。
+  uninstall         清理庖丁写进宿主目录的东西：cordis.patch.yml 托管声明块、
+                    .agent-presets 下的 orchestrator* 预设目录、.generator-version
+                    标记。默认保留配置文件及其备份（用户数据），--purge 才连配置
+                    一起删；不碰插件包自身（包本体用 dsh plugin remove 卸载）。
+                    非交互终端（非 TTY）下没带 --yes 只列计划不执行，退出码 2。
 
 选项：
   --profile <name>  插件装入的 profile，默认 web（dsh web 的默认 profile）
-  --config <file>   配置文件路径（仅 doctor 子命令使用）
+  --config <file>   配置文件路径（doctor / uninstall 子命令使用）
+  --purge           uninstall 连配置文件及其备份一起删（默认保留）
+  --yes             跳过逐类确认直接执行（uninstall / doctor --fix）
+  --fix             doctor 体检后自动修可安全处理的问题
   --help            显示本帮助
   --version         显示包版本
 
@@ -36,17 +47,18 @@ const { version } = JSON.parse(readFileSync(new URL('../package.json', import.me
 
 const argv = process.argv.slice(2);
 
-// doctor 子命令：包不再携带独立 CLI，但 tools/ 随包发布（package.json files），
-// 体检逻辑本体在 tools/lib/cli.mjs——这里 dynamic import 转发（--profile /
-// --config 等参数原样透传，由它自己的 parseArgs 解析），退出码语义：
-// 无错误 0，有 error 级发现 1。放在参数循环之前：doctor 的参数不用本入口的
+// doctor / uninstall 子命令：包不再携带独立 CLI，但 tools/ 随包发布
+//（package.json files），逻辑本体在 tools/lib/cli.mjs——这里 dynamic import
+// 转发（--profile / --config / --fix / --purge / --yes 等参数原样透传，由它
+// 自己的 parseArgs 解析），退出码语义：成功 0，有 error 级发现或清理失败 1，
+// 非 TTY 无 --yes 的防呆拒做 2。放在参数循环之前：子命令的参数不用本入口的
 // profile 解析兜底。
-if (argv.includes('doctor')) {
+if (argv.includes('doctor') || argv.includes('uninstall')) {
   try {
     const { main } = await import('../tools/lib/cli.mjs');
     process.exit((await main({ argv })) ?? 0);
   } catch (err) {
-    console.error(`doctor 运行失败：${err?.message ?? err}`);
+    console.error(`子命令运行失败：${err?.message ?? err}`);
     process.exit(1);
   }
 }

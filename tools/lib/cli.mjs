@@ -11,18 +11,31 @@
  * host（removedReason）、state（PRESET_ASIS_FILES / collectState /
  * generateAndInstall）、alloc（autoAssignments，--auto 语义与插件首装共享）、
  * health（captureWarnings / healthCheck，--dry-run 报告的结构化体检）、
- * doctor（runDoctor，doctor 子命令的只读体检）、version（getVersionInfo，
- * main 收尾的新版提示）以及 node:os / node:path。
+ * doctor（runDoctor，doctor 子命令的只读体检）、lifecycle（uninstall 与
+ * doctor --fix 共用的清理原语与判据）、version（getVersionInfo，main 收尾的
+ * 新版提示）、yaml（loadYaml，--fix 的配置对账读法）以及 node:os / node:path /
+ * node:readline/promises。
  */
 import { homedir } from 'node:os'
 import path from 'node:path'
+import readline from 'node:readline/promises'
 import { PROFILE_NAME_RE, ROLES, SRC_DIR } from './util.mjs'
 import { normalizeRoleName } from './config.mjs'
+import { loadYaml } from './yaml.mjs'
 import { removedReason } from './host.mjs'
 import { PRESET_ASIS_FILES, collectState, generateAndInstall } from './state.mjs'
 import { autoAssignments } from './alloc.mjs'
 import { captureWarnings, healthCheck } from './health.mjs'
 import { runDoctor } from './doctor.mjs'
+import {
+  cleanupPaodingArtifacts,
+  foreignPresetDirsRemaining,
+  loadConfigForReconcile,
+  orphanManagedRows,
+  planUninstall,
+  removeConfigAndBackups,
+  workspacePresetOrphans,
+} from './lifecycle.mjs'
 import { getVersionInfo } from './version.mjs'
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
@@ -40,6 +53,7 @@ export function printHelp() {
 Usage:
   node tools/install.mjs [options]
   node tools/install.mjs doctor [options]
+  node tools/install.mjs uninstall [options]
 
 Options:
   --profile <name>   Profile whose patch layer is scanned (default: web).
@@ -57,6 +71,11 @@ Options:
   --suggest          Fresh install without a config file: seed smart defaults
                      from the detected host/MCP tools instead of the base
                      template (host tools are folded in automatically).
+  --purge            uninstall 专用：连配置文件与其 .bak* 备份一起删（默认保留）。
+  --yes              uninstall / doctor --fix 专用：跳过逐类确认直接执行；
+                     非交互终端（非 TTY）下没带 --yes 时只列计划不落盘，退出码 2。
+  --fix              doctor 专用：体检后自动修两类可安全处理的问题（孤儿工作区
+                     预设目录、孤儿/过期声明行），其余发现只给处理建议不代做。
   --help             Show this help and exit.
 
 Subcommands:
@@ -64,6 +83,13 @@ Subcommands:
                      preset track vs host version, managed patch rows, orphan
                      workspace presets, config drift, version marker) and a
                      summary; exit 1 only on error-level findings.
+  doctor --fix       体检并清理：只自动修 --fix 所述两类，输出逐项标注
+                     「已修 / 需手动」；托管块清理写盘前自动备份 .bak-1。
+  uninstall          清理庖丁写进宿主目录的东西：cordis.patch.yml 托管声明块、
+                     .agent-presets 下的 orchestrator* 预设目录、.generator-version
+                     标记。默认保留 dsh-paoding.config.yml 及其备份（用户数据），
+                     --purge 才连配置一起删。不碰插件包自身——包本体用
+                     dsh plugin remove dsh-paoding 卸载。
 
 Environment:
   DSH_HOME           Directory holding cordis.patch.yml etc. (default: $HOME/.dsh)
@@ -84,14 +110,17 @@ function assertProfileName(value) {
 }
 
 export function parseArgs(argv) {
-  const opts = { command: 'install', profile: null, patches: [], dryRun: false, help: false, auto: false, config: undefined, suggest: false }
+  const opts = { command: 'install', profile: null, patches: [], dryRun: false, help: false, auto: false, config: undefined, suggest: false, purge: false, yes: false, fix: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === 'doctor') {
-      // 子命令：doctor = 只读体检；缺省 install（原 installer 主流程）。位置参数
-      // 只认这一个，其余仍按未知选项报错；--help / --profile / --config 等照常
-      // 解析，doctor 分支共用。
+      // 子命令：doctor = 只读体检（--fix 升级为「体检并修」）；缺省 install
+      //（原 installer 主流程）。位置参数只认 doctor / uninstall 两个，其余仍按
+      // 未知选项报错；--help / --profile / --config 等照常解析，子命令分支共用。
       opts.command = 'doctor'
+    } else if (arg === 'uninstall') {
+      // 子命令：uninstall = 清理庖丁写进宿主目录的东西（不动插件包自身）。
+      opts.command = 'uninstall'
     } else if (arg === '--help' || arg === '-h') {
       opts.help = true
     } else if (arg === '--dry-run') {
@@ -101,6 +130,16 @@ export function parseArgs(argv) {
     } else if (arg === '--suggest') {
       // fresh 安装时用智能默认（自动纳入检测到的 host 工具）而非基础模板。
       opts.suggest = true
+    } else if (arg === '--purge') {
+      // 仅 uninstall：连配置文件与其备份一起删（默认保留用户配置）。
+      opts.purge = true
+    } else if (arg === '--yes') {
+      // uninstall / doctor --fix：跳过逐类确认直接执行；非 TTY 无 --yes 时
+      // 只列计划不落盘（防呆）。
+      opts.yes = true
+    } else if (arg === '--fix') {
+      // 仅 doctor：对体检发现里可安全自动修的两类动手（孤儿目录、孤儿声明行）。
+      opts.fix = true
     } else if (arg === '--config') {
       const value = argv[++i]
       if (value === undefined || value.startsWith('--')) {
@@ -266,6 +305,230 @@ export function printDoctorReport(report, { dshHome, configFile }) {
   }
 }
 
+// ── 生命周期清理（uninstall / doctor --fix）────────────────────────────────
+//
+// 「怎么删」全部在 lib/lifecycle.mjs（判据与 doctor 同源）；这里只做三件事：
+// 计划打印、确认口径（--yes 直干 / TTY 逐类问 / 非 TTY 防呆拒做）、结果汇报。
+
+/** 非 TTY（管道 / 重定向）下逐类确认问不了，只能列计划等显式 --yes。 */
+function stdinIsTTY() {
+  return Boolean(process.stdin?.isTTY)
+}
+
+/** 逐类确认（仅 TTY 调用）：回车 / 非 y 一律视为拒绝——删东西默认说不。 */
+async function confirm(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const answer = (await rl.question(`${question} [y/N] `)).trim().toLowerCase()
+    return answer === 'y' || answer === 'yes'
+  } finally {
+    rl.close()
+  }
+}
+
+/** 包本体卸载提示（uninstall 收尾专用）：插件包的卸载通道只有 dsh plugin
+ *  remove，本命令绝不碰自己的包目录。 */
+function printPluginRemovalHint() {
+  console.log()
+  console.log('收尾：插件包本体走插件通道卸载——')
+  console.log('  dsh plugin remove dsh-paoding')
+  console.log('（desktop profile 由 Electron 守卫拦着，请在 DSH 面板 / 宿主侧处理）')
+}
+
+/** uninstall 的计划打印（防呆拒做时同一份，见 runUninstall）。 */
+function printUninstallPlan(plan, { purge }) {
+  console.log('dsh-paoding uninstall — 清理庖丁写进宿主目录的东西（不碰插件包自身）')
+  console.log(`  DSH_HOME : ${plan.dshHome}`)
+  console.log(`  配置文件 : ${plan.configFile}`)
+  console.log()
+  console.log('将清理：')
+  if (plan.blockPresent && !plan.blockCorrupt) {
+    console.log(`  - ${plan.patchFile} 里的托管声明块（${plan.blockRowCount} 条声明行；写前备份 ${path.basename(plan.patchFile)}.bak-1）`)
+  }
+  if (plan.blockCorrupt) {
+    console.log('  - 托管声明块已损坏（有起始标记无结束标记）：自动清理做不了，需手工整块删除或补回结束标记')
+  }
+  if (plan.presetDirs.length > 0 || plan.markerExists) {
+    const markerNote = plan.markerExists ? '（含版本标记 .generator-version）' : ''
+    console.log(`  - 预设目录 ${plan.presetDirs.join('、') || '（无）'}${markerNote}`)
+  }
+  if (purge && (plan.configExists || plan.configBackups.length > 0)) {
+    const backups = plan.configBackups.length > 0 ? ` 及 ${plan.configBackups.length} 个 .bak* 备份` : ''
+    console.log(`  - 配置文件 ${plan.configFile}${backups}（--purge）`)
+  }
+  console.log('将保留：')
+  if (!purge && (plan.configExists || plan.configBackups.length > 0)) {
+    console.log(`  - 配置文件 ${plan.configFile}${plan.configBackups.length > 0 ? ` 及 ${plan.configBackups.length} 个 .bak* 备份` : ''}（用户数据；--purge 才删）`)
+  }
+  const foreign = foreignPresetDirsRemaining(plan.dshHome)
+  if (foreign.length > 0) {
+    console.log(`  - .agent-presets 下非庖丁目录：${foreign.join('、')}`)
+  }
+}
+
+/** uninstall 主流程，返回退出码。 */
+async function runUninstall({ dshHome, configFile, purge, yes }) {
+  const plan = planUninstall({ dshHome, configFile })
+
+  // 无事可做：不打扰确认（反正一个字节都不会动），直接交代现状。
+  const hasWork =
+    plan.blockPresent ||
+    plan.presetDirs.length > 0 ||
+    plan.markerExists ||
+    (purge && (plan.configExists || plan.configBackups.length > 0))
+  if (!hasWork) {
+    console.log('dsh-paoding uninstall — 宿主目录里没有庖丁的安装产物（托管声明块、orchestrator* 预设目录、版本标记均不在场），无事可做。')
+    if (plan.configExists) console.log(`配置已保留在 ${configFile}，确认不要可手动删（连同 .bak* 备份）。`)
+    printPluginRemovalHint()
+    return 0
+  }
+
+  printUninstallPlan(plan, { purge })
+
+  // 防呆：非交互终端问不了，宁可不做——列出计划，等显式 --yes。
+  if (!yes && !stdinIsTTY()) {
+    console.error()
+    console.error('当前不是交互终端且未加 --yes：只列计划不执行，重跑时加 --yes 确认。')
+    return 2
+  }
+
+  // 逐类确认（--yes 跳过；损坏块不进确认——自动路径反正删不动，按需手工报）。
+  let doBlock = plan.blockPresent && !plan.blockCorrupt
+  let doDirs = plan.presetDirs.length > 0
+  let doConfig = purge && (plan.configExists || plan.configBackups.length > 0)
+  if (!yes) {
+    if (doBlock) doBlock = await confirm(`移除 ${plan.patchFile} 里的庖丁托管声明块？`)
+    if (doDirs) doDirs = await confirm(`删除预设目录 ${plan.presetDirs.join('、')}？`)
+    if (doConfig) {
+      doConfig = await confirm(
+        `删除配置文件及其备份（${configFile}${plan.configBackups.length > 0 ? ` + ${plan.configBackups.length} 个 .bak*` : ''}）？`,
+      )
+    }
+  }
+
+  const cleanup = cleanupPaodingArtifacts(dshHome, {
+    stripBlock: doBlock,
+    removeDirIds: doDirs ? plan.presetDirs : [],
+  })
+
+  console.log()
+  if (plan.blockCorrupt) {
+    console.log(`⚠ 托管声明块损坏（有起始标记无结束标记），自动清理已跳过——请手工补回结束标记或整块删除 ${plan.patchFile}`)
+  } else if (doBlock) {
+    if (cleanup.blockRemoved) {
+      console.log(`✓ 已移除托管声明块${cleanup.backupPath ? `（原文件备份：${cleanup.backupPath}）` : ''}`)
+    } else {
+      console.log(`⚠ 托管声明块未能移除，请检查 ${plan.patchFile}`)
+    }
+  }
+  if (doDirs && cleanup.removedDirs.length > 0) {
+    console.log(`✓ 已删除预设目录：${cleanup.removedDirs.join('、')}${plan.markerExists ? '，版本标记 .generator-version 随目录一并删除' : ''}`)
+  }
+  if (cleanup.markerRemoved) {
+    console.log('✓ 已删除版本标记 .generator-version')
+  }
+  for (const failure of cleanup.dirFailures) {
+    console.log(`⚠ 预设目录删除失败：${failure.id}（${failure.error}）——请手工处理`)
+  }
+
+  if (purge) {
+    if (doConfig) {
+      const removed = removeConfigAndBackups(configFile)
+      if (removed.length > 0) {
+        console.log(`✓ 已删除配置文件及其备份（${removed.length} 个文件）`)
+      }
+    } else if (plan.configExists || plan.configBackups.length > 0) {
+      console.log(`ℹ 配置未删（未确认）：${configFile}`)
+    }
+  } else if (plan.configExists || plan.configBackups.length > 0) {
+    console.log(`ℹ 配置已保留在 ${configFile}，确认不要可手动删（连同 .bak* 备份）。`)
+  }
+
+  printPluginRemovalHint()
+
+  const failed =
+    cleanup.dirFailures.length > 0 ||
+    plan.blockCorrupt ||
+    (doBlock && !cleanup.blockRemoved)
+  return failed ? 1 : 0
+}
+
+/** doctor --fix 对「预设漂移」这类体检行文的补充建议：各行 detail 多数自带
+ *  处理建议，这里只补体检行文没点到的 --auto 路径，不逐行复读。 */
+const DOCTOR_FIX_HINTS = {
+  预设漂移: '（或运行 dsh-paoding --auto 重新生成）',
+}
+
+/** doctor --fix 主流程，返回退出码：全量只读体检（runDoctor，与不带 --fix 的
+ *  doctor 同一份诊断）→ 可修两类动手 → 逐项标注「已修 / 需手动」。可修判据
+ *  与 doctor 同源（lifecycle 的孤儿目录 / 孤儿声明行两个函数），不另立标准。 */
+async function runDoctorFix({ dshHome, configFile, profile, yes }) {
+  const report = await runDoctor({ dshHome, configFile, profile })
+
+  // 配置存在但不可解析时目录对账不可信（doctor 该项同样降级 skip）——只报不修。
+  const reconcile = loadConfigForReconcile(configFile, loadYaml(dshHome))
+  const dirsReconcilable = !reconcile.exists || reconcile.usable
+  const orphanDirIds = dirsReconcilable ? workspacePresetOrphans(dshHome, reconcile.config).orphans : []
+  const orphanRowIds = orphanManagedRows(dshHome).map((row) => row.rowId)
+
+  let doDirs = orphanDirIds.length > 0
+  let doRows = orphanRowIds.length > 0
+
+  // 防呆：非交互终端问不了——只列将修什么，等显式 --yes（退出码 2）。
+  const planOnly = !yes && !stdinIsTTY()
+  if (!planOnly && !yes) {
+    if (doDirs) doDirs = await confirm(`删除孤儿预设目录 ${orphanDirIds.join('、')}？`)
+    if (doRows) doRows = await confirm(`撤下孤儿声明行 ${orphanRowIds.join('、')}？`)
+  }
+
+  const cleanup = planOnly
+    ? null
+    : cleanupPaodingArtifacts(dshHome, {
+        pruneRowIds: doRows ? orphanRowIds : [],
+        removeDirIds: doDirs ? orphanDirIds : [],
+      })
+  const dirsFixed = cleanup !== null && doDirs && cleanup.removedDirs.length > 0
+  const rowsFixed = cleanup !== null && doRows && cleanup.prunedRowIds.length > 0
+
+  const marks = { ok: '✔', error: '✘', warn: '⚠', skip: '–' }
+  console.log(planOnly
+    ? 'dsh-paoding doctor --fix — 体检完成，以下为可自动修复项（未执行）'
+    : 'dsh-paoding doctor --fix — 体检并清理可自动修复的问题')
+  console.log(`  DSH_HOME : ${dshHome}`)
+  console.log(`  配置文件 : ${configFile}`)
+  console.log()
+  let fixedCount = 0
+  let manualCount = 0
+  for (const item of report.items) {
+    const dirsHit = item.label === '工作区预设目录' && /孤儿目录|全部视为孤儿/.test(item.detail) && (dirsFixed || (planOnly && doDirs))
+    const rowsHit = item.label === '声明行托管块' && /孤儿声明行/.test(item.detail) && (rowsFixed || (planOnly && doRows))
+    if (dirsHit) {
+      fixedCount++
+      const what = planOnly ? orphanDirIds.join('、') : cleanup.removedDirs.join('、')
+      const rowNote = planOnly ? '' : '；受影响声明行已同步撤下'
+      console.log(`✓ ${planOnly ? '将修' : '已修'} ${item.label} — ${planOnly ? '将删除' : '已删除'}孤儿目录 ${what}${rowNote}`)
+    } else if (rowsHit) {
+      fixedCount++
+      const what = planOnly ? orphanRowIds.join('、') : cleanup.prunedRowIds.join('、')
+      const backupNote = planOnly ? '' : `（patch 原文件备份：${cleanup.backupPath ?? '无'}）`
+      console.log(`✓ ${planOnly ? '将修' : '已修'} ${item.label} — ${planOnly ? '将撤下' : '已撤下'}孤儿声明行 ${what}${backupNote}`)
+    } else if (item.status === 'warn' || item.status === 'error') {
+      manualCount++
+      const hint = DOCTOR_FIX_HINTS[item.label] ?? ''
+      console.log(`${marks[item.status] ?? '·'} 需手动 ${item.label} — ${item.detail}${hint}`)
+    } else {
+      console.log(`${marks[item.status] ?? '·'} ${item.label} — ${item.detail}`)
+    }
+  }
+  console.log()
+  if (planOnly) {
+    console.error('当前不是交互终端且未加 --yes：只列将修什么不执行，重跑时加 --yes 确认。')
+    return 2
+  }
+  console.log(`汇总: ${report.items.length} 项检查，已修 ${fixedCount} 项${manualCount > 0 ? `，需手动 ${manualCount} 项（见 ⚠/✘ 行）` : ''}`)
+  return report.hasErrors ? 1 : 0
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
 
 /**
@@ -287,14 +550,41 @@ export async function main({ argv = process.argv.slice(2) } = {}) {
     return 0
   }
 
-  // doctor 子命令：只读体检，不走 --auto 门禁（门禁仅拦会动盘的安装主流程），
-  // 也不用 collectState 的全量检测——runDoctor 内部按项自行探测与降级。
+  // 旗标与子命令的配属校验：装错地方的旗标直接报错（与未知选项同款 exit 1），
+  // 不静默忽略——静默会让用户以为 --purge / --fix 生效了。
+  if (opts.fix && opts.command !== 'doctor') {
+    console.error('error: --fix 仅 doctor 子命令支持')
+    return 1
+  }
+  if (opts.purge && opts.command !== 'uninstall') {
+    console.error('error: --purge 仅 uninstall 子命令支持')
+    return 1
+  }
+  if (opts.yes && !(opts.command === 'uninstall' || (opts.command === 'doctor' && opts.fix))) {
+    console.error('error: --yes 仅 uninstall / doctor --fix 支持')
+    return 1
+  }
+
+  // doctor 子命令：只读体检（--fix 升级为「体检并修」），不走 --auto 门禁
+  //（门禁仅拦会动盘的安装主流程），也不用 collectState 的全量检测——runDoctor
+  // 内部按项自行探测与降级。
   if (opts.command === 'doctor') {
     const dshHome = process.env.DSH_HOME || path.join(homedir(), '.dsh')
     const configFile = opts.config || path.join(dshHome, 'dsh-paoding.config.yml')
+    if (opts.fix) {
+      return runDoctorFix({ dshHome, configFile, profile: opts.profile, yes: opts.yes })
+    }
     const report = await runDoctor({ dshHome, configFile, profile: opts.profile })
     printDoctorReport(report, { dshHome, configFile })
     return report.hasErrors ? 1 : 0
+  }
+
+  // uninstall 子命令：清理庖丁写进宿主目录的东西（托管块 / 预设目录 / 标记），
+  // 确认口径与退出码见 runUninstall。
+  if (opts.command === 'uninstall') {
+    const dshHome = process.env.DSH_HOME || path.join(homedir(), '.dsh')
+    const configFile = opts.config || path.join(dshHome, 'dsh-paoding.config.yml')
+    return runUninstall({ dshHome, configFile, purge: opts.purge, yes: opts.yes })
   }
 
   // 无 --auto 直接拒绝（交互模式已删）：--dry-run 只读不动盘，放行作检测预览。
