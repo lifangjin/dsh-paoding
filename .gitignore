@@ -6,3 +6,7 @@
 plan/
 .DS_Store
 *.tgz
+# local runtime / experiment artifacts
+.cortexkit/
+exp-home-e2e/
+node_modules/
