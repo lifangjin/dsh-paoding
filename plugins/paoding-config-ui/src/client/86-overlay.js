@@ -23,15 +23,22 @@
     // 改通用确认弹窗，confirmCtrl 单例见 70 片段）文案按挂载形态分流：
     // dev link 直连形态（layout 由服务端 version 路由按包根 .git 判定）无法
     // 就地升级，把手动切换命令说在前头；installed（registry 版）原地换版本，
-    // 从简。反馈（成功 note / 失败 err，含子进程输出尾部）都收在卡内，不与
+    // 按宿主热重载能力（version 路由 hotReloadable：插件清单里有启用的
+    // dsh-hmr 行）再分两级——有则「刷新页面即生效」，无则「重启 DSH 生效」。
+    // 反馈（成功 note / 失败 err，含子进程输出尾部）都收在卡内，不与
     // 面板的 toast 反馈混流。升级非破坏性操作，danger 不置位；弹窗本体由
     // PageShell 末尾的 ConfirmLayer 渲染（页头与面板发起的确认共用一层）。
     function runUpgradeFlow(verInfo, setVerInfo, setUpgBusy, setUpgNote, setUpgErr) {
       if (!verInfo || !verInfo.latest) return;
       var isDev = verInfo.layout === "dev";
+      // 二级分流：宿主插件清单里有启用的 dsh-hmr 插件行（0.2.1+ web/desktop
+      // 发布 profile 默认带上，version 路由的 hotReloadable 字段）时，插件
+      // 通道原地换版本后刷新页面即生效，无需重启 DSH——确认框与成功 note
+      // 都换「刷新即生效」文案；字段缺失 / 探测失败回落「需重启」文案。
+      var hot = verInfo.hotReloadable === true;
       var msg = isDev
         ? t("menu.upgradeDevBody")
-        : t("menu.upgradeBody", { v: versionTagOf(verInfo.latest) });
+        : t(hot ? "menu.upgradeBodyHot" : "menu.upgradeBody", { v: versionTagOf(verInfo.latest) });
       confirmCtrl.ask({
         title: t("menu.upgradeTitle"),
         body: msg,
@@ -46,7 +53,7 @@
             var done = versionTagOf((r && r.version) || verInfo.latest);
             // 服务端返回了 message 就原文透传（服务端消息不做客户端翻译），
             // 没有才落本地化兜底文案。
-            setUpgNote((r && r.message) || t("menu.upgraded", { v: done }));
+            setUpgNote((r && r.message) || t(hot ? "menu.upgradedHot" : "menu.upgraded", { v: done }));
             // 重拉版本信息：服务端有 1 小时缓存且本进程挂的还是旧代码，重启前
             // 更新卡可能仍在（重启后自然消失），以此处的生效提示为准。
             paodingApi("version").then(function (d) {

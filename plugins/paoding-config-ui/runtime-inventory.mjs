@@ -207,6 +207,28 @@ function detectPresetSystemOf(ctx) {
 }
 
 /**
+ * 宿主热重载能力探测：插件清单里存在 @deepseek-ai/dsh-hmr 插件行（dsh
+ * 0.2.1+ 的 web / desktop 发布 profile 默认带上）且已启用，即认为宿主支持
+ * 插件热重载——面板升级（插件通道原地换版本）完成后刷新页面即生效，无需
+ * 重启 DSH。取数复用 collectPluginEntries 的路径（getService
+ * ('pluginInventory') → list() → entries）；服务缺席 / 形状异常 / 任何异常
+ * 一律 false（安全侧：回落「需重启」文案），永不抛出。
+ */
+export function detectHmrOf(ctx) {
+  try {
+    const { entries, ok } = collectPluginEntries(ctx, [])
+    if (!ok) return false
+    // collectPluginEntries 已剔除 enabled===false 的条目，此处再判一次仅为
+    // 兑现判定语义（enabled!==false）；moduleName / entryId 任一含 'dsh-hmr'
+    // 即命中（不同宿主版本两字段的命名习惯有差异，取并集）。
+    return entries.some((e) => e.enabled !== false
+      && (e.moduleName?.includes('dsh-hmr') || e.entryId?.includes('dsh-hmr')))
+  } catch {
+    return false
+  }
+}
+
+/**
  * 采集运行时事实（供 collectState 合并 / UI 展示）。
  * 永不抛出：任何异常都会落到 error 里，返回部分结果。
  */

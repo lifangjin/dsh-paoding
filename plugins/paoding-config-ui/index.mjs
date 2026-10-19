@@ -42,7 +42,7 @@ import { fileURLToPath } from 'node:url'
 import { getState, refreshState, isStateCacheStale, serializeState, installAssignments, resolveDshHome, discoverWorkspaceCandidates, ensurePresetInstalled, pluginVersion, exportConfigPayload, importConfigContent, listPresets, resolveWorkspacePathByPresetId, deleteWorkspacePreset } from './api-core.mjs'
 import { collectModelRefs } from '../../tools/lib/health.mjs'
 import { detectSkills } from '../../tools/lib/skills.mjs'
-import { collectRuntimeFacts } from './runtime-inventory.mjs'
+import { collectRuntimeFacts, detectHmrOf } from './runtime-inventory.mjs'
 import { getVersionInfo } from '../../tools/lib/version.mjs'
 import { runUpgrade } from '../../tools/lib/upgrade.mjs'
 
@@ -694,7 +694,15 @@ export async function apply(ctx) {
           // 200 + error 字段，面板据此静默降级（不打扰使用）。timeoutMs 3000：
           // 检测只是锦上添花，不值得让面板等更久。layout 告知客户端挂载形态
           //（升级确认框按此分流警示文案），见 MOUNT_LAYOUT 注释。
-          json(res, 200, { ...(await getVersionInfo({ timeoutMs: 3000 })), layout: MOUNT_LAYOUT })
+          // hotReloadable：宿主插件清单里有启用的 dsh-hmr 插件行（0.2.1+ web/
+          // desktop 默认）→ 升级后刷新页面即生效，确认框 / 成功 note 换
+          // 「刷新即生效」文案；探测失败 / 非 web 部署拿不到运行时 → false，
+          // 回落「需重启 DSH」文案。永不抛出（detectHmrOf 自捕）。
+          json(res, 200, {
+            ...(await getVersionInfo({ timeoutMs: 3000 })),
+            layout: MOUNT_LAYOUT,
+            hotReloadable: detectHmrOf(ctx),
+          })
           return
         }
 

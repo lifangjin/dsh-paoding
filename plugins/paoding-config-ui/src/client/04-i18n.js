@@ -364,8 +364,10 @@
       "menu.upgradeConfirm": { zh: "升级", en: "Upgrade" },
       "menu.upgradeDevBody": { zh: "当前为开发 link 直连形态：无法就地升级，请手动执行 dsh plugin add dsh-paoding@latest 切换到 registry 版本。仍要继续尝试吗？", en: "This is a dev link checkout: it cannot be upgraded in place. Run dsh plugin add dsh-paoding@latest manually to switch to the registry version. Continue anyway?" },
       "menu.upgradeBody": { zh: "确定升级到 {v}？升级将通过插件通道原地换版本，完成后需重启 DSH 生效。", en: "Upgrade to {v}? The upgrade swaps the version in place through the plugin channel; restart DSH afterwards to apply it." },
+      "menu.upgradeBodyHot": { zh: "确定升级到 {v}？升级将通过插件通道原地换版本，完成后刷新页面即生效（编排预设自动按新版重生成）。", en: "Upgrade to {v}? The upgrade swaps the version in place through the plugin channel; refresh the page afterwards — orchestration presets regenerate automatically." },
       "menu.upToDate": { zh: "已是最新版本", en: "Already up to date" },
       "menu.upgraded": { zh: "✅ 已升级到 {v}，重启 DSH 后新版本生效（preset 会自动按新版重生成）", en: "✅ Upgraded to {v} — restart DSH to apply the new version (the preset regenerates itself against it)" },
+      "menu.upgradedHot": { zh: "✅ 已升级到 {v}，刷新页面即生效（preset 会自动按新版重生成）", en: "✅ Upgraded to {v} — refresh the page to apply (the preset regenerates itself against it)" },
       "menu.errTail": { zh: "：{tail}", en: ": {tail}" },
       "menu.langTip": { zh: "切换界面语言", en: "Switch UI language" },
     };
