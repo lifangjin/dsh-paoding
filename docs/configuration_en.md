@@ -751,6 +751,8 @@ The header "More" menu offers export and import of the whole config file (the §
 - Writing changes the file's mtime, so the panel's detection-state cache invalidates automatically through the existing reconciliation, and the view rebuilds from the new config.
 - Import shares the same in-flight write gate as "save & apply": applying during an import (or the reverse) answers 409 — retry shortly.
 
+**Backups and restore**: every action that writes the config file (save & apply, import, restore) first rotates the current file through three backups — `dsh-paoding.config.yml.bak-1` (newest) to `.bak-3`, each shifting one slot and the oldest falling off; backups live next to the config file, and a first-ever save with no previous file backs up nothing. Rollback runs through "More" → "Restore backup…": each backup is listed with its time and size, one confirming dialog puts it back in place (the current file is backed up once more first, so even a mistaken restore can be walked back); the restore validates the backup too (a backup that parses to a non-mapping is rejected) and shares the write gate. Without the panel, copy a `.bak-N` back over the main filename by hand.
+
 ## 12. Check messages (health review)
 
 After a preview or an apply, if the server-side health review finds problems, a **check messages** card appears above the preview area: one row per finding, color-coded red (error) / amber (warn) / neutral (info), with the check code available on hover for troubleshooting. No findings — no card, zero footprint.
@@ -766,6 +768,8 @@ Entries come from the structured health review (`tools/lib/health.mjs`); codes a
 | `generation` | warn | Generator's own notices (e.g. default-value fallbacks) |
 
 Invalidation scope: messages from a **preview** are discarded together with the draft on any config edit (same rule as the preview itself); messages from an **apply** describe what has already been written and survive until the next preview or apply. When an apply fails, the error toast stays as usual and the card lists every reason; when an apply succeeds but warn/error-level findings exist, the success toast switches to the amber variant "N check messages, see below".
+
+Beside the checks, a preview carries two more pieces of visibility. One is **changes since the last save** — an itemized diff against the saved config (roles added/removed, each role's tools and persona, dedicated model, start mode, background continuation, main-agent tool changes, the `roles_remove` and `main_agent_extra` channels); with nothing changed it collapses to a single "identical to the last saved config" line. The other is the **tool-surface stat** — the main agent's current allow count against the monolithic total as a percentage: one permanent line in the header (from the saved config) and one in the preview (from the unsaved config), one for each side of a save.
 
 ## 13. HTTP API
 

@@ -191,22 +191,29 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 
 ### 数据接口与安全
 
-面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地升级：普通 profile 走 `dsh plugin update`，desktop profile 直跑 `pnpm add`，pnpm 按「裸 pnpm → `corepack pnpm` → PNPM_HOME 落位」候选链解析）、`GET /api/paoding/config/export`（配置文件原文导出，下载/备份用）、`POST /api/paoding/config/import`（整份导入：先验格式、与「保存并应用」共用写盘闸）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
+面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地升级：普通 profile 走 `dsh plugin update`，desktop profile 直跑 `pnpm add`，pnpm 按「裸 pnpm → `corepack pnpm` → PNPM_HOME 落位」候选链解析）、`GET /api/paoding/config/export`（配置文件原文导出，下载/备份用）、`POST /api/paoding/config/import`（整份导入：先验格式、与「保存并应用」共用写盘闸）、`GET /api/paoding/config/backups`（自动备份清单）、`POST /api/paoding/config/restore`（恢复备份：文件名白名单防穿越，先验可解析再覆盖）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
 
 ### 面板能力
 
-- **状态与操作**：页头是标题 + 版本/更新卡（新版就地提示与一键升级）+ 副标题，正文直接就是工作区与角色卡，没有单独的检测摘要与 chips 区；操作按钮「**保存并应用**」「预览生成」「重新检测」固定在面板底部悬浮操作坞（sticky bottom），滚动任意位置都可直接点击。
-- **Agent 工具分配卡片**：主 agent 一张固定卡（基础工具取消勾选 = 加入 `main_agent_remove` 从主 agent 剔除；MCP / 插件工具勾选 = 加入 `main_agent_extra`；技能「read 按需」与「内联全文」两组勾选；另有「人设追加」编辑区，可改、清空、恢复默认）＋ `search_external` / `design` / `implement` 三张内置角色卡 ＋ 任意自定义角色卡（带删除按钮）；每张角色卡把工具按「基础工具 / MCP 工具 / 插件工具」三组呈现、可逐项勾选，并可编辑 persona。底部「新建自定义 agent 角色」。
+- **状态与操作**：页头是标题 + 版本/更新卡（新版就地提示与一键升级）+ 副标题，副标题下一行常驻主 agent 工具面瘦身统计（当前 allow 数 / 单体全量数与瘦身百分比，配完第一次能看到省了多少），正文直接就是工作区与角色卡，没有单独的检测摘要与 chips 区；操作按钮「**保存并应用**」「预览生成」「重新检测」固定在面板底部悬浮操作坞（sticky bottom），滚动任意位置都可直接点击。
+- **Agent 工具分配卡片**：主 agent 一张固定卡（基础工具取消勾选 = 加入 `main_agent_remove` 从主 agent 剔除；MCP / 插件工具勾选 = 加入 `main_agent_extra`；技能「read 按需」与「内联全文」两组勾选；另有「人设追加」编辑区，可改、清空、恢复默认）＋ `search_external` / `design` / `implement` 三张内置角色卡 ＋ 任意自定义角色卡（带删除按钮）；每张角色卡把工具按「基础工具 / MCP 工具 / 插件工具」三组呈现、可逐项勾选（任一组超过 8 项时组顶出现筛选框，输入即滤），并可编辑 persona。底部「新建自定义 agent 角色」。
 - **技能分配**：每个 skill 一行，勾选分配给哪些 agent（写入对应 persona 的 `Available skills` 软引导；角色技能软引导，主 agent 技能另有 read 按需/内联两组）。
-- **预览生成**：不写盘生成 `agent.cordis.yml`，显示每个角色 allow 的 intent → kept 计数与生成全文。
+- **预览生成**：不写盘生成 `agent.cordis.yml`，显示每个角色 allow 的 intent → kept 计数与生成全文；同时列「本次变更」——相对上次保存配置的逐项明细（角色增删、各角色工具与 persona、专用模型、启动方式、后台续跑、主 agent 工具增删），无改动时一行带过；瘦身统计在这里按当前未保存配置另示一行。
 - **保存并应用**：确认后写入 preset（覆盖 `$DSH_HOME/.agent-presets/orchestrator`）并按宿主版本同步登记——≤ 0.1.6 目录扫描即生效，≥ 0.1.7 同步维护 `$DSH_HOME/cordis.patch.yml` 里的声明行托管块（见第 2 节）——再把当前分配保存到 `$DSH_HOME/dsh-paoding.config.yml`；应用成功后提示重启 DSH 或新建会话生效（检测到 patch 比生成结果新时提示重启后生效）。打开面板时会加载既有配置文件作为当前值——手编过的选择直接可见、可改。
 - **场景模板**：页头三档切换（轻量：只留实现角色；调研：只留检索角色；全开：全员到齐、主 agent 额外工具带满检测库存），一键换「班底」；只动 `roles_remove` 与 `main_agent_extra`，各角色精调过的工具面、persona、模型、启动方式分毫不动，切回即原样复原。
 - **检查提示卡**：每次「预览生成 / 保存并应用」自动过一遍体检（配置了未挂载的工具、零工具角色、查无此名的模型、预设落后于配置），分级提示以卡片形式贴在页头下方，处理完再保存不迟。
-- **「更多」菜单**：配置导出（下载 `dsh-paoding.config.yml` 原文）/ 导入（先验格式，整份覆盖含工作区段，需二次确认）与面板语言切换（中英自动识别、手动选择优先并记住）。
+- **备份与回滚**：保存、导入、恢复配置前都会自动把当前配置轮换备份三份（`config.yml.bak-1..3`，新压旧）；「更多」→「恢复备份…」列时间与大小、二次确认后回退，恢复前当前配置还会再自动备份一份——误操作有后悔药。
+- **「更多」菜单**：配置导出（下载 `dsh-paoding.config.yml` 原文）/ 导入（先验格式，整份覆盖含工作区段，需二次确认）/ 恢复备份（见上条）与面板语言切换（中英自动识别、手动选择优先并记住）。
 
 ## 7. 卸载
 
-三条命令，删得干干净净：
+先用一条命令清掉庖丁写进宿主目录的东西（托管声明块、`orchestrator*` 预设目录、版本标记；配置文件默认保留，`--purge` 才连配置与备份一起删；非交互终端需加 `--yes`）：
+
+```bash
+npx dsh-paoding@latest uninstall
+```
+
+包本体再按 profile 摘掉，三条命令删得干干净净：
 
 ```bash
 dsh plugin --profile web remove dsh-paoding
@@ -216,7 +223,7 @@ rm -rf "${DSH_HOME:-$HOME/.dsh}/.agent-presets"/orchestrator-*
 
 第一条摘掉插件与侧栏面板（只影响指定 profile），第二条删掉编排预设目录，第三条清掉按工作区配置时生成的各工作区预设目录（`orchestrator-<目录名>`；没用过按工作区配置就没有这类目录，通配不命中、无害）——基础 `orchestrator` 目录已由上一条命令删掉，不含在这个通配里。配置文件 `~/.dsh/dsh-paoding.config.yml` 不随之上删——留着或删掉都不影响 DSH 其它配置，重装时首装自动化会再次按它应用。
 
-宿主为 DSH ≥ 0.1.7 时再多看一眼：`$DSH_HOME/cordis.patch.yml` 里可能还留着 dsh-paoding 托管块（起止标记注释包着 `- insert:` 声明行）。预设目录删掉后，块内声明行就成了指向已删目录的悬空引用，请把整个托管块（从 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始行到 end 标记行）一并删去——块外内容不受影响。
+（走了上面的 `uninstall` 就免了这一步和下一眼的托管块手删——它已一并清掉。）宿主为 DSH ≥ 0.1.7 时若手动删目录，再多看一眼：`$DSH_HOME/cordis.patch.yml` 里可能还留着 dsh-paoding 托管块（起止标记注释包着 `- insert:` 声明行）。预设目录删掉后，块内声明行就成了指向已删目录的悬空引用，请把整个托管块（从 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始行到 end 标记行）一并删去——块外内容不受影响。
 
 卸载不影响 host 的其它内容（MCP、插件、会话等），与 DSH 源码零耦合；之后新建会话时「编排模式 (Orchestrator)」不再出现在预设选择器里。
 
@@ -231,6 +238,8 @@ npx dsh-paoding@latest doctor          # 或仓库内：node tools/install.mjs d
 ```
 
 doctor 不改任何文件，逐项检查并给出 `✔ 正常 / ⚠ 警告 / ✘ 错误 / – 跳过` 四档结论：配置文件能否解析、预设安装轨道与宿主版本是否匹配、托管声明行有无孤儿行或损坏块、`.agent-presets/orchestrator-*` 有没有配置里已不引用的孤儿目录、已装预设与当前配置的再生成结果有无漂移、`.generator-version` 版本标记是否对得上。结尾有汇总；出现 ✘ 时退出码为 1，⚠ 与 – 不影响使用（跳过多见于全新机器，属正常）。`--config` / `--profile` 与安装时同义。
+
+`doctor --fix` 会在这份诊断之后自动修两类可安全处理的问题——孤儿 `orchestrator-*` 预设目录、托管块里的孤儿/过期声明行（写盘前自动备份 `.bak-1`），其余发现只给处理建议不代做（预设漂移就提示跑 `--auto` 重新生成）；输出逐项标注「已修 / 需手动」。非交互终端下 `--fix` 与 `uninstall` 都要显式 `--yes` 才落盘，否则只列计划、退出码 2。
 
 面板侧也有同源的保存时体检：每次「预览生成 / 保存并应用」的响应都带 `warnings` 字段（配置了未挂载工具、零工具角色、角色专用模型不在模型目录、预设落后于配置等），按条目提示处理即可，不用等运行时报错。
 
