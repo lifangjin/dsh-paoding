@@ -191,7 +191,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 
 ### 数据接口与安全
 
-面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地升级：普通 profile 走 `dsh plugin update`，desktop profile 直跑 `pnpm add`，pnpm 按「裸 pnpm → `corepack pnpm` → PNPM_HOME 落位」候选链解析）、`GET /api/paoding/config/export`（配置文件原文导出，下载/备份用）、`POST /api/paoding/config/import`（整份导入：先验格式、与「保存并应用」共用写盘闸）、`GET /api/paoding/config/backups`（自动备份清单）、`POST /api/paoding/config/restore`（恢复备份：文件名白名单防穿越，先验可解析再覆盖）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
+面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地升级：普通 profile 走 `dsh plugin update`，desktop profile 直跑 `pnpm add`，pnpm 按「裸 pnpm → `corepack pnpm` → PNPM_HOME 落位」候选链解析）、`GET /api/paoding/config/export`（配置文件原文导出，下载/备份用）、`POST /api/paoding/config/import`（整份导入：先验格式、与「保存并应用」共用写盘闸）、`GET /api/paoding/config/backups`（自动备份清单）、`POST /api/paoding/config/restore`（恢复备份：文件名白名单防穿越，先验可解析再覆盖）、`GET /api/paoding/stats`（委派效果统计：冷读会话存档聚合，days 窗口与 project 过滤）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
 
 ### 面板能力
 
@@ -203,6 +203,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 - **场景模板**：页头三档切换（轻量：只留实现角色；调研：只留检索角色；全开：全员到齐、主 agent 额外工具带满检测库存），一键换「班底」；只动 `roles_remove` 与 `main_agent_extra`，各角色精调过的工具面、persona、模型、启动方式分毫不动，切回即原样复原。
 - **检查提示卡**：每次「预览生成 / 保存并应用」自动过一遍体检（配置了未挂载的工具、零工具角色、查无此名的模型、预设落后于配置），分级提示以卡片形式贴在页头下方，处理完再保存不迟。
 - **备份与回滚**：保存、导入、恢复配置前都会自动把当前配置轮换备份三份（`config.yml.bak-1..3`，新压旧）；「更多」→「恢复备份…」列时间与大小、二次确认后回退，恢复前当前配置还会再自动备份一份——误操作有后悔药。
+- **委派效果统计**：页头「委派效果」卡按角色统计被委派的调用数、平均耗时与失败数（近 30 天，`days` 参数可调）。数据来自宿主会话存档的冷读——经宿主 `sessionPersistence` 服务逐会话抽摘要、本地聚合，不出机、不带负载；失败记的是子会话零轮次或轮次中断（spawn 后即死、中途终止两种形态）。宿主缺会话服务时整卡不渲染。
 - **「更多」菜单**：配置导出（下载 `dsh-paoding.config.yml` 原文）/ 导入（先验格式，整份覆盖含工作区段，需二次确认）/ 恢复备份（见上条）与面板语言切换（中英自动识别、手动选择优先并记住）。
 
 ## 7. 卸载
