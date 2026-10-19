@@ -359,6 +359,123 @@ export function stripNonTargetKeys(assignments) {
   return out
 }
 
+// ── 目标字段差分（面板 preview / apply 响应的 diff 字段）──────────────────────
+
+/** 序列差集：added = 新表按新序取不在旧表的项；removed = 旧表按旧序取不在新表的项。 */
+function listDiff(oldList, newList) {
+  const oldSet = new Set(oldList)
+  const newSet = new Set(newList)
+  return {
+    added: newList.filter((n) => !oldSet.has(n)),
+    removed: oldList.filter((n) => !newSet.has(n)),
+  }
+}
+
+/** 合并去重保序（toolsAdded / toolsRemoved 由 extra 与 remove 两路合并而来）。 */
+function dedupKeepOrder(list) {
+  return [...new Set(list)]
+}
+
+/** 技能映射等值：键集合一致且各键下角色列表逐项一致（顺序敏感，与落盘序一致）。 */
+function skillsMapEq(a, b) {
+  const ak = Object.keys(a)
+  if (ak.length !== Object.keys(b).length || !ak.every((k) => k in b)) return false
+  return ak.every((k) => a[k].length === b[k].length && a[k].every((v, i) => v === b[k][i]))
+}
+
+/**
+ * 目标字段集合差分（纯函数，零文案——返回纯结构化结果，展示串一律由客户端
+ * i18n 渲染）。两侧先各过一次 normalizeTargetFields（未知键 / profile /
+ * workspaces 段天然被忽略，手写未规范化的输入也得到与落盘一致的口径），再按
+ * 维度对比：
+ *   - mainExtra：main_agent_extra 列表的增删；
+ *   - mainAgent：主 agent 四维——工具增删（extra 增删 ∪ remove 增删的合并视图：
+ *     「新增 remove 项」即工具减少、「撤销 remove 项」即工具恢复）、persona
+ *    （main_agent_persona_extra，null 与 '' 语义不同：默认常量 vs 追加空串）；
+ *     model 恒 false（主 agent 无专用模型配置键，字段只为与角色条目同形方便
+ *     客户端统一渲染）；skills（main_agent_skills / main_agent_skills_inline /
+ *     skills 映射三者任一变化——角色级技能分配没有别的位置可报，并入此布尔）；
+ *   - roles：按角色名（键）对齐，新增 / 删除 / 变更三态；变更条目带六个子维度
+ *    （tools 增删——null 与空表同视、persona、model（含 provider 路由）、
+ *     start_mode、background_mode）。roles.<x>.name（角色显示名）不在对比维度。
+ *   - rolesRemove：内置角色删除名单的增删。
+ * changed = 任一子维度有变化。oldAssign 传 null（磁盘无配置）按全空目标字段算，
+ * 即首次保存时一切都算「新增」。
+ */
+export function diffAssignments(oldAssign, newAssign) {
+  const oldT = normalizeTargetFields(oldAssign ?? {})
+  const newT = normalizeTargetFields(newAssign ?? {})
+
+  // 主 agent：extra 增删 + remove 增删合并成同一对工具增删视图
+  const extraDiff = listDiff(oldT.main_agent_extra, newT.main_agent_extra)
+  const removeDiff = listDiff(oldT.main_agent_remove, newT.main_agent_remove)
+  const toolsAdded = dedupKeepOrder([...extraDiff.added, ...removeDiff.removed])
+  const toolsRemoved = dedupKeepOrder([...extraDiff.removed, ...removeDiff.added])
+  const personaChanged = (oldT.main_agent_persona_extra ?? null) !== (newT.main_agent_persona_extra ?? null)
+  const softSkillDiff = listDiff(oldT.main_agent_skills, newT.main_agent_skills)
+  const hardSkillDiff = listDiff(oldT.main_agent_skills_inline, newT.main_agent_skills_inline)
+  const skillsChanged =
+    !skillsMapEq(oldT.skills, newT.skills) ||
+    softSkillDiff.added.length > 0 || softSkillDiff.removed.length > 0 ||
+    hardSkillDiff.added.length > 0 || hardSkillDiff.removed.length > 0
+  const mainAgent = { toolsAdded, toolsRemoved, personaChanged, modelChanged: false, skillsChanged }
+
+  // 角色按名对齐：旧键序在前、新独有键序在后（新增角色在结果里的顺序可预期）
+  const roles = []
+  const roleNames = [
+    ...Object.keys(oldT.roles),
+    ...Object.keys(newT.roles).filter((n) => !(n in oldT.roles)),
+  ]
+  for (const name of roleNames) {
+    const o = oldT.roles[name]
+    const n = newT.roles[name]
+    if (o && !n) { roles.push({ name, op: 'removed' }); continue }
+    if (!o && n) { roles.push({ name, op: 'added' }); continue }
+    const tools = listDiff(o.tools, n.tools)
+    const changedRole = {
+      name,
+      op: 'changed',
+      toolsAdded: tools.added,
+      toolsRemoved: tools.removed,
+      // provider 与 model 同属「角色专用模型」维度（LLM 路由成对生效）
+      personaChanged: (o.persona ?? null) !== (n.persona ?? null),
+      modelChanged: (o.model ?? null) !== (n.model ?? null) || (o.provider ?? null) !== (n.provider ?? null),
+      startModeChanged: o.start_mode !== n.start_mode,
+      backgroundModeChanged: o.background_mode !== n.background_mode,
+    }
+    if (
+      changedRole.toolsAdded.length > 0 ||
+      changedRole.toolsRemoved.length > 0 ||
+      changedRole.personaChanged ||
+      changedRole.modelChanged ||
+      changedRole.startModeChanged ||
+      changedRole.backgroundModeChanged
+    ) {
+      roles.push(changedRole)
+    }
+  }
+
+  const rolesRemove = listDiff(oldT.roles_remove, newT.roles_remove)
+  const changed =
+    toolsAdded.length > 0 ||
+    toolsRemoved.length > 0 ||
+    personaChanged ||
+    skillsChanged ||
+    roles.length > 0 ||
+    rolesRemove.added.length > 0 ||
+    rolesRemove.removed.length > 0 ||
+    extraDiff.added.length > 0 ||
+    extraDiff.removed.length > 0
+
+  return {
+    changed,
+    mainAgent,
+    roles,
+    rolesRemove: { added: rolesRemove.added, removed: rolesRemove.removed },
+    mainExtra: { added: extraDiff.added, removed: extraDiff.removed },
+  }
+}
+
 /**
  * 目标字段集合（roles → skills，除
  * profile / workspaces 外的全部顶层键）写出体：pad 为该层缩进前缀（顶层 ''、workspaces.<path> 条目里

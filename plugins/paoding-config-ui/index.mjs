@@ -3,7 +3,8 @@
  *
  * 把 dsh-paoding 可视化配置器整合进 DSH Web GUI（左侧栏全页配置，无独立服务端）：
  *   - Node 侧：注册 /api/paoding/* 前缀路由（state/models/workspaces/presets/
- *     version/upgrade/preview/apply/rescan/config/export/config/import +
+ *     version/upgrade/preview/apply/rescan/config/export/config/import/
+ *     config/backups/config/restore +
  *     client.css 静态样式），经
  *     ./api-core.mjs 复用 tools/install.mjs 的检测与生成管线；workspaces 直连
  *     宿主 workspaceRegistry 服务（list / create，幂等）；presets 提供预设
@@ -39,8 +40,9 @@ import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getState, refreshState, isStateCacheStale, serializeState, installAssignments, resolveDshHome, discoverWorkspaceCandidates, ensurePresetInstalled, pluginVersion, exportConfigPayload, importConfigContent, listPresets, resolveWorkspacePathByPresetId, deleteWorkspacePreset } from './api-core.mjs'
+import { getState, refreshState, isStateCacheStale, serializeState, installAssignments, resolveDshHome, discoverWorkspaceCandidates, ensurePresetInstalled, pluginVersion, exportConfigPayload, importConfigContent, listConfigBackups, restoreConfigBackup, rotateConfigBackups, slimStatsOf, listPresets, resolveWorkspacePathByPresetId, deleteWorkspacePreset } from './api-core.mjs'
 import { collectModelRefs } from '../../tools/lib/health.mjs'
+import { diffAssignments, loadConfig } from '../../tools/lib/config.mjs'
 import { detectSkills } from '../../tools/lib/skills.mjs'
 import { collectRuntimeFacts, detectHmrOf } from './runtime-inventory.mjs'
 import { getVersionInfo } from '../../tools/lib/version.mjs'
@@ -216,9 +218,17 @@ function persistenceAvailableOf(ctx) {
   }
 }
 
-/** 面板 state 响应统一挂 persistenceAvailable（state / rescan 同一形状）。 */
+/** 面板 state 响应统一挂 persistenceAvailable（state / rescan 同一形状）。
+ *  slim：工具面瘦身统计（total = 可用工具全集名数、main = 已保存配置下主 agent
+ *  有效 allow 计数），按磁盘已保存配置算——state 是序列化视图（blocks 普通对象 /
+ *  inventory 数组），slimStatsOf 两态通吃；无配置文件时 existing 为 null，按空
+ *  目标字段算（main = restrict.mjs 基准白名单长度）。 */
 function stateResponse(ctx, state) {
-  return { ...state, persistenceAvailable: persistenceAvailableOf(ctx) }
+  return {
+    ...state,
+    persistenceAvailable: persistenceAvailableOf(ctx),
+    slim: slimStatsOf(state, state.existing ?? {}),
+  }
 }
 
 // ── state 读取共享 helper（「采集运行时事实 → 重刷 → 读缓存 →〔按需〕序列化」）──
@@ -322,6 +332,9 @@ async function writeWorkspacePreset(ctx, res, { workspacePath, assignments, with
       }
     }
     try {
+      // 写盘前自动轮换备份（当前配置推入 bak-1；首次保存无「当前」则不备份），
+      // 与 apply / import / 回滚同一口径——工作区预设写盘同样是配置写路径。
+      rotateConfigBackups()
       const result = installAssignments(s, assignments, {
         dryRun: false,
         saveConfigOnWrite: true,
@@ -608,6 +621,14 @@ export async function apply(ctx) {
               }
             }
             try {
+              // diff 旧值先读：apply 的落盘会覆盖磁盘配置，改前这一读才拿得到
+              // 磁盘真实内容（preview 不落盘，先后等价，统一走改前口径）。生成
+              // 管线随后对同一文件做同样的 loadConfig 护栏，解析失败同样 422。
+              const diskAssignments = loadConfig(s.configFile, s.yamlMod)
+              // 写盘前自动轮换备份（当前配置推入 bak-1；首次保存无「当前」则不
+              // 备份），与 import / 工作区预设写盘 / 回滚同一口径。预览不落盘，
+              // 不轮换。
+              if (!dryRun) rotateConfigBackups()
               const result = installAssignments(s, body.assignments, {
                 dryRun,
                 saveConfigOnWrite: !dryRun,
@@ -639,6 +660,12 @@ export async function apply(ctx) {
                 // 结构化体检结果（tools/lib/health.mjs）：未挂载工具 / 零工具角色 /
                 // 未知模型 / 预设漂移 / 生成期告警。纯增量字段，客户端批次负责渲染。
                 warnings: result.warnings,
+                // 本次提交相对磁盘现配置的差分（tools/lib/config.mjs 的纯结构化
+                // 结果，零文案，客户端 i18n 渲染）与工具面瘦身统计（total = 可用
+                // 工具全集，main = 本次提交下主 agent 有效 allow 计数）。均为纯
+                // 增量字段。
+                diff: diffAssignments(diskAssignments, body.assignments),
+                slim: slimStatsOf(s, body.assignments),
               })
             } catch (err) {
               // 422 保持既有 { error } 形状；体检结果（如零工具角色的可读说明）
@@ -682,6 +709,35 @@ export async function apply(ctx) {
           applyInFlight = true
           try {
             json(res, 200, await importConfigContent(content))
+          } finally {
+            applyInFlight = false
+          }
+          return
+        }
+
+        if (route === 'config/backups' && req.method === 'GET') {
+          // 备份清单（新→旧）：{ file, mtimeMs, size }[]，无备份返回空数组。
+          // 纯读不写；file 恒为 basename，客户端回传它即够（还原路由只认配置
+          // 目录内的备份名）。
+          json(res, 200, { ok: true, backups: listConfigBackups() })
+          return
+        }
+
+        if (route === 'config/restore' && req.method === 'POST') {
+          // 回滚配置：{ file } 须精确匹配「配置文件名.bak-1/2/3」。与 apply /
+          // import 共用同一把 in-flight 闸（写盘路径防并发交错）。核心函数先
+          // loadConfig 验证备份可解析（坏备份 422 / 备份不存在 404，statusCode
+          // 由外层 catch 回 { error } 信封，不写盘），再把「当前配置」按同款
+          // 轮换推入备份链后拷贝备份为当前；mtime 变化令 state 缓存按既有对账
+          // 自动失效，无需手动清理。
+          const body = await readBody(req)
+          if (applyInFlight) {
+            json(res, 409, { error: '已有一次应用（apply）正在进行，请稍后重试' })
+            return
+          }
+          applyInFlight = true
+          try {
+            json(res, 200, await restoreConfigBackup(typeof body.file === 'string' ? body.file : ''))
           } finally {
             applyInFlight = false
           }

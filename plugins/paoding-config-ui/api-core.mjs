@@ -8,14 +8,15 @@
  */
 import os from 'node:os'
 import path from 'node:path'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { assignSlugs, collectState, generateAndInstall, presetIdOf } from '../../tools/install.mjs'
 import { autoAssignments, baseAssignments } from '../../tools/lib/alloc.mjs'
+import { computeRestrictAllow } from '../../tools/lib/compose.mjs'
 import { loadConfig, normalizeConfig, normalizeTargetFields, saveConfig, serializeConfig, stripNonTargetKeys } from '../../tools/lib/config.mjs'
 import { parseYamlSubset, preprocessPatchText } from '../../tools/lib/yaml.mjs'
 import { captureWarnings, healthCheck } from '../../tools/lib/health.mjs'
-import { warn } from '../../tools/lib/util.mjs'
+import { ROLES, warn } from '../../tools/lib/util.mjs'
 import {
   backfillHomePatchRows,
   detectAgentRolesFlavor,
@@ -288,8 +289,176 @@ export async function importConfigContent(content) {
     error.statusCode = 422
     throw error
   }
+  // 写盘前自动轮换备份（当前配置推入 bak-1，旧 bak 依次后移；首次保存无
+  // 「当前」则不备份）——apply / 工作区预设写盘 / 回滚同一口径，见下方备份节。
+  rotateConfigBackups()
   saveConfig(resolveConfigFile(), normalizeConfig(data))
   return { ok: true }
+}
+
+// ── 配置自动备份与回滚（配置文件写路径的护栏，页头「更多」菜单服务端核心）──────
+//
+// 语义：凡面板写配置（apply / import / 工作区预设写盘 / 回滚本身）在落盘前先把
+// 当前配置推入备份链：当前 → bak-1（最新），旧 bak 依次后移（bak-1→bak-2、
+// bak-2→bak-3），bak-3（最老）淘汰。首次保存（配置文件尚不存在）没有「当前」
+// 可备份，不产生任何 bak 文件。备份名 = 配置文件名 + .bak-N（默认配置即
+// dsh-paoding.config.yml.bak-1/2/3），自定义配置名（DSH_PAODING_CONFIG）随之
+// 派生，清单与还原按同一派生口径校验。
+
+/** 备份名校验用正则：配置文件名转义后拼 .bak-N 后缀（N = 1..3 层）。 */
+function configBackupRe() {
+  const stem = path.basename(resolveConfigFile()).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^${stem}\\.bak-([123])$`)
+}
+
+/** 第 n 层备份的绝对路径（与配置文件同目录，文件名恒为单层 basename）。 */
+function configBackupPath(n) {
+  return `${resolveConfigFile()}.bak-${n}`
+}
+
+/**
+ * 备份轮换：把当前配置推入 bak-1，旧 bak 依次后移，bak-3 淘汰。当前配置不
+ * 存在（首次保存）时不写任何文件、返回 false；轮换完成返回 true。当前文件
+ * 用拷贝而非改名进 bak-1——原地保留，读侧（生成管线 / 回滚校验）随时可读；
+ * 后移用改名，同一目录内 rename 是原子操作，中断也不产生半个备份。
+ */
+export function rotateConfigBackups() {
+  const config = resolveConfigFile()
+  if (!existsSync(config)) return false
+  rmSync(configBackupPath(3), { force: true }) // 最老一层直接淘汰（不存在也无妨）
+  for (const [from, to] of [[2, 3], [1, 2]]) {
+    try {
+      renameSync(configBackupPath(from), configBackupPath(to))
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err // 该层尚无备份：正常，跳过
+    }
+  }
+  copyFileSync(config, configBackupPath(1))
+  return true
+}
+
+/**
+ * 备份清单（GET config/backups）：{ file, mtimeMs, size }[]，按新→旧排序
+ *（mtime 降序，同刻并列时层号小者在前）。只读不写；配置目录读不了 / 无备份
+ * 一律返回空数组，绝不让清单页 5xx。file 恒为 basename（还原路由只认配置
+ * 目录内的备份名，回传它即可防路径穿越）。
+ */
+export function listConfigBackups() {
+  let names = []
+  try {
+    names = readdirSync(path.dirname(resolveConfigFile()))
+  } catch {
+    return [] // 目录不存在 / 不可读 = 无备份可言
+  }
+  const backupRe = configBackupRe()
+  return names
+    .map((name) => {
+      const m = backupRe.exec(name)
+      if (!m) return null
+      try {
+        const st = statSync(path.join(path.dirname(resolveConfigFile()), name))
+        return { file: name, mtimeMs: st.mtimeMs, size: st.size, layer: Number(m[1]) }
+      } catch {
+        return null // 列举途中被删 / stat 失败：跳过该条
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || a.layer - b.layer)
+    .map(({ file, mtimeMs, size }) => ({ file, mtimeMs, size }))
+}
+
+/**
+ * 回滚配置（POST config/restore）：file 须精确匹配「配置文件名.bak-1/2/3」，
+ * 显式拒任何含分隔符 / 上跳段的名字（防路径穿越）；通过后先按 loadConfig 同一
+ * 口径验证备份可解析（坏备份拒绝覆盖，422；备份不存在 404——statusCode 由
+ * 路由层外层 catch 按其回状态码 + { error } 信封），再把「当前配置」按同款
+ * 轮换推入备份链（滚错了还能再滚回来），最后拷贝备份为当前。落盘即改 mtime，
+ * state 缓存靠既有对账自动失效，无需手动清理。
+ */
+export async function restoreConfigBackup(file) {
+  const name = typeof file === 'string' ? file : ''
+  if (name === '' || name.includes('/') || name.includes('..') || !configBackupRe().test(name)) {
+    const error = new Error(`备份文件名不合法（须为 ${path.basename(resolveConfigFile())}.bak-1/2/3）：${name === '' ? '（空）' : name}`)
+    error.statusCode = 422
+    throw error
+  }
+  const backupPath = path.join(path.dirname(resolveConfigFile()), name)
+  // 宿主 yaml 模块从 state 顺路取（collectState 已探测好）；state 通道异常时
+  // 退化为仅内置解析器校验，与 importConfigContent 同款降级——宁严勿漏。
+  let yamlMod = null
+  try {
+    yamlMod = (await getState())?.yamlMod ?? null
+  } catch { /* 校验口径降级，见上 */ }
+  let parsed = null
+  try {
+    parsed = loadConfig(backupPath, yamlMod)
+  } catch (err) {
+    const error = new Error(`备份无法解析为合法配置，已拒绝回滚：${err.message}`)
+    error.statusCode = 422
+    throw error
+  }
+  if (parsed === null) {
+    const error = new Error(`备份不存在：${name}`)
+    error.statusCode = 404
+    throw error
+  }
+  // 先把选定备份的内容读进内存再轮换：轮换会把整条备份链后移一层，固定层号
+  // （bak-N）路径下的内容随之改变——后读的话落到「当前」的就不是用户选的
+  // 那份快照了。配置文件很小，整读零成本，顺序必须遵守。
+  const content = readFileSync(backupPath)
+  // 回滚本身也是一次写配置：先把「当前」按同款轮换推入备份链（滚错了还能
+  // 再滚回来），再落选定快照。mtime 变化令 state 缓存按既有对账自动失效，
+  // 无需手动清理。
+  rotateConfigBackups()
+  writeFileSync(resolveConfigFile(), content, { mode: 0o600 }) // 权限口径与 saveConfig 一致
+  return { ok: true }
+}
+
+// ── 工具面瘦身统计（slim：state / preview / apply 响应的派生字段）─────────────
+
+/**
+ * 主 agent 工具面瘦身统计，口径与生成管线严格同源（composeGenerated）：
+ *   - total = 可用工具全集 = presetUniverse ∪ inventory 的名字数。presetUniverse
+ *     = restrict.mjs 主 agent 白名单（restrictBase）∪ 源 preset 各角色 allow
+ *     自带面；inventory = 检测到的可用 MCP / 插件工具名。这正是单 agent 模式下
+ *     主 agent 名下可能挂着的一切工具（computeRestrictAllow / usableWith 判定
+ *     用的同一候选全集），即「不拆角色时的完整工具面」；
+ *   - main = 当前 assignments 下主 agent 的有效 allow 计数：computeRestrictAllow
+ *    （base ∪ extra ∪ 自定义角色名 − main_agent_remove − roles_remove，过可用
+ *     性过滤）的结果长度；结果与 base 全同时该函数返回 null，按 base 计数。
+ * state 收原始通道（blocks 为 Map、inventory 为 Set）与序列化视图（blocks 为
+ * 普通对象、inventory 为数组）两态，一律只读。assignments 先剥 profile /
+ * workspaces、过 normalizeTargetFields 再算——手写未规范化的提交也得到与
+ * 落盘一致的口径。
+ */
+export function slimStatsOf(state, assignments) {
+  const restrictBase = Array.isArray(state?.restrictBase) ? state.restrictBase : []
+  // blocks 两种形态：原始 state 的 Map 值带 names 数组；序列化视图的值即名字数组
+  const blockValues = state?.blocks instanceof Map
+    ? [...state.blocks.values()]
+    : (state?.blocks && typeof state.blocks === 'object' ? Object.values(state.blocks) : [])
+  const presetUniverse = new Set(restrictBase)
+  for (const block of blockValues) {
+    for (const name of Array.isArray(block?.names) ? block.names : Array.isArray(block) ? block : []) {
+      presetUniverse.add(name)
+    }
+  }
+  const inventory = state?.inventory instanceof Set
+    ? state.inventory
+    : new Set(Array.isArray(state?.inventory) ? state.inventory : [])
+  const total = new Set([...presetUniverse, ...inventory]).size
+  const target = normalizeTargetFields(stripNonTargetKeys(assignments ?? {}))
+  const customToolNames = Object.keys(target.roles).filter((n) => !ROLES.includes(n))
+  const allow = computeRestrictAllow(
+    restrictBase,
+    presetUniverse,
+    inventory,
+    target.main_agent_extra,
+    target.main_agent_remove,
+    customToolNames,
+    target.roles_remove,
+  ) ?? restrictBase
+  return { total, main: allow.length }
 }
 
 // ── 预设 CRUD（presets 路由族的服务端核心）──────────────────────────────────
