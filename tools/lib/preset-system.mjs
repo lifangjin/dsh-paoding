@@ -15,23 +15,39 @@
  *      一条声明行的 config.plugins（restrict 行与 delegation-labels 行的本地
  *      name 换成对应 .mjs 的绝对 file: URL——声明轨没有「相对 preset 目录」
  *      语义，必须绝对化）；
- *   3) home patch 托管块手术 upsertHomePatchRows / stripHomePatchRows /
- *      readHomePatchRows：对 $DSH_HOME/cordis.patch.yml 的 MANAGED 标记块做
- *      行级增删查，块外用户内容一字节不动；托管块损坏（缺结束标记）时拒绝
- *      写盘并明确报错，与仓库「配置不可信时拒绝落盘」口径一致。
- *   4) 轨道迁移对账 backfillHomePatchRows / listOrchestratorPresetIds /
+ *   3) patch 托管块手术 upsertHomePatchRows / stripHomePatchRows /
+ *      readHomePatchRows：对 patch 文件的 MANAGED 标记块做行级增删查，块外用户
+ *      内容一字节不动；托管块损坏（缺结束标记）时拒绝写盘并明确报错，与仓库
+ *      「配置不可信时拒绝落盘」口径一致。层感知：patchFilePath 按 opts
+ *      { layer, profileName } 把写盘落到 home 层（$DSH_HOME/cordis.patch.yml）或
+ *      profile 层（$DSH_HOME/profiles/<name>/cordis.patch.yml），缺省 home（全部
+ *      既有调用点零改动）；层判定见 isCompatShellLike / resolvePatchTargetLayer。
+ *      每次写盘后整文件 YAML 校验（validatePatchYaml），解析失败即回滚为写入前
+ *      字节并报错——Android compat 壳会重置/压平 home 层 patch（dsh-maoying#1
+ *      同款问题），坏文件一旦落盘宿主会在任何插件代码运行前死掉，宁可不写。
+ *   4) 层判定与迁移 isCompatShellLike / resolvePatchTargetLayer /
+ *      reconcilePatchLayers：platform=android 或 dshHome 形如 /data/(user|data)/*
+ *      的容器壳 → 默认 profile 层（config patch_layer 键 / DSH_PAODING_PATCH_LAYER
+ *      环境变量可显式钉死）；目标层写成功后 reconcile 撤掉另一层的托管块，
+ *      声明行永不跨层重复。
+ *   5) 可疑行探测 findSuspectPresetRows：托管块外扫「- id: <显示名 (英文名)>」
+ *      形状的坏行（id 含空白或非 ASCII——preset/package id 不会这样），WARN 级
+ *      供 doctor / 启动自愈提示，绝不自动删除。
+ *   6) 轨道迁移对账 backfillHomePatchRows / listOrchestratorPresetIds /
  *      parseGeneratorMarker / formatGeneratorMarker：宿主只升 dsh 不动插件时
  *      （标记版本一致、轨道翻转或 workflow worker 形态换代——升级最常见路径），
  *      按磁盘产物补写缺失声明行而不整盘重生成；生成器标记记「版本 + 轨道 +
  *      worker 形态」三行，任一不符即触发自愈（worker 形态换代必须整盘重生成，
  *      见 detectHostVersionTriple / isPtcWorkerHost）。
- * 零运行时依赖（node:child_process / node:fs / node:path / node:url）；被 state 引用。
+ * 零运行时依赖（node:child_process / node:fs / node:path / node:url；yaml 校验
+ * 经兄弟模块 yaml.mjs 的惰性 loadYaml）；被 state 引用。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { warn } from './util.mjs'
+import { warn, PROFILE_NAME_RE } from './util.mjs'
+import { loadYaml, parseYamlSubset, preprocessPatchText } from './yaml.mjs'
 
 /** 托管块起始标记：其后到结束标记之间是本工具自动生成的声明行，用户勿改。 */
 export const MANAGED_BEGIN = '# --- dsh-paoding presets (auto-generated; do not edit) ---'
@@ -290,16 +306,105 @@ export function buildPresetRowText({ presetId, name = null, description = null, 
 // buildPresetRowText 的 4 空格基准缩进，作 insert 列表元素。块外用户内容除
 // strip 的空行收敛外一字节不动。
 
-/** home 层 patch 文件路径。 */
-function patchFilePath(dshHome) {
-  return path.join(dshHome, 'cordis.patch.yml')
+// ── patch 层判定与路径（home / profile 双层）────────────────────────────────
+//
+// Android compat 壳（DeepSeekHarnessCompat）会在每次 boot / repair 时把 home 层
+// $DSH_HOME/cordis.patch.yml 重置回出厂种子，还会把声明行的显示元数据压平成
+// 「- id: 显示名 (英文名)」+ 8 空格键的坏行——宿主在任何插件代码运行前就死于
+// YAML 解析（dsh-maoying#1 同款问题）。对策：这类环境默认把托管块写进 profile
+// 层 $DSH_HOME/profiles/<name>/cordis.patch.yml（壳不重置它，且启动自愈每轮
+// 重写可自愈），并撤掉 home 层的遗留块。
+
+/**
+ * 兼容壳判定（可注入便于测试）：platform === 'android'，或 dshHomePath 落在
+ * Android 容器路径 ^/data/(user|data)/ 下即 true——两者都是 compat 壳会重写
+ * home 层 patch 的环境特征。
+ */
+export function isCompatShellLike({ platform = process.platform, dshHomePath = null } = {}) {
+  if (platform === 'android') return true
+  return typeof dshHomePath === 'string' && /^\/data\/(user|data)\//.test(dshHomePath)
 }
 
-/** 读 home patch 为行数组；文件缺失当空文件。行尾换行符风格随原文件保留。 */
-function readPatchLines(dshHome) {
+/** 从 argv 解析显式 profile 名：`--profile <name>` 或 `--profile=<name>`。 */
+function profileNameFromArgv(argv) {
+  const args = Array.isArray(argv) ? argv : []
+  for (let i = 0; i < args.length; i++) {
+    const arg = String(args[i])
+    if (arg === '--profile') {
+      const next = args[i + 1]
+      return typeof next === 'string' && next.trim() !== '' ? next.trim() : null
+    }
+    const m = /^--profile=(.+)$/.exec(arg)
+    if (m) return m[1].trim()
+  }
+  return null
+}
+
+/** 'home' | 'profile' 之外的值一律 null（调用方 warn 后回落）。 */
+const normalizeLayerValue = (value) => (value === 'home' || value === 'profile' ? value : null)
+
+/**
+ * 解析声明行的目标 patch 层。优先级：
+ *   配置键 patch_layer（'home' | 'profile'）> 环境变量 DSH_PAODING_PATCH_LAYER
+ *   （测试/诊断钩子）> isCompatShellLike（android / 容器路径 → 'profile'）>
+ *   缺省 'home'。非法值 warn 后按未设置处理。
+ * profileName：argv `--profile` > 配置键 profile > 'web'；拼进路径前按
+ * PROFILE_NAME_RE 白名单校验（同名口径见 util.mjs），非法回落 'web'——
+ * profile 名要拼进 patch 文件路径，不能放过路径穿越形状。
+ * 返回 { layer, profileName, patchPath, legacyPatchPath }；legacyPatchPath 是
+ * 另一层的路径（同 profileName 基准），供 reconcilePatchLayers 迁移对账。
+ */
+export function resolvePatchTargetLayer(dshHome, { config = null, argv = process.argv, platform = process.platform } = {}) {
+  let layer = normalizeLayerValue(config?.patch_layer)
+  if (layer === null && config?.patch_layer !== undefined && config?.patch_layer !== null) {
+    warn(`patch_layer: 非法值已忽略（${JSON.stringify(config.patch_layer)}），按自动判定（可选: 'home' / 'profile'）`)
+  }
+  if (layer === null) {
+    const fromEnv = normalizeLayerValue(process.env.DSH_PAODING_PATCH_LAYER)
+    if (fromEnv === null && process.env.DSH_PAODING_PATCH_LAYER !== undefined && process.env.DSH_PAODING_PATCH_LAYER !== '') {
+      warn(`DSH_PAODING_PATCH_LAYER: 非法值已忽略（${JSON.stringify(process.env.DSH_PAODING_PATCH_LAYER)}），按自动判定（可选: 'home' / 'profile'）`)
+    }
+    layer = fromEnv
+  }
+  if (layer === null) layer = isCompatShellLike({ platform, dshHomePath: dshHome }) ? 'profile' : 'home'
+
+  let profileName = profileNameFromArgv(argv)
+  if (profileName === null && typeof config?.profile === 'string' && config.profile.trim() !== '') profileName = config.profile.trim()
+  if (profileName === null) profileName = 'web'
+  if (!PROFILE_NAME_RE.test(profileName)) {
+    warn(`profile 名 ${JSON.stringify(profileName)} 不合法（首字符字母数字，其余 [A-Za-z0-9._-]），patch 层回落 'web'`)
+    profileName = 'web'
+  }
+  return {
+    layer,
+    profileName,
+    patchPath: patchFilePath(dshHome, { layer, profileName }),
+    legacyPatchPath: patchFilePath(dshHome, { layer: layer === 'profile' ? 'home' : 'profile', profileName }),
+  }
+}
+
+/** 手术 opts { layer?, profileName? } → 规范形状（缺省 home 层，全部旧调用点零改动）。 */
+function patchOptsOf(opts = {}) {
+  const layer = opts?.layer === 'profile' ? 'profile' : 'home'
+  return { layer, profileName: typeof opts?.profileName === 'string' && opts.profileName !== '' ? opts.profileName : 'web' }
+}
+
+/**
+ * patch 文件路径：home 层 $DSH_HOME/cordis.patch.yml；profile 层
+ * $DSH_HOME/profiles/<profileName>/cordis.patch.yml（父目录在写盘时创建）。
+ */
+function patchFilePath(dshHome, opts = {}) {
+  const { layer, profileName } = patchOptsOf(opts)
+  return layer === 'profile'
+    ? path.join(dshHome, 'profiles', profileName, 'cordis.patch.yml')
+    : path.join(dshHome, 'cordis.patch.yml')
+}
+
+/** 读 patch 为行数组；文件缺失当空文件。行尾换行符风格随原文件保留。 */
+function readPatchLines(dshHome, opts = {}) {
   let text = ''
   try {
-    text = readFileSync(patchFilePath(dshHome), 'utf8')
+    text = readFileSync(patchFilePath(dshHome, opts), 'utf8')
   } catch (err) {
     if (err?.code !== 'ENOENT') throw err
     return { lines: [], eol: '\n' }
@@ -308,9 +413,116 @@ function readPatchLines(dshHome) {
   return { lines: text.split(/\r?\n/), eol: text.includes('\r\n') ? '\r\n' : '\n' }
 }
 
-function writePatchLines(dshHome, lines, eol) {
-  mkdirSync(dshHome, { recursive: true })
-  writeFileSync(patchFilePath(dshHome), lines.join(eol), 'utf8')
+function writePatchLines(dshHome, opts, lines, eol) {
+  const target = patchFilePath(dshHome, opts)
+  mkdirSync(path.dirname(target), { recursive: true })
+  writeFileSync(target, lines.join(eol), 'utf8')
+}
+
+/**
+ * 整文件 YAML 校验（写盘后的回滚判据，doctor 整文件解析检查同源复用）：
+ * 宿主的 yaml 包（$DSH_HOME/node_modules，经 loadYaml 惰性加载）可用时以它为
+ * 准——宿主用什么解析我们就用什么验证；!!js 表达式标签按 state.mjs 同款技巧
+ * 中和成 true（校验只关心结构合法性，不求值表达式）。yaml 包不可用时退回
+ * 内置 patch 子集解析器（lenient，挡不住坏缩进，仅兜 gross 损坏）。
+ * 返回 { ok: true } 或 { ok: false, message }（message 含解析器报的行号）。
+ */
+export function validatePatchYaml(dshHome, text) {
+  const yamlMod = loadYaml(dshHome)
+  if (yamlMod) {
+    try {
+      yamlMod.parse(String(text).replace(/!!js\s+[^\r\n]*/g, 'true'))
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, message: err?.message ?? String(err) }
+    }
+  }
+  try {
+    parseYamlSubset(preprocessPatchText(text))
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, message: err?.message ?? String(err) }
+  }
+}
+
+/**
+ * 写盘 + 整文件校验 + 失败回滚。写前记下原字节，写后把整文件过
+ * validatePatchYaml；解析失败即把原字节原样写回（写入前不存在则删掉残留），
+ * 再抛点名文件、解析错误（含行号）与两类可能原因的明确错误——坏文件绝不
+ * 留在盘上（compat 壳环境里宿主会在任何插件代码运行前死于解析）。
+ */
+function writePatchLinesValidated(dshHome, opts, lines, eol) {
+  const target = patchFilePath(dshHome, opts)
+  let before = null
+  let readError = null
+  try {
+    before = readFileSync(target, 'utf8')
+  } catch (err) {
+    if (err?.code !== 'ENOENT') readError = err
+  }
+  writePatchLines(dshHome, opts, lines, eol)
+  let verdict = { ok: false, message: '写入后文件不可读' }
+  if (readError === null) {
+    try {
+      verdict = validatePatchYaml(dshHome, readFileSync(target, 'utf8'))
+    } catch (err) {
+      verdict = { ok: false, message: err?.message ?? String(err) }
+    }
+  } else {
+    verdict = { ok: false, message: `写入前原文件已不可读（${readError.message}），拒绝覆盖写` }
+  }
+  if (verdict.ok) return
+  // 回滚为写入前的精确字节（写入前不存在 → 删除本次新建的残留）。
+  let restoreNote = '文件已回滚为写入前内容，一字节未变'
+  try {
+    if (before === null) rmSync(target, { force: true })
+    else writeFileSync(target, before, 'utf8')
+  } catch (restoreErr) {
+    restoreNote = `回滚失败（${restoreErr?.message ?? restoreErr}），请从备份/手改恢复后再试`
+  }
+  const lineHint = /line (\d+)/i.exec(verdict.message)
+  throw new Error(
+    `写入 ${target} 后 YAML 校验失败，${restoreNote}。解析错误${lineHint ? `（约第 ${lineHint[1]} 行）` : ''}: ` +
+      verdict.message.replace(/\s+/g, ' ').trim() +
+      '\n可能原因: (a) 文件在写入前已含坏块（compat 壳重写/手改）→ 运行 `dsh-paoding doctor` 检查并清理坏行；' +
+      '(b) paoding 自身产物缺陷 → 请报 issue（附该文件内容）',
+  )
+}
+
+/**
+ * 目标层写盘成功后对另一层做迁移对账：撤掉 legacy 层的整个托管块（只撤不补
+ * ——声明行永不跨层重复，复用 stripHomePatchRows 的整块摘除逻辑）。目标层为
+ * home 时对称撤 profile 层遗留块。返回是否实际撤过。
+ */
+export function reconcilePatchLayers(dshHome, opts = {}) {
+  const { layer, profileName } = patchOptsOf(opts)
+  return stripHomePatchRows(dshHome, null, { layer: layer === 'profile' ? 'home' : 'profile', profileName })
+}
+
+/**
+ * 托管块外扫可疑声明行（maoying 坏行形状，dsh-maoying#1）：`- id: <值>` 单行
+ * 且值含空白或非 ASCII 字符——preset / package id 永远是紧凑 ASCII（如
+ * `preset-orchestrator`），「- id: 内阁首辅 (Orchestrator)」这种是显示名被
+ * 压平进 id 位的表现。托管块内的行不算（自家声明行有 `- insert:` 包裹 + 4 空
+ * 格缩进 id，形状本就不同且在块内）；托管块损坏（只有起始标记）时按整文件块
+ * 外处理。返回 [{ lineNo, id }]（lineNo 1 起）。WARN 级探测，绝不自动删除。
+ */
+export function findSuspectPresetRows(text) {
+  const lines = String(text ?? '').split(/\r?\n/)
+  let outside = lines.map((_, i) => i)
+  try {
+    const span = findManagedSpan(lines)
+    if (span !== null) outside = outside.filter((i) => i < span.begin || i > span.end)
+  } catch {
+    /* 托管块损坏：整文件按块外处理 */
+  }
+  const suspects = []
+  for (const i of outside) {
+    const m = /^[ \t]*-[ \t]+id:[ \t]*(\S.*\S)[ \t]*$/.exec(lines[i])
+    if (!m) continue
+    if (/\s/.test(m[1]) || /[^\x00-\x7F]/.test(m[1])) suspects.push({ lineNo: i + 1, id: m[1] })
+  }
+  return suspects
 }
 
 /**
@@ -388,11 +600,13 @@ function collapseBlankRuns(lines) {
 }
 
 /**
- * 把若干声明行（buildPresetRowText 产物）行级 upsert 进 home patch 托管块。
+ * 把若干声明行（buildPresetRowText 产物）行级 upsert 进 patch 托管块。
  * 托管块不存在则文末新建（非空文件先补尾换行、块前空一行）；已存在则块内按
  * rowId 替换 / 追加，块外用户内容一字节不动。托管块损坏时 throw（不写盘）。
+ * 尾参 opts = { layer?, profileName? }（缺省 home 层，旧调用点零改动）；写盘
+ * 后整文件校验、失败回滚（见 writePatchLinesValidated）。
  */
-export function upsertHomePatchRows(dshHome, rowTexts) {
+export function upsertHomePatchRows(dshHome, rowTexts, opts = {}) {
   const rows = (Array.isArray(rowTexts) ? rowTexts : [])
     .filter((t) => typeof t === 'string' && t.trim() !== '')
   if (rows.length === 0) return
@@ -407,7 +621,7 @@ export function upsertHomePatchRows(dshHome, rowTexts) {
   // 同 rowId 传多条时后者生效（Map 去重，保证替换语义而非重复追加）
   const wantedById = new Map(wanted.map((w) => [w.rowId, w]))
 
-  const { lines, eol } = readPatchLines(dshHome)
+  const { lines, eol } = readPatchLines(dshHome, opts)
   const span = findManagedSpan(lines) // 损坏块 throw，直接中止（未写任何盘）
   if (span !== null) {
     const segments = parseRowSegments(lines.slice(span.begin + 1, span.end))
@@ -420,7 +634,7 @@ export function upsertHomePatchRows(dshHome, rowTexts) {
       if (!segments.some((s) => s.rowId === w.rowId)) merged.push(...w.lines) // 新行追加到块尾
     }
     const next = [...lines.slice(0, span.begin), MANAGED_BEGIN, ...merged, MANAGED_END, ...lines.slice(span.end + 1)]
-    writePatchLines(dshHome, next, eol)
+    writePatchLinesValidated(dshHome, opts, next, eol)
     return
   }
   // 无托管块：文末新建。非空文件先补尾换行（若缺）。块前空一行不再单独推：
@@ -432,23 +646,24 @@ export function upsertHomePatchRows(dshHome, rowTexts) {
   out.push(MANAGED_BEGIN)
   for (const w of wanted) out.push(...w.lines)
   out.push(MANAGED_END, '')
-  writePatchLines(dshHome, out, eol)
+  writePatchLinesValidated(dshHome, opts, out, eol)
 }
 
 /**
- * 从 home patch 托管块撤掉指定 rowId 的声明行段；rowIdsOrAll 传 null 删整块
+ * 从 patch 托管块撤掉指定 rowId 的声明行段；rowIdsOrAll 传 null 删整块
  * （含起止标记与块前自加的空行分隔，用户内容回到插入前的字节形态）。
  * 块不存在 / 指定行都不在场返回 false（未写盘）；托管块损坏时 warn 后返回
  * false（撤行是锦上添花的自愈路径，不值得为此中断安装，修复由 upsert 的
- * 明确报错引导）。
+ * 明确报错引导）。尾参 opts 同 upsertHomePatchRows；写盘同样过校验回滚。
  */
-export function stripHomePatchRows(dshHome, rowIdsOrAll = null) {
+export function stripHomePatchRows(dshHome, rowIdsOrAll = null, opts = {}) {
+  const target = patchFilePath(dshHome, opts)
   let lines
   let eol
   try {
-    ({ lines, eol } = readPatchLines(dshHome))
+    ({ lines, eol } = readPatchLines(dshHome, opts))
   } catch (err) {
-    warn(`cordis.patch.yml 读取失败，声明行撤除跳过: ${err?.message ?? err}`)
+    warn(`${target} 读取失败，声明行撤除跳过: ${err?.message ?? err}`)
     return false
   }
   let span = null
@@ -474,7 +689,7 @@ export function stripHomePatchRows(dshHome, rowIdsOrAll = null) {
     const next = [...lines.slice(0, start), ...lines.slice(span.end + 1)]
     // 文件撤空（只剩空行）就落空文件，不留一撮换行尾巴
     const empty = next.every((l) => l.trim() === '')
-    writePatchLines(dshHome, empty ? [] : collapseBlankRuns(next), eol)
+    writePatchLinesValidated(dshHome, opts, empty ? [] : collapseBlankRuns(next), eol)
     return true
   }
   // 块内还有其余 preset 的行：只摘指定段，标记与块结构保留
@@ -484,19 +699,20 @@ export function stripHomePatchRows(dshHome, rowIdsOrAll = null) {
     if (!removeIds.has(seg.rowId)) merged.push(...trimTrailingBlankLines(seg.lines))
   }
   const next = [...lines.slice(0, span.begin), MANAGED_BEGIN, ...merged, MANAGED_END, ...lines.slice(span.end + 1)]
-  writePatchLines(dshHome, collapseBlankRuns(next), eol)
+  writePatchLinesValidated(dshHome, opts, collapseBlankRuns(next), eol)
   return true
 }
 
 /**
- * 读 home patch 托管块里现有的声明行 [{ rowId, presetId }]（presetId 取自声明
+ * 读 patch 托管块里现有的声明行 [{ rowId, presetId }]（presetId 取自声明
  * 行 config 的 id: 值，8 空格缩进；解析不出为 null）。文件缺失 / 无托管块 /
  * 托管块损坏一律返回空数组——调用方只拿它做「块在不在」的判断。
+ * 尾参 opts 同 upsertHomePatchRows（layer=profile 时读 profile 层）。
  */
-export function readHomePatchRows(dshHome) {
+export function readHomePatchRows(dshHome, opts = {}) {
   let lines
   try {
-    ({ lines } = readPatchLines(dshHome))
+    ({ lines } = readPatchLines(dshHome, opts))
   } catch {
     return []
   }
@@ -600,7 +816,7 @@ export function detectAgentRolesFlavor(agentYmlText) {
 }
 
 /**
- * 轨道迁移对账：把 $DSH_HOME/cordis.patch.yml MANAGED 块里缺失的编排类 preset
+ * 轨道迁移对账：把目标层 patch 文件 MANAGED 块里缺失的编排类 preset
  * 声明行按磁盘产物补写回来。只补「行缺失」：行在则零写盘（内容对账是
  * ensurePresetInstalled 的整盘重生成路径，不在这里做）。
  *
@@ -609,10 +825,10 @@ export function detectAgentRolesFlavor(agentYmlText) {
  * 0.2.1 而磁盘还是内联形状——补出去的声明行会让 0.2.1 宿主挂编排 preset 的
  * 新建会话直接被 tool-subagent 守卫拒绝。此时跳过该 preset 并 warn（可整盘
  * 重生成修复），绝不按旧产物写行；反方向（宿主降级、磁盘已是新形状）同理。
- * 守卫经 DSH_PAODING_FAKE_HOST_VERSION 可测。
+ * 守卫经 DSH_PAODING_FAKE_HOST_VERSION 可测。尾参 opts 同 upsertHomePatchRows。
  */
-export function backfillHomePatchRows(dshHome, presetIds) {
-  const rowsOnDisk = readHomePatchRows(dshHome)
+export function backfillHomePatchRows(dshHome, presetIds, opts = {}) {
+  const rowsOnDisk = readHomePatchRows(dshHome, opts)
   const wanted = new Set((Array.isArray(presetIds) ? presetIds : []).filter((id) => ORCHESTRATOR_PRESET_ID_RE.test(id)))
   const hostRolesFlavor = presetRolesFlavorOf(detectHostVersionTriple())
   const rows = []
@@ -657,10 +873,10 @@ export function backfillHomePatchRows(dshHome, presetIds) {
       warn(`声明行补写跳过 ${presetId}（产物不全，可整盘重生成修复）: ${err?.message ?? err}`)
     }
   }
-  if (rows.length > 0) upsertHomePatchRows(dshHome, rows)
+  if (rows.length > 0) upsertHomePatchRows(dshHome, rows, opts)
   // 反向对账：托管块里有行、磁盘上已无对应目录的（用户手删目录等），行同步撤下
   const orphanRowIds = rowsOnDisk.filter((r) => r.presetId !== null && !wanted.has(r.presetId)).map((r) => r.rowId)
-  if (orphanRowIds.length > 0) stripHomePatchRows(dshHome, orphanRowIds)
+  if (orphanRowIds.length > 0) stripHomePatchRows(dshHome, orphanRowIds, opts)
   return backfilled
 }
 

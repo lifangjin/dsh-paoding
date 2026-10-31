@@ -2,7 +2,8 @@
  * `dsh-paoding doctor` 的检查本体：只读体检，不动任何盘。与 health.mjs 的分工
  * ——healthCheck 管「这次保存/应用会怎样」（面向 preview / apply 响应与
  * --dry-run 报告的单次配置体检）；本模块管「这台机器装得正不正」（配置文件、
- * 预设安装轨道、托管声明行、孤儿工作区预设目录、版本标记、预设漂移六项环境
+ * 预设安装轨道、托管声明行（home + profile 层双层：托管块损坏 / 整文件解析 /
+ * 可疑坏行 / 行对账 / 层漂移）、孤儿工作区预设目录、版本标记、预设漂移六项环境
  * 对账），结果形状是人读导向的 { items: [{ status, label, detail }] }：
  *   status: 'ok' | 'warn' | 'error' | 'skip'（skip = 前置事实缺失，降级不炸——
  *   无 DSH_HOME / 无配置的干净机器上各项依此跳过）。
@@ -30,11 +31,14 @@ import {
   detectAgentRolesFlavor,
   detectHostVersionInfo,
   detectPresetSystem,
+  findSuspectPresetRows,
   isDeclarativeTriple,
   isPtcWorkerHost,
   parseGeneratorMarker,
   presetRolesFlavorOf,
   readHomePatchRows,
+  resolvePatchTargetLayer,
+  validatePatchYaml,
 } from './preset-system.mjs'
 import { healthCheck } from './health.mjs'
 
@@ -117,42 +121,98 @@ export async function runDoctor({ dshHome, configFile, profile = null, state = n
     }
   }
 
-  // ── 3. 声明行托管块（~/.dsh/cordis.patch.yml）────────────────────────────
-  // readHomePatchRows 对损坏块自捕返 []，读不出「损坏」——这里直接扫标记行补一道：
-  // 有 BEGIN 没 END = 托管块损坏，所有托管写盘都会被拒绝。
-  let patchText = null
-  try {
-    patchText = readFileSync(path.join(dshHome, 'cordis.patch.yml'), 'utf8')
-  } catch (err) {
-    if (err?.code === 'ENOENT') add('skip', '声明行托管块', 'cordis.patch.yml 不存在（尚无声明行；目录轨宿主也不需要）')
-    else add('skip', '声明行托管块', `cordis.patch.yml 读取失败（${err?.message ?? err}），跳过该项`)
-  }
-  if (patchText !== null) {
+  // ── 3. 声明行托管块（home + 目标 profile 层 patch 双层对账）───────────────
+  // 层判定与写盘侧同一条链（resolvePatchTargetLayer：config 可用时按
+  // patch_layer / profile 键，否则按环境自动——compat 壳 → profile 层）。
+  // 每层四查：托管块损坏（error，既有口径）→ 整文件 YAML 解析（error：compat
+  // 壳压平的坏行会让宿主在任何插件代码运行前死掉，dsh-maoying#1）→ 可疑坏行
+  // （warn，只点名行号不删）→ 行对账（目录轨残留 / 孤儿行，既有口径）。最后
+  // 层漂移：托管块只落在非目标层 → warn（下次自愈 / 保存会写目标层并撤遗留）。
+  const layerTarget = resolvePatchTargetLayer(dshHome, { config })
+  const layerEntries = [
+    { layer: 'home', profileName: null, patchFile: path.join(dshHome, 'cordis.patch.yml') },
+    { layer: 'profile', profileName: layerTarget.profileName, patchFile: layerTarget.patchPath },
+  ]
+  const seenPatchFiles = new Set()
+  let blockLayerSeen = null
+  for (const entry of layerEntries) {
+    if (seenPatchFiles.has(entry.patchFile)) continue // 目标 profile 恰为 'web' 时与 home 同文件，不双报
+    seenPatchFiles.add(entry.patchFile)
+    let patchText = null
+    try {
+      patchText = readFileSync(entry.patchFile, 'utf8')
+    } catch (err) {
+      // home 层缺失维持既有 skip 口径（干净机器各项依此跳过）；profile 层缺失
+      // 是常态（非 compat 壳 / 从未迁移过），静默。
+      if (entry.layer === 'home' && err?.code === 'ENOENT') {
+        add('skip', '声明行托管块', 'cordis.patch.yml 不存在（尚无声明行；目录轨宿主也不需要）')
+      } else if (err?.code !== 'ENOENT') {
+        add('skip', '声明行托管块', `${entry.patchFile} 读取失败（${err?.message ?? err}），跳过该层`)
+      }
+      continue
+    }
+    const layerName = entry.layer === 'home' ? '' : `（profile 层 ${entry.patchFile}）`
     const markers = managedMarkerLines(patchText)
     const hasBegin = markers.has(MANAGED_BEGIN)
     const hasEnd = markers.has(MANAGED_END)
+    if (hasBegin) blockLayerSeen = blockLayerSeen ?? entry.layer
     if (hasBegin && !hasEnd) {
-      add('error', '声明行托管块', '托管块损坏（只有起始标记没有结束标记）：补回结束标记或删除整块，否则面板保存 / 自愈都会拒绝写盘')
-    } else {
+      add('error', '声明行托管块', `${layerName}托管块损坏（只有起始标记没有结束标记）：补回结束标记或删除整块，否则面板保存 / 自愈都会拒绝写盘`)
+    }
+    // 整文件 YAML 解析（宿主 yaml 包口径，与写盘校验 validatePatchYaml 同源；
+    // yaml 包缺失退内置子集解析器——lenient，只兜 gross 损坏挡不住坏缩进）。
+    const parseVerdict = validatePatchYaml(dshHome, patchText)
+    if (!parseVerdict.ok) {
+      add(
+        'error',
+        'patch 文件解析',
+        `${entry.patchFile} 无法解析：${parseVerdict.message}——宿主启动会直接失败。请删除坏行或从 .bak-1 备份恢复` +
+          '（Android compat 壳重写 patch 压平坏行的特征参见 dsh-maoying#1）',
+      )
+    }
+    // 可疑坏行（maoying 坏行形状）：warn 点名行号，只诊断不删——删行可能踩
+    // 用户手写内容，修复交给人或清理侧的行级手术。
+    const suspects = findSuspectPresetRows(patchText)
+    if (suspects.length > 0) {
+      const lineNos = suspects.map((s) => s.lineNo).join('、')
+      add(
+        'warn',
+        '声明行可疑行',
+        `${entry.patchFile} 第 ${lineNos} 行检出可疑声明行（如 "- id: ${suspects[0].id}"——id 含空白或非 ASCII，` +
+          '形如 compat 壳把显示名压平进 id 位产生的坏行，宿主 YAML 解析会失败，参见 dsh-maoying#1）' +
+          '——请删除坏行或从 .bak-1 备份恢复后重试',
+      )
+    }
+    // 行对账（损坏块时 readHomePatchRows 自捕返空数组——损坏已单独报，这里
+    // 只在块结构完好时做逐行对账，避免损坏块上报出误导性的「无声明行」）。
+    if (!hasBegin || hasEnd) {
       let rows = []
       try {
-        rows = readHomePatchRows(dshHome)
+        rows = readHomePatchRows(dshHome, { layer: entry.layer, profileName: entry.profileName ?? 'web' })
       } catch {
         rows = []
       }
       if (rows.length === 0) {
-        add('ok', '声明行托管块', hasBegin ? '托管块存在但无声明行' : 'cordis.patch.yml 无托管块（目录轨宿主无需声明行）')
+        add('ok', '声明行托管块', hasBegin ? `${layerName}托管块存在但无声明行` : `${entry.layer === 'home' ? '' : `${entry.patchFile} `}无托管块（目录轨宿主无需声明行）`)
       } else {
         const orphans = rows.filter((row) => row.presetId && !existsSync(path.join(dshHome, '.agent-presets', row.presetId)))
         if (track === 'directory') {
-          add('warn', '声明行托管块', `检出 ${rows.length} 条声明行，但宿主是目录轨（≤ 0.1.6）——残留声明行会让 profile 启动失败，重启 DSH 触发自愈撤下`)
+          add('warn', '声明行托管块', `${layerName}检出 ${rows.length} 条声明行，但宿主是目录轨（≤ 0.1.6）——残留声明行会让 profile 启动失败，重启 DSH 触发自愈撤下`)
         } else if (orphans.length > 0) {
-          add('warn', '声明行托管块', `孤儿声明行（指向已删目录）：${orphans.map((o) => o.rowId).join('、')}——重启 DSH 自愈会撤下，或重新应用一次同步`)
+          add('warn', '声明行托管块', `${layerName}孤儿声明行（指向已删目录）：${orphans.map((o) => o.rowId).join('、')}——重启 DSH 自愈会撤下，或重新应用一次同步`)
         } else {
-          add('ok', '声明行托管块', `${rows.length} 条声明行均指向存在的预设目录`)
+          add('ok', '声明行托管块', `${layerName}${rows.length} 条声明行均指向存在的预设目录`)
         }
       }
     }
+  }
+  if (blockLayerSeen !== null && blockLayerSeen !== layerTarget.layer) {
+    add(
+      'warn',
+      'patch 层漂移',
+      `声明行托管块在 ${blockLayerSeen} 层，当前判定目标层是 ${layerTarget.layer}（${layerTarget.patchPath}）` +
+        '——下次自愈 / 保存会写目标层并撤下这层的遗留块（compat 壳迁移行为，参见 dsh-maoying#1）',
+    )
   }
 
   // ── 4. 孤儿工作区预设目录（.agent-presets/orchestrator-*）─────────────────

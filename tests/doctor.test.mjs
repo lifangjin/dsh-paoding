@@ -13,7 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -412,4 +412,63 @@ test('doctor --fix 非 TTY 加 --yes 照常执行（子进程全链路）', () =
   const run = spawnSync(process.execPath, [entry, 'doctor', '--fix', '--yes'], { env, encoding: 'utf8' })
   assert.equal(run.status, 0, `应执行成功，实际 ${run.status}：${run.stderr}`)
   assert.ok(!existsSync(path.join(dshHome, '.agent-presets', 'orchestrator-abc')), '--yes 应真正删除孤儿目录')
+})
+
+// ── patch 层感知扩展（dsh-maoying#1 compat 壳坏行 / 层漂移 / 整文件解析）──────
+
+/** 解析真实 yaml 包目录（校验/解析同宿主口径；解析不到返回 null）。 */
+function resolveYamlFixtureDir() {
+  if (process.env.DSH_PAODING_TEST_YAML_DIR) return process.env.DSH_PAODING_TEST_YAML_DIR
+  const homeYaml = path.join(os.homedir(), '.dsh', 'node_modules', 'yaml')
+  return existsSync(path.join(homeYaml, 'package.json')) ? homeYaml : null
+}
+
+/** maoying 坏行形状：显示名压平进 id 位 + 8 空格深缩进键（宿主 yaml 直接 fatal）。 */
+const MAOYING_BAD_ROWS = [
+  '- id: 内阁首辅 (Orchestrator)',
+  '        name: "内阁首辅"',
+  '        description: "按角色分工的编排架构"',
+].join('\n')
+
+test('声明行可疑行（块外坏行）：warn 点名行号，不算 error', async () => {
+  const { dshHome, configFile } = freshEnv('suspect-rows')
+  // 手摆坏行在托管块之外（compat 壳重写后把块整个替换成坏行的典型现场）。
+  writeFileSync(path.join(dshHome, 'cordis.patch.yml'), `${MAOYING_BAD_ROWS}\nroles: keep\n`)
+  const report = await runDoctor({ dshHome, configFile })
+  const item = findItem(report, '声明行可疑行', /可疑声明行/)
+  assert.ok(item, '应报可疑声明行')
+  assert.equal(item.status, 'warn')
+  assert.ok(item.detail.includes('第 1 行'), `应点名行号：${item.detail}`)
+  assert.ok(item.detail.includes('dsh-maoying#1'), '应提及 dsh-maoying#1 参照')
+  assert.equal(report.hasErrors, false, '可疑行本身是 warn，不升 error')
+})
+
+test('patch 文件不可解析（真实 yaml 口径）：error 级发现，hasErrors=true', async (t) => {
+  const yamlDir = resolveYamlFixtureDir()
+  if (!yamlDir) {
+    t.skip('需要真实 yaml 包（DSH_PAODING_TEST_YAML_DIR）')
+    return
+  }
+  const { dshHome, configFile } = freshEnv('bad-yaml')
+  cpSync(yamlDir, path.join(dshHome, 'node_modules', 'yaml'), { recursive: true, dereference: true })
+  writeFileSync(path.join(dshHome, 'cordis.patch.yml'), `${MAOYING_BAD_ROWS}\n`)
+  const report = await runDoctor({ dshHome, configFile })
+  const item = findItem(report, 'patch 文件解析', /无法解析/)
+  assert.ok(item, '整文件解析失败应单独报错')
+  assert.equal(item.status, 'error')
+  assert.ok(item.detail.includes('宿主启动会直接失败'), `应说明后果：${item.detail}`)
+  assert.equal(report.hasErrors, true)
+})
+
+test('层漂移：托管块在 home 层而判定目标层是 profile → warn', async () => {
+  const { dshHome, configFile } = freshEnv('layer-drift')
+  writeFileSync(configFile, 'patch_layer: profile\n', 'utf8')
+  // home 层留一块（迁移前的遗留现场）；profile 层目标文件不存在。
+  writeFileSync(path.join(dshHome, 'cordis.patch.yml'), `${MANAGED_BEGIN}\n  - insert: []\n${MANAGED_END}\n`)
+  const report = await runDoctor({ dshHome, configFile })
+  const item = findItem(report, 'patch 层漂移', /判定目标层是 profile/)
+  assert.ok(item, '块在非目标层应报层漂移')
+  assert.equal(item.status, 'warn')
+  assert.ok(item.detail.includes('home'), `应点名所在层：${item.detail}`)
+  assert.equal(report.hasErrors, false)
 })

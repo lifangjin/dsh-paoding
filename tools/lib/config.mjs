@@ -1,6 +1,7 @@
 /**
  * dsh-paoding.config.yml 键规范化与读写：main_agent_display_name /
- * roles.<toolName>.name /
+ * patch_layer（声明行落盘层 'home' | 'profile'，缺省自动判定，非法值 warn 回
+ * 未设置）/ roles.<toolName>.name /
  * roles.<toolName>.model / roles.<toolName>.provider（角色专用模型，生成层映射到
  * dsh-tool-subagent 的 agentOptions）/ roles.<toolName>.start_mode（角色启动方式，
  * 生成层把内置委派块的块级 provider 行改写为 fork，'fresh' | 'fork'）/
@@ -212,9 +213,24 @@ export function normalizeConfig(data) {
   }
   return {
     profile: typeof data.profile === 'string' && data.profile !== '' ? data.profile : null,
+    patch_layer: normalizePatchLayer(data.patch_layer),
     ...normalizeTargetFields(data),
     workspaces: normalizeWorkspaces(data.workspaces),
   }
+}
+
+/**
+ * 声明行落盘层（顶层键 patch_layer，仅 'home' | 'profile' 两个合法值）：缺省 /
+ * null = 按环境自动判定（Android compat 壳 / 容器路径走 profile 层，其余 home，
+ * 判定在 preset-system.resolvePatchTargetLayer）；非法值（类型或取值不对）warn
+ * 后当未设置——配置错了降级提醒而非中断加载，与 background_mode / start_mode
+ * 的非法值口径一致。normalize 后恒为 'home' | 'profile' | null。
+ */
+function normalizePatchLayer(value) {
+  if (value === null || value === undefined || value === '') return null
+  if (value === 'home' || value === 'profile') return value
+  warn(`patch_layer: 非法值已忽略（${JSON.stringify(value)}），按自动判定（可选: 'home' / 'profile'）`)
+  return null
 }
 
 /**
@@ -606,6 +622,12 @@ function writeWorkspaces(lines, workspaces) {
 export function serializeConfig(config) {
   const lines = ['# dsh-paoding（庖丁）安装配置 —— 可手编；改后在侧栏底部「庖丁配置」入口应用，或重跑 node tools/install.mjs --auto']
   lines.push(`profile: ${config.profile ?? 'web'}`)
+  // patch_layer 显式钉层才落盘（null/缺省 = 自动判定，输出与旧版逐字节一致）；
+  // 落盘它才能在 loadConfig → saveConfig 往返中保住用户手编的层钉（否则面板
+  // 一保存该键就被抹掉，层判定退回自动）。
+  if (config.patch_layer === 'home' || config.patch_layer === 'profile') {
+    lines.push(`patch_layer: ${config.patch_layer}`)
+  }
   writeTargetFields(lines, '', config)
   // workspaces 段可选：键缺失 / 空对象整段省略（不含 workspaces 的配置输出与
   // 旧版逐字节一致）。

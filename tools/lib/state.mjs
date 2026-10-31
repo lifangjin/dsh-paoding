@@ -5,7 +5,9 @@
  * saveConfig，支持按工作区落到 orchestrator-<slug> 独立 preset 目录并把条目
  * 并进配置 workspaces 段；配置读取失败 / 状态不可信时拒绝破坏性落盘，成功后
  * 回收孤儿工作区 preset；并按 presetSystem 双轨收尾——0.1.7+ 声明行轨把声明行
- * upsert 进 home patch 托管块，≤0.1.6 目录扫描轨撤掉残留声明块自愈）。
+ * upsert 进目标层 patch 托管块（层判定见 preset-system.resolvePatchTargetLayer：
+ * Android compat 壳 / patch_layer 钉层落 profile 层，写后 reconcile 撤 home 遗留块），
+ * ≤0.1.6 目录扫描轨撤掉残留声明块自愈）。
  * install.mjs 的公共导出（collectState / generateAndInstall）即来自本模块。
  * 依赖 util / yaml / config / host / skills / spans / compose / alloc /
  * workspaces / preset-system 与 node:fs / node:path / node:url；被 cli 与
@@ -54,6 +56,8 @@ import {
   presetRowId,
   readHomePatchRows,
   readPresetDirMeta,
+  reconcilePatchLayers,
+  resolvePatchTargetLayer,
   stripHomePatchRows,
   upsertHomePatchRows,
 } from './preset-system.mjs'
@@ -369,6 +373,12 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
     throw new Error(`现有配置 ${configFile} 读取失败，已中止（未做任何落盘）: ${err.message}`)
   }
 
+  // 声明行目标 patch 层解析一次（prev 配置在场：patch_layer / profile 键生效；
+  // argv 缺省取本进程——Android compat 壳环境自动落 profile 层，见
+  // preset-system.resolvePatchTargetLayer 的层判定链）。
+  const patchLayerTarget = resolvePatchTargetLayer(dshHome, { config: prev })
+  const patchOpts = { layer: patchLayerTarget.layer, profileName: patchLayerTarget.profileName }
+
   if (wsPath !== null) {
     // slug 取自磁盘配置的 workspaces 键集合 ∪ 本路径（prev 已在上方统一读取）：
     // 整组统一分配才能让同 basename 的冲突方都拿到稳定的 hash 后缀。
@@ -489,11 +499,13 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
       const next = wsPath === null
         ? {
             profile: effectiveProfile,
+            patch_layer: prev?.patch_layer ?? null,
             ...normalizeTargetFields(assignments),
             workspaces: prev?.workspaces ?? {},
           }
         : {
             profile: prev?.profile ?? effectiveProfile,
+            patch_layer: prev?.patch_layer ?? null,
             ...normalizeTargetFields(prev),
             workspaces: { ...(prev?.workspaces ?? {}), [wsPath]: normalizeTargetFields(assignments) },
           }
@@ -525,10 +537,10 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
         continue
       }
       if (presetSystem === 'declarative') {
-        // 声明行轨：目录回收了，home patch 托管块里的对应声明行同步撤下——
+        // 声明行轨：目录回收了，目标层 patch 托管块里的对应声明行同步撤下——
         // 目录与行必须同生同灭，否则 0.1.7 宿主会挂出一个指向已删目录的 preset。
         try {
-          stripHomePatchRows(dshHome, [presetRowId(name)])
+          stripHomePatchRows(dshHome, [presetRowId(name)], patchOpts)
         } catch (err) {
           warn(`孤儿 preset 的声明行撤除失败（${presetRowId(name)}）: ${err?.message ?? err}`)
         }
@@ -538,11 +550,13 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
 
   // ── 预设安装双轨收尾（wrote=true 才动；dry-run 零副作用）────────────────
   // declarative（0.1.7+）：目录扫描机制已删，必须把本 preset 以一条 `- insert:`
-  // 声明行写进 home patch 托管块才算安装完成（preset 元信息与写 preset.yml 同
+  // 声明行写进目标层 patch 托管块才算安装完成（preset 元信息与写 preset.yml 同
   // 源：显示名取 displayName ?? SRC preset.yml 的 name，description / order 取
    // SRC；restrict.mjs / delegation-labels.mjs / role-restrict.mjs 用绝对 file: URL——声明行没有
    // 「相对 preset 目录」语义；role-restrict URL 仅供 0.2.1+ AgentPreset 形态产物的角色面行消费）。
-  // directory（≤0.1.6）：上面落盘即完成；home patch 里若有残留托管声明块
+  // 目标层为 profile（compat 壳 / patch_layer 钉层）时，写成功后顺手撤掉 home
+  // 层的遗留托管块（reconcilePatchLayers）——声明行永不跨层重复。
+  // directory（≤0.1.6）：上面落盘即完成；目标层 patch 里若有残留托管声明块
   //（宿主刚从 0.1.7 降级等场景）整块撤下自愈——残留声明行会让 profile 启动失败。
   if (wrote) {
     if (presetSystem === 'declarative') {
@@ -558,10 +572,11 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
           delegationLabelsFileUrl: pathToFileURL(path.join(dstDir, 'delegation-labels.mjs')).href,
           roleRestrictFileUrl: pathToFileURL(path.join(dstDir, 'role-restrict.mjs')).href,
         }),
-      ])
-    } else if (readHomePatchRows(dshHome).length > 0) {
-      stripHomePatchRows(dshHome, null)
-      warn('cordis.patch.yml 检出 dsh-paoding 声明块，但当前宿主是目录扫描轨（DSH ≤ 0.1.6），已整块撤下（残留声明行会导致 profile 启动失败）')
+      ], patchOpts)
+      if (patchOpts.layer === 'profile') reconcilePatchLayers(dshHome, patchOpts)
+    } else if (readHomePatchRows(dshHome, patchOpts).length > 0) {
+      stripHomePatchRows(dshHome, null, patchOpts)
+      warn(`${patchLayerTarget.patchPath} 检出 dsh-paoding 声明块，但当前宿主是目录扫描轨（DSH ≤ 0.1.6），已整块撤下（残留声明行会导致 profile 启动失败）`)
     }
   }
 

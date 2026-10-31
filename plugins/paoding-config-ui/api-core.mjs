@@ -14,7 +14,7 @@ import { assignSlugs, collectState, generateAndInstall, presetIdOf } from '../..
 import { autoAssignments, baseAssignments } from '../../tools/lib/alloc.mjs'
 import { computeRestrictAllow } from '../../tools/lib/compose.mjs'
 import { loadConfig, normalizeConfig, normalizeTargetFields, saveConfig, serializeConfig, stripNonTargetKeys } from '../../tools/lib/config.mjs'
-import { parseYamlSubset, preprocessPatchText } from '../../tools/lib/yaml.mjs'
+import { loadYaml, parseYamlSubset, preprocessPatchText } from '../../tools/lib/yaml.mjs'
 import { captureWarnings, healthCheck } from '../../tools/lib/health.mjs'
 import { ROLES, warn } from '../../tools/lib/util.mjs'
 import {
@@ -22,6 +22,7 @@ import {
   detectAgentRolesFlavor,
   detectHostVersionInfo,
   detectPresetSystem,
+  findSuspectPresetRows,
   formatGeneratorMarker,
   isPtcWorkerHost,
   listOrchestratorPresetIds,
@@ -29,6 +30,7 @@ import {
   presetRolesFlavorOf,
   presetRowId,
   readHomePatchRows,
+  resolvePatchTargetLayer,
   stripHomePatchRows,
   ROLES_AGENT_PRESET,
   WORKER_PTC,
@@ -73,6 +75,37 @@ export function resolveDshHome() {
 
 export function resolveConfigFile() {
   return process.env.DSH_PAODING_CONFIG || path.join(resolveDshHome(), 'dsh-paoding.config.yml')
+}
+
+/**
+ * patch 层解析（自愈 / 删除工作区预设等动 patch 的路径入口各解析一次）：
+ * 读一次配置（loadConfig 失败按 null 对待——层判定不被配置错误牵连，配置问题
+ * 由各写盘路径自己的护栏处理），经 resolvePatchTargetLayer 走完整判定链
+ * （patch_layer 键 > DSH_PAODING_PATCH_LAYER > compat 壳探测 > home）。
+ */
+function resolveLayerTarget(dshHome, config = null) {
+  return resolvePatchTargetLayer(dshHome, { config })
+}
+
+/**
+ * 两层 patch 文件的可疑行扫描（maoying 坏行形状探测，WARN 级，只记不删——
+ * 自动删行会踩用户手写内容）。目标层与 legacy 层都扫：compat 壳把坏行留在
+ * home 层的场景里，启动自愈只重写 profile 层，home 层的坏行只有这里能被看见。
+ * 读失败静默跳过（该层没这文件很正常）。
+ */
+function warnSuspectPatchRows(dshHome, layerTarget) {
+  for (const patchPath of [layerTarget.patchPath, layerTarget.legacyPatchPath]) {
+    let text = null
+    try {
+      text = readFileSync(patchPath, 'utf8')
+    } catch {
+      continue
+    }
+    for (const suspect of findSuspectPresetRows(text)) {
+      warn(`${patchPath} 第 ${suspect.lineNo} 行检出可疑声明行 "- id: ${suspect.id}"（id 含空白或非 ASCII，` +
+        '形如 compat 壳压平的坏行，会让宿主 YAML 解析失败）——运行 `dsh-paoding doctor` 查看与清理')
+    }
+  }
 }
 
 // ── state cache ─────────────────────────────────────────────────────────────
@@ -583,7 +616,11 @@ export function deleteWorkspacePreset(state, workspacePath) {
     rmSync(presetDir, { recursive: true, force: true })
     removedPresetDir = true
   }
-  stripHomePatchRows(dshHome, [presetRowId(presetId)])
+  // 声明行撤在目标层（prev 配置在场：patch_layer / profile 键生效；compat 壳
+  // 环境自动落 profile 层）。撤哪层必须与当初写哪层对齐，否则删工作区会在
+  // home 层空撤一轮、profile 层残留孤儿声明行。
+  const layerTarget = resolveLayerTarget(dshHome, prev)
+  stripHomePatchRows(dshHome, [presetRowId(presetId)], { layer: layerTarget.layer, profileName: layerTarget.profileName })
 
   return { presetId, removedConfigEntry, removedPresetDir }
 }
@@ -695,6 +732,17 @@ export async function ensurePresetInstalled({ dshHome = resolveDshHome(), genera
       marker = parseGeneratorMarker(await readFile(markerFile, 'utf8'))
     } catch { /* 目录或标记缺失：按未生成处理 */ }
 
+    // 目标 patch 层解析一次（配置读取失败按 null 对待——层判定不被配置错误
+    // 牵连），后续补行 / 读行都落目标层（compat 壳环境即 profile 层）；顺手扫
+    // 两层可疑坏行（WARN 级只留轨迹，绝不阻塞自愈——诊断归 doctor）。
+    let ensureConfig = null
+    try {
+      ensureConfig = loadConfig(resolveConfigFile(), loadYaml(dshHome))
+    } catch { /* 配置解析失败：层按自动判定走 */ }
+    const layerTarget = resolveLayerTarget(dshHome, ensureConfig)
+    const patchOpts = { layer: layerTarget.layer, profileName: layerTarget.profileName }
+    warnSuspectPatchRows(dshHome, layerTarget)
+
     if (marker !== null && marker.version === generatorVersion) {
       // 版本一致：内容原则上无需重生成，但宿主可能已随 dsh 升降级翻转轨道或
       // 跨过 workflow worker 形态 / 角色委派行形态边界（只升 dsh 不动插件是升级
@@ -709,7 +757,7 @@ export async function ensurePresetInstalled({ dshHome = resolveDshHome(), genera
         if (shouldAbort?.()) return { installed: false, reason: PRESET_ENSURE_ABORTED }
         const presetIds = listOrchestratorPresetIds(dshHome)
         if (system === 'declarative') {
-          const backfilled = backfillHomePatchRows(dshHome, presetIds)
+          const backfilled = backfillHomePatchRows(dshHome, presetIds, patchOpts)
           if (marker.track === 'declarative' && backfilled.length === 0) {
             return { installed: false, reason: 'preset 已由当前版本生成器产出，无需重生成' }
           }
@@ -720,7 +768,8 @@ export async function ensurePresetInstalled({ dshHome = resolveDshHome(), genera
         }
         // directory 轨：声明行残留会让 0.1.6 profile 启动失败——有残留走整盘
         // 重生成（directory 分支撤块自愈）；行清白时只升级标记格式，不动内容。
-        if (readHomePatchRows(dshHome).length === 0) {
+        // 读的是目标层（compat 壳环境下 home 层残留由 reconcile 另行处理）。
+        if (readHomePatchRows(dshHome, patchOpts).length === 0) {
           if (marker.track === 'directory') {
             return { installed: false, reason: 'preset 已由当前版本生成器产出，无需重生成' }
           }
@@ -759,8 +808,11 @@ export async function ensurePresetInstalled({ dshHome = resolveDshHome(), genera
     const track = result.presetSystem === 'declarative' ? 'declarative' : 'directory'
     writeFileSync(markerFile, formatGeneratorMarker(generatorVersion, track, workerFlavorOf(state.hostVersionTriple), rolesFlavorOf(state.hostVersionTriple, state.hostPrerelease)), 'utf8')
     // 声明轨上整盘重生成只重建本 preset 的行：其余工作区 preset 目录若在而
-    // 声明行缺（轨道翻转后首次触发本路径），一并补齐。
-    const backfilled = track === 'declarative' ? backfillHomePatchRows(dshHome, listOrchestratorPresetIds(dshHome)) : []
+    // 声明行缺（轨道翻转后首次触发本路径），一并补齐（落目标层；
+    // generateAndInstall 内部同口径解析层并在 profile 层写成功后 reconcile 撤
+    // home 遗留块）。校验失败（如文件已含坏行）在此被外层 catch 收成 error，
+    // 自愈绝不带崩插件启动。
+    const backfilled = track === 'declarative' ? backfillHomePatchRows(dshHome, listOrchestratorPresetIds(dshHome), patchOpts) : []
     // 工作区预设角色行形态换代（宿主跨 0.2.1 边界后的存量 orchestrator-<slug>
     // 产物）：基础重生成只换了全局预设，工作区产物不跟手就会继续被守卫拒绝。
     const migratedPresets = migrateWorkspacePresetRoles({ dshHome, state })

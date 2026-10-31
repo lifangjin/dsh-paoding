@@ -5,9 +5,11 @@
  * 体检同源（孤儿目录 = workspacePresetOrphans，孤儿声明行 = presetId 指向的
  * 目录已不存在），本模块把「怎么删」收敛在一处，两个命令只决定「删哪些」。
  *
- * 备份纪律：一次清理调用对 cordis.patch.yml 至多备份一份 .bak-1（首次写盘前
- * 拷贝，已有同名备份覆盖——只保「本次改动前」的原貌），同一次调用里的后续写
- * 不再覆盖这份首备。配置文件 dsh-paoding.config.yml 是用户数据，只有 uninstall
+ * 备份纪律：一次清理调用对每个 patch 文件（home 层 cordis.patch.yml 与各
+ * profile 层 profiles/<name>/cordis.patch.yml——compat 壳把托管块搬进 profile
+ * 层，见 managedBlockStateAll）至多备份一份 .bak-1（首次写盘前拷贝，已有同名
+ * 备份覆盖——只保「本次改动前」的原貌），同一次调用里对同一文件的后续写不再
+ * 覆盖这份首备。配置文件 dsh-paoding.config.yml 是用户数据，只有 uninstall
  * --purge 才动，删除前列在计划里。
  *
  * 依赖 preset-system（托管块手术与轨道原语）/ workspaces（slug 名册）/
@@ -70,6 +72,38 @@ export function managedBlockState(dshHome) {
 }
 
 /**
+ * 全层托管块在场状态（managedBlockState 的双层版；managedBlockState 本身保持
+ * 只报 home 层的旧口径不动）：home 层恒在列表首位（文件缺失 present=false），
+ * 其后是 profiles/<name>/cordis.patch.yml 里真实存在的每一层。每项
+ * { layer: 'home'|'profile', profileName: null|<name>, patchFile, present,
+ * corrupt }。compat 壳把托管块搬进 profile 层后，uninstall / doctor --fix
+ * 必须两层都过一遍，否则卸载会在 home 层空转、profile 层残留整块声明行。
+ */
+export function managedBlockStateAll(dshHome) {
+  const entries = [{ layer: 'home', profileName: null, patchFile: path.join(dshHome, 'cordis.patch.yml') }]
+  try {
+    for (const name of readdirSync(path.join(dshHome, 'profiles')).sort()) {
+      const patchFile = path.join(dshHome, 'profiles', name, 'cordis.patch.yml')
+      if (existsSync(patchFile)) entries.push({ layer: 'profile', profileName: name, patchFile })
+    }
+  } catch { /* 无 profiles 目录：只有 home 层 */ }
+  return entries.map((entry) => {
+    let text = null
+    try {
+      text = readFileSync(entry.patchFile, 'utf8')
+    } catch {
+      return { ...entry, present: false, corrupt: false }
+    }
+    const marks = new Set(String(text).split(/\r?\n/).map((l) => l.trim()))
+    const present = marks.has(MANAGED_BEGIN)
+    return { ...entry, present, corrupt: present && !marks.has(MANAGED_END) }
+  })
+}
+
+/** managedBlockStateAll 条目 → preset-system 手术 opts（home 层恒 home 口径）。 */
+const layerOptsOf = (entry) => ({ layer: entry.layer, profileName: entry.profileName ?? 'web' })
+
+/**
  * 配置文件对账读法（doctor 配置文件项同一判据）：缺失返回 { config: null,
  * exists: false, usable: false }；存在但解析失败 → { exists: true, usable:
  * false }（此时宁可当孤儿全量处理也不敢对账的目录一律不动，见
@@ -106,10 +140,22 @@ export function workspacePresetOrphans(dshHome, config) {
  * 不存在的 paoding-config-ui 的声明行）——判据只认「目录没了」，不认行名。
  * presetId 解析不出的行不在此列（doctor 不点名它，清理侧也不动它，交给用户）。
  * 托管块损坏时返回空数组（损坏块只能整块手工处理，行级手术做不了）。
+ * 双层扫描：home 与各 profile 层的孤儿行并集（rowId 去重——同一 preset 的行
+ * 理论上只在一层，两层都在场时清理侧会逐层各撤一遍）。
  */
 export function orphanManagedRows(dshHome) {
-  const rows = readHomePatchRows(dshHome)
-  return rows.filter((row) => row.presetId && !existsSync(path.join(dshHome, '.agent-presets', row.presetId)))
+  const seen = new Set()
+  const out = []
+  for (const entry of managedBlockStateAll(dshHome)) {
+    if (!entry.present || entry.corrupt) continue
+    for (const row of readHomePatchRows(dshHome, layerOptsOf(entry))) {
+      const key = `${entry.layer}:${row.rowId}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      if (row.presetId && !existsSync(path.join(dshHome, '.agent-presets', row.presetId))) out.push(row)
+    }
+  }
+  return out
 }
 
 /**
@@ -121,13 +167,17 @@ export function orphanManagedRows(dshHome) {
  *     generateAndInstall 的孤儿回收口径一致）
  *   - 删完目录后 .generator-version 若仍在（理论上随基础目录已走，防御性兜底）
  *     一并删除并在结果里注明
- * 备份纪律见模块头：对 cordis.patch.yml 的首次写前备份 .bak-1，之后不再覆盖。
- * 返回结构化结果（字段见实现），全程不 throw——单步失败折进对应字段，由调用
- * 方决定退出码与文案。
+ * 备份纪律见模块头：对每个 patch 文件（home / 各 profile 层）的首次写前备份
+ * .bak-1，之后不再覆盖；backupPath 兼容旧字段（首个备份），backupPaths 列全。
+ * 托管块手术双层循环（managedBlockStateAll：compat 壳把块搬进 profile 层后，
+ * 只清 home 层的旧卸载会空转），损坏块不碰：preset-system 会拒绝写盘，降级
+ * 给调用方报需手工。返回结构化结果（字段见实现），全程不 throw——单步失败
+ * 折进对应字段，由调用方决定退出码与文案。
  */
 export function cleanupPaodingArtifacts(dshHome, { stripBlock = false, pruneRowIds = [], removeDirIds = [] } = {}) {
   const result = {
-    backupPath: null,
+    backupPath: null, // 旧字段：首个写前备份（向后兼容 cli 打印）
+    backupPaths: [], // 本次实际落下的全部备份（每层 patch 至多一份）
     blockPresent: false,
     blockCorrupt: false,
     blockRemoved: false,
@@ -137,35 +187,43 @@ export function cleanupPaodingArtifacts(dshHome, { stripBlock = false, pruneRowI
     dirFailures: [],
   }
 
-  const block = managedBlockState(dshHome)
-  result.blockPresent = block.present
-  result.blockCorrupt = block.corrupt
+  const layers = managedBlockStateAll(dshHome)
+  result.blockPresent = layers.some((l) => l.present)
+  result.blockCorrupt = layers.filter((l) => l.present).some((l) => l.corrupt)
+  const prunedSeen = new Set()
 
-  let backupDone = false
-  const backupOnce = () => {
-    if (backupDone) return
-    backupDone = true
-    result.backupPath = backupBeforeWrite(path.join(dshHome, 'cordis.patch.yml'))
-  }
-
-  // 1) 托管块手术（损坏块不碰：preset-system 会拒绝写盘，降级给调用方报需手工）
-  if (block.present && !block.corrupt) {
-    const rowsOnDisk = readHomePatchRows(dshHome).map((r) => r.rowId)
-    if (stripBlock) {
-      backupOnce()
-      result.blockRemoved = stripHomePatchRows(dshHome, null)
-    } else if (pruneRowIds.length > 0) {
-      const present = pruneRowIds.filter((id) => rowsOnDisk.includes(id))
-      if (present.length > 0) {
-        backupOnce()
-        // stripHomePatchRows 返回 true = 指定段确已撤下；块里本来就没有的 id
-        // 不算撤（present 已过滤），不虚报。
-        if (stripHomePatchRows(dshHome, present)) result.prunedRowIds = present
-      }
+  const backupDone = new Set()
+  const backupOnce = (patchFile) => {
+    if (backupDone.has(patchFile)) return
+    backupDone.add(patchFile)
+    const backupPath = backupBeforeWrite(patchFile)
+    if (backupPath !== null) {
+      result.backupPaths.push(backupPath)
+      if (result.backupPath === null) result.backupPath = backupPath
     }
   }
 
-  // 2) 预设目录删除 + 声明行同步（目录先删，行后撤——与孤儿回收同序）
+  // 1) 托管块手术（逐层；损坏块不碰：preset-system 会拒绝写盘，降级给调用方报需手工）
+  for (const entry of layers.filter((l) => l.present && !l.corrupt)) {
+    const opts = layerOptsOf(entry)
+    const rowsOnDisk = readHomePatchRows(dshHome, opts).map((r) => r.rowId)
+    if (stripBlock) {
+      backupOnce(entry.patchFile)
+      if (stripHomePatchRows(dshHome, null, opts)) result.blockRemoved = true
+    } else if (pruneRowIds.length > 0) {
+      const present = pruneRowIds.filter((id) => rowsOnDisk.includes(id))
+      if (present.length > 0) {
+        backupOnce(entry.patchFile)
+        // stripHomePatchRows 返回 true = 指定段确已撤下；块里本来就没有的 id
+        // 不算撤（present 已过滤），不虚报。同一 rowId 两层都在场时各撤一遍，
+        // 结果里只记一次（Set 去重）。
+        if (stripHomePatchRows(dshHome, present, opts)) for (const id of present) prunedSeen.add(id)
+      }
+    }
+  }
+  result.prunedRowIds = [...prunedSeen]
+
+  // 2) 预设目录删除 + 声明行同步（目录先删，行后撤——与孤儿回收同序；行逐层清）
   if (removeDirIds.length > 0) {
     for (const id of removeDirIds) {
       const dir = path.join(dshHome, '.agent-presets', id)
@@ -177,12 +235,15 @@ export function cleanupPaodingArtifacts(dshHome, { stripBlock = false, pruneRowI
       }
     }
     const removedIds = new Set(result.removedDirs)
-    const danglingRowIds = readHomePatchRows(dshHome)
-      .filter((r) => r.presetId && removedIds.has(r.presetId))
-      .map((r) => r.rowId)
-    if (danglingRowIds.length > 0 && !result.blockCorrupt) {
-      backupOnce()
-      stripHomePatchRows(dshHome, danglingRowIds)
+    for (const entry of layers.filter((l) => l.present && !l.corrupt)) {
+      const opts = layerOptsOf(entry)
+      const danglingRowIds = readHomePatchRows(dshHome, opts)
+        .filter((r) => r.presetId && removedIds.has(r.presetId))
+        .map((r) => r.rowId)
+      if (danglingRowIds.length > 0) {
+        backupOnce(entry.patchFile)
+        stripHomePatchRows(dshHome, danglingRowIds, opts)
+      }
     }
   }
 
@@ -202,17 +263,25 @@ export function cleanupPaodingArtifacts(dshHome, { stripBlock = false, pruneRowI
 /**
  * 卸载计划（只读侦察，不落盘）：给确认提示、非 TTY 防呆打印与「无事可做」
  * 判定共用。不加载配置文件内容（卸载不依赖配置语义），只看存在性。
+ * blockPresent / blockCorrupt / blockRowCount 聚合双层（compat 壳的 profile 层
+ * 托管块也算在场）；patchFile 保留 home 层路径的旧字段口径，patchFiles 列出
+ * 各层实际在场托管块的文件（供调用方点名 profile 层残留）。
  */
 export function planUninstall({ dshHome, configFile } = {}) {
-  const block = managedBlockState(dshHome)
+  const layers = managedBlockStateAll(dshHome)
   const markerPath = generatorMarkerPath(dshHome)
+  let blockRowCount = 0
+  for (const entry of layers.filter((l) => l.present && !l.corrupt)) {
+    blockRowCount += readHomePatchRows(dshHome, layerOptsOf(entry)).length
+  }
   return {
     dshHome,
     configFile,
     patchFile: path.join(dshHome, 'cordis.patch.yml'),
-    blockPresent: block.present,
-    blockCorrupt: block.corrupt,
-    blockRowCount: readHomePatchRows(dshHome).length,
+    patchFiles: layers.filter((l) => l.present).map((l) => l.patchFile),
+    blockPresent: layers.some((l) => l.present),
+    blockCorrupt: layers.filter((l) => l.present).some((l) => l.corrupt),
+    blockRowCount,
     presetDirs: listOrchestratorPresetIds(dshHome),
     markerPath,
     markerExists: existsSync(markerPath),
