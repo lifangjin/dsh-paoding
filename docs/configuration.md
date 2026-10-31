@@ -33,6 +33,7 @@ dsh-paoding 把「按角色分工的编排 preset」做成**配置驱动**：你
 | 顶层键 | 类型 | 语义 |
 |---|---|---|
 | `profile` | string | 检测时纳入哪个 profile 的 patch 层（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`）；缺省 `web` |
+| `patch_layer` | `'home' \| 'profile'` | 庖丁声明行写入哪个 patch 层的托管块：`home` = `$DSH_HOME/cordis.patch.yml`，`profile` = `$DSH_HOME/profiles/<profile>/cordis.patch.yml`。缺省（键缺失 / `null`）= 按环境自动判定：Android 宿主或 compat 壳（DSH 家目录在容器路径下）自动落 `profile` 层，其余环境落 `home` 层；非法值告警并忽略（按缺省自动判定）。判定细节与迁移行为见 1.4 |
 | `roles` | map | `toolName` → `{ persona?, name?, tools[], model?, provider?, start_mode?, background_mode? }`。对内置三角色（`search_external` / `design` / `implement`）：覆盖 persona 与 allow 意图，并可配 `name` 显示名（只替换该角色默认 persona 首行身份句的主语，见 2.4）、专用模型（`model` / `provider`，见 2.5）、会话模式（`background_mode`，见 2.6）与启动方式（`start_mode`，见 2.7）；其它键名 = **自定义角色**：生成全新 `delegation-<toolName>` 块并把 toolName 注入主 agent 的 `config.allow`（详见第 2、6 节） |
 | `roles_remove` | string[] | 整条删除的内置角色 toolName 列表（只认 `search_external` / `design` / `implement`，其它名字忽略并告警；缺省 = `[]`）。删除 = 委派行 / 工具面 / 角色 persona / 主 agent 侧委派指引全部不再生成（详见 2.3） |
 | `skills` | map | `skill` → 分配给该技能的角色 toolName 列表；安装时把 `Available skills: …` 引导句写进这些角色 persona 的尾部（详见第 7 节） |
@@ -123,6 +124,24 @@ skills:                 # skill -> 分配给的角色（写进角色 persona 的
 - `roles.design` 未写 `tools` → 保留静态 allow，只换 persona。
 - `roles.code-reviewer` 安装后生成 `delegation-code-reviewer` 委派块，主 agent 白名单加入 `code-reviewer`，对话里直接调该 toolName 即可委派。
 - `main_agent_persona_extra` 里的 `{{cwd}}` / `{{model}}` 是 DSH 运行时替换的占位符，必须原样保留。
+
+### 1.4 patch 层判定与 Android compat 壳（dsh-maoying#1）
+
+庖丁的预设声明行写在 `$DSH_HOME` 下某个 `cordis.patch.yml` 的托管块里（`# --- dsh-paoding presets (auto-generated; do not edit) ---` 与结束标记之间）。patch 层有两处：
+
+- **home 层**：`$DSH_HOME/cordis.patch.yml`（桌面 / Linux 直装环境的缺省）。
+- **profile 层**：`$DSH_HOME/profiles/<profile>/cordis.patch.yml`（Android compat 壳的缺省，`<profile>` 取 `--profile` 参数 > 配置 `profile` 键 > `web`）。
+
+**判定优先级**：配置 `patch_layer` 键 > 环境变量 `DSH_PAODING_PATCH_LAYER` > 自动判定（Android 平台或 DSH 家目录在 `/data/(user|data)/` 容器路径下 → `profile` 层；其余 → `home` 层）。
+
+**为什么 Android 上要落 profile 层**：compat 壳（DeepSeekHarnessCompat）每次 boot 都会**重写 home 层** `cordis.patch.yml`，把 preset 注册表元数据压平成 `- id: 显示名 (英文名)` + 深缩进键的坏行——宿主在任何插件代码运行前就死于 YAML 解析（dsh-maoying#1 同款问题，跟本插件无关也会被牵连）。声明行搬进 profile 层后，compat 壳不再碰它。
+
+配套护栏（0.4.6 起）：
+
+- **写盘校验 + 逐字节回滚**：每次托管块写入（补行 / 撤行 / 整盘重生成）后整文件重新解析一遍，解析不过就回滚为写入前的精确字节并报错（错误信息含行号与 `dsh-paoding doctor` 指引）——文件已含坏行时，宁可不动也不把坏文件写得更坏。
+- **可疑行探测**：启动自愈与 `dsh-paoding doctor` 会扫描托管块**外**的 `- id:` 坏行（id 含空白或非 ASCII，形如 compat 壳压平产物），只警告点名行号不自动删。
+- **层迁移**：目标层是 `profile` 而目标层文件存在时，写入成功后会自动撤掉 home 层的庖丁托管块（用户内容逐字节保留）；反方向同理（`reconcilePatchLayers`）。
+- **doctor 双层体检**：托管块损坏 / 整文件解析失败为 error（后者 = 宿主启动必死），可疑行为 warn，托管块落在非目标层报「层漂移」warn（下次自愈 / 保存会迁移）。
 
 ## 2. 默认角色微调
 

@@ -48,7 +48,7 @@ dsh plugin --profile web add dsh-paoding
 
 ### profile 语义
 
-`--profile web` 决定插件装进哪个 profile：「庖丁配置」面板只在以该 profile 启动的 DSH Web 里出现。`web` 是 `dsh web` 的默认 profile，多数机器无需改动；多 profile 用户对每个需要的 profile 各执行一次 `dsh plugin add`。编排预设本体落在 `$DSH_HOME/.agent-presets/`，全机共享、不随 profile 走——DSH ≥ 0.1.7 的声明行写在 home 层 `$DSH_HOME/cordis.patch.yml`，同样与 profile 无关——在任何 profile 的面板里「保存并应用」，写的都是同一份预设。
+`--profile web` 决定插件装进哪个 profile：「庖丁配置」面板只在以该 profile 启动的 DSH Web 里出现。`web` 是 `dsh web` 的默认 profile，多数机器无需改动；多 profile 用户对每个需要的 profile 各执行一次 `dsh plugin add`。编排预设本体落在 `$DSH_HOME/.agent-presets/`，全机共享、不随 profile 走——DSH ≥ 0.1.7 的声明行缺省写在 home 层 `$DSH_HOME/cordis.patch.yml`（Android compat 壳或配置 `patch_layer: profile` 时改写 profile 层 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`，见下节「patch 层与写盘护栏」）——在任何 profile 的面板里「保存并应用」，写的都是同一份预设。
 
 ### 版本支持与预设落点双轨（DSH 0.1.5 – 0.2.1）
 
@@ -57,7 +57,7 @@ dsh plugin --profile web add dsh-paoding
 两代宿主发现「本地 authored preset」的机制不同，安装器据此分双轨落点，宿主检测全自动、用户无感：
 
 - **目录轨（DSH ≤ 0.1.6）**：宿主扫描 `$DSH_HOME/.agent-presets/` 下的目录来发现 preset，目录即注册。安装器照旧把产物写成 `$DSH_HOME/.agent-presets/orchestrator/`（`agent.cordis.yml` + `preset.yml` + `restrict.mjs` + `delegation-labels.mjs`）；按工作区配置生成的预设落同目录下的 `orchestrator-<slug>`。
-- **声明行轨（DSH ≥ 0.1.7）**：宿主不再扫目录，改为读取 patch 里的 `@deepseek-ai/dsh-agent-preset` 声明行。安装器在 `$DSH_HOME/cordis.patch.yml` 里维护一个托管块——以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、以配套的 end 标记收尾——块内用 `- insert:` 写声明行：全局预设 `config.id: orchestrator`，工作区预设 `config.id: orchestrator-<slug>`，各自的 `plugins` 内联全部插件行；`restrict.mjs` / `delegation-labels.mjs` 以绝对 `file:` URL 引用。产物四件套仍落在 `.agent-presets/<id>/`，只是从「目录即注册」变成「文件存放处」。托管块之外的用户内容一字节不动；块内带 do not edit 标记，手改块内内容会在下次保存时被覆盖。
+- **声明行轨（DSH ≥ 0.1.7）**：宿主不再扫目录，改为读取 patch 里的 `@deepseek-ai/dsh-agent-preset` 声明行。安装器在目标 patch 层（缺省 home 层 `$DSH_HOME/cordis.patch.yml`；Android compat 壳 / `patch_layer: profile` 时为 profile 层 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`，见下节「patch 层与写盘护栏」）里维护一个托管块——以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、以配套的 end 标记收尾——块内用 `- insert:` 写声明行：全局预设 `config.id: orchestrator`，工作区预设 `config.id: orchestrator-<slug>`，各自的 `plugins` 内联全部插件行；`restrict.mjs` / `delegation-labels.mjs` 以绝对 `file:` URL 引用。产物四件套仍落在 `.agent-presets/<id>/`，只是从「目录即注册」变成「文件存放处」。托管块之外的用户内容一字节不动；块内带 do not edit 标记，手改块内内容会在下次保存时被覆盖。
 
 安装器按下面的顺序判定走哪条轨：
 
@@ -93,6 +93,10 @@ dsh plugin --profile web add dsh-paoding
 - **版本轨道都一致** → 对账声明行：缺行补行、目录已删的孤儿行撤行，齐则什么都不动。
 
 面板不监视配置文件改动；想立刻按当前配置重新生成，点面板「保存并应用」。
+
+### patch 层与写盘护栏（Android compat 壳，dsh-maoying#1）
+
+声明行写在哪一层由判定链决定：配置 `patch_layer` 键 > 环境变量 `DSH_PAODING_PATCH_LAYER` > 自动判定（Android 平台或 DSH 家目录在 `/data/(user|data)/` 容器路径下 → profile 层；其余 → home 层）。为什么 Android 要落 profile 层：compat 壳（DeepSeekHarnessCompat）每次 boot 重写 home 层 `cordis.patch.yml`，把 preset 注册表元数据压平成 `- id: 显示名 (英文名)` + 深缩进键的坏行，宿主在任何插件代码运行前就死于 YAML 解析（dsh-maoying#1 同款问题）——声明行搬进 profile 层后 compat 壳不再碰它；层切换后的首次写入会自动撤掉另一层的庖丁托管块（用户内容逐字节保留）。写盘护栏：每次托管块写入后整文件重新解析一遍，解析不过立即回滚为写入前字节并报错（含行号与 `dsh-paoding doctor` 指引）；启动自愈与 `dsh-paoding doctor` 会扫描托管块外的可疑坏行（id 含空白或非 ASCII，形如 compat 壳压平产物），只警告点名行号不自动删——`dsh-paoding doctor` 的双层体检把「整文件解析失败」报为 error（宿主启动必死），可疑行为 warn，托管块落在非目标层报「层漂移」warn。
 
 ### 基础模板与工具勾选
 
@@ -203,7 +207,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 - **场景模板**：页头三档切换（轻量：只留实现角色；调研：只留检索角色；全开：全员到齐、主 agent 额外工具带满检测库存），一键换「班底」；只动 `roles_remove` 与 `main_agent_extra`，各角色精调过的工具面、persona、模型、启动方式分毫不动，切回即原样复原。
 - **检查提示卡**：每次「预览生成 / 保存并应用」自动过一遍体检（配置了未挂载的工具、零工具角色、查无此名的模型、预设落后于配置），分级提示以卡片形式贴在页头下方，处理完再保存不迟。
 - **备份与回滚**：保存、导入、恢复配置前都会自动把当前配置轮换备份三份（`config.yml.bak-1..3`，新压旧）；「更多」→「恢复备份…」列时间与大小、二次确认后回退，恢复前当前配置还会再自动备份一份——误操作有后悔药。
-- **委派效果统计**：页头「委派效果」卡按角色统计被委派的调用数、平均耗时与失败数（近 30 天，`days` 参数可调）。数据来自宿主会话存档的冷读——经宿主 `sessionPersistence` 服务逐会话抽摘要、本地聚合，不出机、不带负载；失败记的是子会话零轮次或轮次中断（spawn 后即死、中途终止两种形态）。宿主缺会话服务时整卡不渲染。
+- **委派效果统计**：页头「委派效果」卡按角色统计被委派的调用数、平均耗时与失败数（近 30 天，`days` 参数可调）。数据来自宿主会话存档的冷读——经宿主 `sessionPersistence` 服务逐会话抽摘要、本地聚合，不出机、不带负载；失败记的是子会话零轮次或轮次中断（spawn 后即死、中途终止两种形态）。缺省项目（宿主 cwd 换算）扫不到任何委派记录时自动回落为全项目聚合（响应 `project='all'`，卡片标注「全部项目」）；冷读带日志 mtime 预过滤，窗口外的日志文件不再开读句柄。宿主缺会话服务时整卡不渲染。
 - **「更多」菜单**：配置导出（下载 `dsh-paoding.config.yml` 原文）/ 导入（先验格式，整份覆盖含工作区段，需二次确认）/ 恢复备份（见上条）与面板语言切换（中英自动识别、手动选择优先并记住）。
 
 ## 7. 卸载

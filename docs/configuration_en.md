@@ -33,6 +33,7 @@ The key names below match `normalizeConfig` in `tools/lib/config.mjs` — the si
 | Top-level key | Type | Semantics |
 |---|---|---|
 | `profile` | string | Which profile's patch layer (`$DSH_HOME/profiles/<profile>/cordis.patch.yml`) is scanned during detection; default `web` |
+| `patch_layer` | `'home' \| 'profile'` | Which patch layer receives Paoding's managed preset rows: `home` = `$DSH_HOME/cordis.patch.yml`, `profile` = `$DSH_HOME/profiles/<profile>/cordis.patch.yml`. Default (key missing / `null`) = automatic per environment: Android hosts and compat shells (DSH home under a container path) land on the `profile` layer, everything else on the `home` layer; an invalid value is warned about and ignored (falls back to automatic). See 1.4 for the full decision chain and migration behavior |
 | `roles` | map | `toolName` → `{ persona?, name?, tools[], model?, provider?, start_mode?, background_mode? }`. For the three built-in roles (`search_external` / `design` / `implement`): overrides the persona and the allow intent, and may carry a `name` display name (rewrites the subject of that role's default persona identity sentence and prefixes its delegation labels — see 2.4), a dedicated model (`model` / `provider`, see 2.5), a session mode (`background_mode`, see 2.6) and a start mode (`start_mode`, see 2.7). Any other key is a **custom role**: the installer emits a fresh `delegation-<toolName>` block and injects the toolName into the main agent's `config.allow` (sections 2 and 6) |
 | `roles_remove` | string[] | toolNames of built-in roles deleted wholesale (only `search_external` / `design` / `implement` are accepted; other names are ignored with a warning; default `[]`). Deleting means the delegation block / tool surface / role persona / main-agent delegation guidance are no longer generated (see 2.3) |
 | `skills` | map | `skill` → the list of role toolNames the skill is assigned to; the installer appends an `Available skills: …` guidance sentence to those roles' personas (section 7) |
@@ -123,6 +124,24 @@ Notes:
 - `roles.design` omits `tools`, so the static allow is kept and only the persona is replaced.
 - After installation, `roles.code-reviewer` becomes a generated `delegation-code-reviewer` block, `code-reviewer` joins the main-agent allow list, and the main agent can delegate to it directly by calling that toolName.
 - `{{cwd}}` and `{{model}}` inside `main_agent_persona_extra` are persona placeholders that DSH substitutes at runtime — keep them verbatim.
+
+### 1.4 Patch layer selection and the Android compat shell (dsh-maoying#1)
+
+Paoding writes its preset rows into the managed block (`# --- dsh-paoding presets (auto-generated; do not edit) ---` … end marker) of one `cordis.patch.yml` under `$DSH_HOME`. There are two patch layers:
+
+- **home layer**: `$DSH_HOME/cordis.patch.yml` (the default on desktop / plain-Linux installs).
+- **profile layer**: `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (the default on the Android compat shell; `<profile>` resolves from the `--profile` argument > the config `profile` key > `web`).
+
+**Decision order**: the config `patch_layer` key > the `DSH_PAODING_PATCH_LAYER` environment variable > automatic detection (Android platform, or the DSH home under a `/data/(user|data)/` container path → the `profile` layer; otherwise → the `home` layer).
+
+**Why Android lands on the profile layer**: the compat shell (DeepSeekHarnessCompat) rewrites the home-layer `cordis.patch.yml` on every boot, flattening the preset-registry metadata into malformed rows like `- id: Display Name (English Name)` with deeply indented keys — the host dies at YAML parse time before any plugin code runs (the dsh-maoying#1 failure shape; it takes down the host even when Paoding is not involved). With the rows living in the profile layer, the compat shell no longer touches them.
+
+Guard rails shipped alongside (since 0.4.6):
+
+- **Write validation + exact-byte rollback**: every managed-block write (row backfill / row strip / full regen) re-parses the whole file afterwards; if it fails to parse, the file is rolled back to the exact pre-write bytes and an error is raised (with a line number and a `dsh-paoding doctor` hint). When a file already contains bad rows, doing nothing beats writing it into a worse state.
+- **Suspect-row detection**: startup self-heal and `dsh-paoding doctor` scan for `- id:` rows **outside** the managed block whose id contains whitespace or non-ASCII characters (the compat-shell flattening shape); they warn with line numbers and never auto-delete.
+- **Layer migration**: when the target layer is `profile` and that file exists, a successful write also strips Paoding's managed block from the home layer (user content preserved byte-for-byte); the reverse direction works the same way (`reconcilePatchLayers`).
+- **Doctor checks both layers**: a damaged managed block and a whole-file parse failure are errors (the latter means the host cannot boot at all); suspect rows are warnings; a managed block sitting in a non-target layer reports a "layer drift" warning (the next self-heal / save migrates it).
 
 ## 2. Tuning the built-in roles
 
