@@ -390,6 +390,8 @@
       "del.colLastUsed": { zh: "最近使用", en: "Last used" },
       "del.totalRoles": { zh: "共 {n} 个角色", en: "{n} roles in total" },
       "del.empty": { zh: "暂无委派记录", en: "No delegation records yet" },
+      // 标题角标：响应 project='all'（缺省项目零记录，服务端回落全项目聚合）时点明统计口径
+      "del.scopeAll": { zh: "全部项目", en: "all projects" },
 
       // ── 预览「本次变更」区块（preview.diff 结构化差分的渲染文案）───────────
       // 服务端 diff 是纯结构零文案（tools/lib/config.mjs diffAssignments），

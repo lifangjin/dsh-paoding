@@ -453,12 +453,15 @@ export async function apply(ctx) {
         if (route === 'stats' && req.method === 'GET') {
           // 委派效果统计（GET stats?days=30&project=<slug>）：宿主
           // sessionPersistence 服务逐会话冷读抽摘要聚合（A 路，见
-          // stats-core.mjs 文件头——服务面、slug 口径与失败判据的实测证据都在
-          // 那里）。服务经 ctx.reflect 软探测（绝不进 inject 数组：硬注入会让
-          // 缺服务的老宿主在挂载时就炸），拿不到回 { ok:false,
+          // stats-core.mjs 文件头——服务面、slug 口径、mtime 预过滤与失败判据
+          // 的实测证据都在那里）。服务经 ctx.reflect 软探测（绝不进 inject 数
+          // 组：硬注入会让缺服务的老宿主在挂载时就炸），拿不到回 { ok:false,
           // reason:'persistence-unavailable' }，客户端整卡不渲染。project
-          // 缺省 = 当前面板项目（cwd → projectKey 换算），days 缺省 30 上限
-          // 365；project 非法在核心层抛 422（外层 catch 统一回 { error }）。
+          // 缺省 = 当前面板项目（cwd → projectKey 换算），该 slug 零委派记录
+          // 时核心层自动回落全项目聚合（响应 project='all'，面板标题标注
+          // 「全部项目」；desktop 宿主进程 cwd 停在 profile 目录、换算 slug
+          // 恒无会话，靠这一步救回卡片），显式传 project 不回落；days 缺省 30
+          // 上限 365；project 非法在核心层抛 422（外层 catch 统一回 { error }）。
           // 路由注册在既有 /api/paoding 前缀下，上方信任围栏自动覆盖本路由。
           json(res, 200, await collectDelegationStats(ctx, {
             project: url.searchParams.get('project') ?? undefined,

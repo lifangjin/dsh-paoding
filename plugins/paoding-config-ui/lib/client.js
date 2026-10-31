@@ -475,6 +475,8 @@ window.__ModuleLoader__.load({
       "del.colLastUsed": { zh: "最近使用", en: "Last used" },
       "del.totalRoles": { zh: "共 {n} 个角色", en: "{n} roles in total" },
       "del.empty": { zh: "暂无委派记录", en: "No delegation records yet" },
+      // 标题角标：响应 project='all'（缺省项目零记录，服务端回落全项目聚合）时点明统计口径
+      "del.scopeAll": { zh: "全部项目", en: "all projects" },
 
       // ── 预览「本次变更」区块（preview.diff 结构化差分的渲染文案）───────────
       // 服务端 diff 是纯结构零文案（tools/lib/config.mjs diffAssignments），
@@ -666,7 +668,10 @@ window.__ModuleLoader__.load({
     // 最多 8 行，超出给「共 N 个角色」尾行），失败数 >0 标红提醒。
     function delegationCardOf(stats) {
       if (!stats || stats.ok !== true || !Array.isArray(stats.roles)) return null;
-      var head = h("div", { className: "pd-delegTitle" }, t("del.cardTitle"));
+      // project==='all' = 缺省项目零记录后回落的全项目聚合，标题尾加弱化角标
+      // 点明口径，免得误读成当前项目自己的数据（服务端见 stats-core.mjs 回落）。
+      var head = h("div", { className: "pd-delegTitle" }, t("del.cardTitle"),
+        stats.project === "all" ? h("span", { className: "pd-delegScope" }, t("del.scopeAll")) : null);
       if (!stats.delegatedSessions) {
         return h("div", { className: "pd-delegCard" }, head,
           h("div", { className: "pd-delegEmpty" }, t("del.empty")));

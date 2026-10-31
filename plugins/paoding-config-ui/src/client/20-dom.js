@@ -128,7 +128,10 @@
     // 最多 8 行，超出给「共 N 个角色」尾行），失败数 >0 标红提醒。
     function delegationCardOf(stats) {
       if (!stats || stats.ok !== true || !Array.isArray(stats.roles)) return null;
-      var head = h("div", { className: "pd-delegTitle" }, t("del.cardTitle"));
+      // project==='all' = 缺省项目零记录后回落的全项目聚合，标题尾加弱化角标
+      // 点明口径，免得误读成当前项目自己的数据（服务端见 stats-core.mjs 回落）。
+      var head = h("div", { className: "pd-delegTitle" }, t("del.cardTitle"),
+        stats.project === "all" ? h("span", { className: "pd-delegScope" }, t("del.scopeAll")) : null);
       if (!stats.delegatedSessions) {
         return h("div", { className: "pd-delegCard" }, head,
           h("div", { className: "pd-delegEmpty" }, t("del.empty")));

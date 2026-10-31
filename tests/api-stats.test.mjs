@@ -22,12 +22,17 @@
  *   - project 清洗：仅 [A-Za-z0-9._-]（'..' / 含分隔符 → 422），缺省 =
  *     当前面板项目（DSH_PAODING_CWD → projectKeyOf 换算），合法但目录不存在
  *     → 空结果不报错；project=all 跨项目聚合（仅内部 / 测试用）。
+ *   - mtime 预过滤：日志文件 mtime+1h slack 早于窗口起点 → 不开读句柄直接
+ *     出局（不进聚合、不计 skipped、仍计 sessionsScanned、不进缓存）。
+ *   - 缺省回落：project 缺省（cwd 换算 slug）扫出零委派记录 → 自动回落一轮
+ *     全项目聚合（响应 project='all'）；显式传 project（含空目录 slug）绝不
+ *     回落，原样返回空结果。
  *   - 信任围栏先行：stats 也在 /api/paoding 前缀下，cross-site → 403。
  */
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -322,6 +327,62 @@ test('缓存满员后每轮仅重试损坏会话，成功 open/close 一一成�
   assert.equal(r.status, 200)
   assert.equal(calls.opens - openBefore, 1, '可读会话全命中缓存不再 open；只有 open 即抛的损坏会话每轮重试')
   assert.equal(calls.closes - closeBefore, 0, '损坏会话 open 即抛无句柄可关，成功路径由 readSessionSummary 的 finally 保证成对')
+})
+
+// 以下两例放在计数敏感用例之后：proj3 会话与 cwd 临时换挂都会改变全库账面，
+// 插前面会污染既有断言（sessionsScanned / delegatedSessions / project 缺省）。
+
+test('mtime 预过滤：日志停在窗口前的会话不开读句柄、不进聚合、不计 skipped', async () => {
+  // 独立 slug 目录，不碰主 slug 的既有计数。事件本身在窗口内（昨天一轮正常
+  // 轮次），只有文件 mtime 被回拨 40 天——判据是「事件产生即落盘」：文件 40
+  // 天没再写过就不可能含窗口内事件，开句柄纯属浪费（冷读 55s 大库的解药）。
+  const slug3 = projectKeyOf(path.join(dshHome, 'proj3'))
+  makeSession('99999999-0000-4000-8000-000000000009', {
+    preset: 'paoding-role-implement',
+    events: [...oneTurn(now - DAY, 2000)],
+    slug: slug3,
+  })
+  const logFile = path.join(sessionsRoot, slug3, '99999999-0000-4000-8000-000000000009', 'session.v4.jsonl.zstd')
+  const st = statSync(logFile)
+  utimesSync(logFile, st.atime, new Date(now - 40 * DAY))
+
+  const opensBefore = calls.opens
+  const r = await callRoute(handler(), '/api/paoding/stats?project=' + encodeURIComponent(slug3))
+  assert.equal(r.status, 200)
+  assert.equal(r.json.project, slug3)
+  assert.equal(r.json.sessionsScanned, 1, '预过滤的会话仍计入 sessionsScanned（目录确实扫过）')
+  assert.equal(r.json.skipped, 0, '预过滤不是读错误，不进 skipped')
+  assert.equal(r.json.delegatedSessions, 0)
+  assert.deepEqual(r.json.roles, [], '窗口外文件直接出局，事件再新也进不了角色账')
+  assert.equal(calls.opens, opensBefore, '预过滤命中：persistence.open 一次都没发生')
+})
+
+test('缺省回落：cwd slug 零委派记录时回落全项目聚合；显式空 slug 不回落', async () => {
+  // desktop 形态复刻：宿主进程 cwd 停在无会话的目录 → 缺省 slug 恒空，服务端
+  // 自动回落一轮全项目聚合（project='all'），面板才有数可显。
+  const emptyCwd = path.join(dshHome, 'empty-proj')
+  const emptySlug = projectKeyOf(emptyCwd)
+  const savedCwd = process.env.DSH_PAODING_CWD
+  process.env.DSH_PAODING_CWD = emptyCwd
+  try {
+    const r = await callRoute(handler(), '/api/paoding/stats')
+    assert.equal(r.status, 200)
+    assert.equal(r.json.project, 'all', '缺省 slug 零委派记录 → 回落全项目聚合')
+    assert.equal(r.json.sessionsScanned, 9, 'all 枚举：主 slug 7 + proj2 1 + proj3 1（空目录 slug 不入账）')
+    assert.equal(r.json.delegatedSessions, 5, '主 slug 4 + proj2 的 test 1；proj3 被 mtime 预过滤剔除')
+    assert.equal(r.json.skipped, 1, '损坏会话照旧计 skipped')
+    assert.ok(r.json.roles.some((x) => x.role === 'test'), '跨项目角色进账')
+  } finally {
+    process.env.DSH_PAODING_CWD = savedCwd
+  }
+
+  // 显式传参（哪怕是查无会话的空 slug）绝不回落：原样返回该 slug 的空结果。
+  const r2 = await callRoute(handler(), '/api/paoding/stats?project=' + encodeURIComponent(emptySlug))
+  assert.equal(r2.status, 200)
+  assert.equal(r2.json.project, emptySlug, '显式 project 不回落')
+  assert.deepEqual(r2.json.roles, [])
+  assert.equal(r2.json.delegatedSessions, 0)
+  assert.equal(r2.json.sessionsScanned, 0)
 })
 
 test('临时会话库确在临时目录（不碰真实 ~/.dsh）', () => {

@@ -1402,6 +1402,15 @@ html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskbo
   color: var(--dsw-alias-label-primary);
 }
 
+/* 标题尾角标：缺省项目零记录回落全项目聚合（project='all'）时点明口径——
+   弱化字号与三级文字色，紧跟标题不抢视觉。 */
+.pd-delegScope {
+  margin-left: 6px;
+  font-size: 0.85em;
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .pd-delegTable {
   margin-top: 6px;
   font-size: 11px;

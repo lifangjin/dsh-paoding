@@ -29,6 +29,16 @@
  * 志带上一轮化身的历史，那段 turn 天然平衡；继承切点打在轮次边界（实测 73 处
  * mid 位 end-seed 前一事件以 turn/end 为主），owned 段计数不受污染。时长与
  * 窗口过滤同样只用 owned 段，防跨化身膨胀。
+ *
+ * ── mtime 预过滤与缺省回落 ────────────────────────────────────────────────
+ * 开读句柄前先看日志文件 mtime：事件产生即落盘，文件末次写入（mtime）加松弛
+ * 量仍早于窗口起点 ⇒ 文件里不可能有窗口内事件，聚合窗口过滤本就会剔除，直接
+ * 跳过不开句柄——大库冷读从「全库逐个解压」降到「只读窗口内还活跃过的文件」。
+ * 预过滤条目不进摘要缓存（mtime 日后前移时本检查自然放行重开；缓存留 null 反
+ * 要额外对账）。project 缺省 = cwd 换算 slug，而 desktop 等宿主 profile 的
+ * 进程 cwd 停在 profile 目录、换算出的 slug 恒无会话，面板于是恒见「暂无委
+ * 派记录」——故缺省扫描零委派记录时自动回落一轮全项目聚合，响应 project 标
+ * 'all'（客户端标题加「全部项目」角标）；显式传 project（含 'all'）不回落。
  */
 
 import { readdirSync, statSync } from 'node:fs'
@@ -40,6 +50,9 @@ import { ROLE_PRESET_ID_PREFIX } from '../../tools/lib/compose.mjs'
 /** 窗口缺省与上限（天）：days 参数整数夹取到 [1, 365]，无法解析回落缺省。 */
 export const STATS_DEFAULT_DAYS = 30
 export const STATS_MAX_DAYS = 365
+
+/** mtime 预过滤松弛量（1h）：挡时钟偏斜与落盘延迟——宁可多开几个句柄，不误跳。 */
+const MTIME_SLACK_MS = 60 * 60 * 1000
 
 // ── 参数清洗 ─────────────────────────────────────────────────────────────────
 
@@ -135,6 +148,15 @@ function listSessionIds(sessionsRoot, slug) {
     return readdirSync(path.join(sessionsRoot, slug), { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
+  } catch {
+    return []
+  }
+}
+
+/** 列会话根下全部项目目录名（'all' 的枚举口径）。根缺失 / 不可读 → 空数组。 */
+function allProjectSlugs(sessionsRoot) {
+  try {
+    return readdirSync(sessionsRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)
   } catch {
     return []
   }
@@ -279,35 +301,19 @@ async function mapLimited(items, limit, worker) {
 
 const summaryCache = new Map()
 
+// ── 扫描 + 聚合（一轮冷读，缺省 / 回落两路共用）─────────────────────────────
+
 /**
- * 委派效果统计主入口。ctx 缺 sessionPersistence（reflect 软探测，绝不进
- * inject——硬注入会让缺服务的老宿主挂载即炸）→ { ok:false,
- * reason:'persistence-unavailable' }，面板据此整卡不渲染。project 非法抛
- * 422（外层 catch 统一回 { error } 信封）。
+ * 一轮「枚举 → 冷读 → 聚合」。slugs 是待扫的项目目录名列表（单 slug 或 'all'
+ * 枚举皆可）；collectDelegationStats 的「缺省 slug 一轮」与「回落全项目一轮」
+ * 都走这里，两轮的 sessionsScanned / skipped 口径由此保持一致。worker 里：
+ * 先 mtime 预过滤（见文件头）——事件产生即落盘，文件末次写入时刻即 mtime，
+ * mtime+slack 仍早于窗口起点 ⇒ 文件内一切事件都在窗口外，聚合窗口过滤本就会
+ * 剔除，直接返回 null 摘要不开读句柄；预过滤条目不进缓存（mtime 日后前移时
+ * 本检查自然放行重开）。null 摘要不进聚合、不计 skipped（那是读错误的计数），
+ * 但照常计入 sessionsScanned（目录确实扫过）。
  */
-export async function collectDelegationStats(ctx, { project, days } = {}) {
-  const persistence = reflectService(ctx, 'sessionPersistence')
-  if (!persistence) return { ok: false, reason: 'persistence-unavailable' }
-
-  const windowDays = sanitizeStatsDays(days)
-  const sessionsRoot = path.join(resolveDshHome(), 'sessions')
-  const slug = sanitizeProjectSlug(project !== undefined && project !== null && project !== '' ? project : currentProjectSlug(), sessionsRoot)
-  if (slug === null) {
-    const err = new Error(`project 参数不合法（仅允许 [A-Za-z0-9._-]，或 all）: ${String(project).slice(0, 64)}`)
-    err.statusCode = 422
-    throw err
-  }
-
-  // 枚举：all = 列会话根下全部项目目录；单 slug 只列该目录。
-  const slugs = slug === 'all'
-    ? (() => {
-        try {
-          return readdirSync(sessionsRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)
-        } catch {
-          return []
-        }
-      })()
-    : [slug]
+async function scanAndAggregate(sessionsRoot, slugs, windowDays, nowMs, persistence) {
   const targets = []
   for (const dir of slugs) {
     for (const id of listSessionIds(sessionsRoot, dir)) {
@@ -315,12 +321,14 @@ export async function collectDelegationStats(ctx, { project, days } = {}) {
     }
   }
 
-  const nowMs = Date.now()
   const reads = await mapLimited(targets, 4, async ({ slug: dir, id }) => {
     const sessionDir = path.join(sessionsRoot, dir, id)
     const file = currentSessionFile(sessionDir)
     if (file === null) throw new Error('no session log file')
     const st = statSync(path.join(sessionDir, file)) // stat 失败 → 跳过计数
+    if (st.mtimeMs + MTIME_SLACK_MS < nowMs - windowDays * 86400000) {
+      return { id, summary: null }
+    }
     const cacheKey = dir + '\u0000' + id
     const hit = summaryCache.get(cacheKey)
     if (hit && hit.file === file && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
@@ -334,20 +342,71 @@ export async function collectDelegationStats(ctx, { project, days } = {}) {
   let skipped = 0
   const summaries = []
   for (const r of reads) {
-    if (r.ok) summaries.push(r.value.summary)
-    else skipped++
+    if (!r.ok) {
+      skipped++ // 只有 open/read 真失败才计；预过滤出局不是错
+      continue
+    }
+    if (r.value.summary !== null) summaries.push(r.value.summary)
   }
   const { roles, delegatedSessions } = aggregateRoles(summaries, windowDays, nowMs)
+  return { roles, delegatedSessions, sessionsScanned: targets.length, skipped }
+}
+
+/** 单一响应形状（ok:true 信封）：两路扫描的结果都从这里出，字段恒齐。 */
+function statsEnvelope(project, result, windowDays, nowMs) {
   return {
     ok: true,
-    project: slug,
+    project,
     windowDays,
     generatedAt: new Date(nowMs).toISOString(),
-    roles,
-    sessionsScanned: targets.length,
-    delegatedSessions,
-    skipped,
+    roles: result.roles,
+    sessionsScanned: result.sessionsScanned,
+    delegatedSessions: result.delegatedSessions,
+    skipped: result.skipped,
   }
+}
+
+/**
+ * 委派效果统计主入口。ctx 缺 sessionPersistence（reflect 软探测，绝不进
+ * inject——硬注入会让缺服务的老宿主挂载即炸）→ { ok:false,
+ * reason:'persistence-unavailable' }，面板据此整卡不渲染。project 非法抛
+ * 422（外层 catch 统一回 { error } 信封）。
+ *
+ * project 口径：显式传参（非空字符串，含 'all'）按传参扫，绝不回落；缺省 =
+ * cwd 换算的当前面板项目，该 slug 一轮扫完 delegatedSessions=0 时自动回落
+ * 一轮全项目聚合（响应 project 标 'all'；会话根缺失时枚举为空 → 空 roles
+ * 仍 ok:true，不 422 不 5xx）。
+ */
+export async function collectDelegationStats(ctx, { project, days } = {}) {
+  const persistence = reflectService(ctx, 'sessionPersistence')
+  if (!persistence) return { ok: false, reason: 'persistence-unavailable' }
+
+  const windowDays = sanitizeStatsDays(days)
+  const sessionsRoot = path.join(resolveDshHome(), 'sessions')
+  const explicit = project !== undefined && project !== null && project !== ''
+  const slug = sanitizeProjectSlug(explicit ? project : currentProjectSlug(), sessionsRoot)
+  if (slug === null) {
+    const err = new Error(`project 参数不合法（仅允许 [A-Za-z0-9._-]，或 all）: ${String(project).slice(0, 64)}`)
+    err.statusCode = 422
+    throw err
+  }
+
+  const nowMs = Date.now()
+  const result = await scanAndAggregate(
+    sessionsRoot,
+    slug === 'all' ? allProjectSlugs(sessionsRoot) : [slug],
+    windowDays,
+    nowMs,
+    persistence,
+  )
+
+  // 缺省回落：cwd slug 恒空的宿主 profile（desktop 进程 cwd 停在 profile 目录）
+  // 靠这一步救回面板——零委派记录才回落，显式 project 永不回落。
+  if (!explicit && slug !== 'all' && result.delegatedSessions === 0) {
+    const all = await scanAndAggregate(sessionsRoot, allProjectSlugs(sessionsRoot), windowDays, nowMs, persistence)
+    return statsEnvelope('all', all, windowDays, nowMs)
+  }
+  return statsEnvelope(slug, result, windowDays, nowMs)
 }
 
 /** reflect 软探测（与 persistenceAvailableOf 同款口径，任何异常按缺失处理）。 */
