@@ -165,6 +165,20 @@
         }).catch(function () { /* 静默降级：整卡不渲染 */ });
         return function () { alive = false; };
       }, []);
+      // 委派卡折叠态：默认展开，点标题行切换（delegationCardOf 的 onToggle）。
+      // localStorage 记忆偏好（键 paoding-deleg-collapsed，"1" = 收起），GUI
+      // 重载后保持；存储不可用（隐私模式等）时只丢记忆不丢功能——与 paoding-lang
+      // 同款 try/catch 围栏。
+      var _dc = useState(function () {
+        try { return window.localStorage.getItem("paoding-deleg-collapsed") !== "1"; }
+        catch (err) { return true; }
+      }), delOpen = _dc[0], setDelOpen = _dc[1];
+      var toggleDelOpen = useCallback(function () {
+        setDelOpen(function (o) {
+          try { window.localStorage.setItem("paoding-deleg-collapsed", o ? "1" : "0"); } catch (err) { /* 只丢记忆 */ }
+          return !o;
+        });
+      }, []);
       // 语言切换 tick：页头文案（标题 / 副标题 / 菜单 / 语言项）走 t()，切换后
       // 需整体重渲染一次；ConfigPanel 内部另有 registerReload 整页重拉。
       var _lg = useState(0), langTick = _lg[0], setLangTick = _lg[1];
@@ -443,8 +457,9 @@
             // 回写点）；数据未就绪 / 老服务端无该字段时零占位。
             slimInfo ? h("p", { className: "pd-slimLine" }, slimLineText(slimInfo)) : null,
             // 委派效果卡：紧贴瘦身行之下（delegationCardOf 自判，统计没拉到 /
-            // 服务缺失时返回 null 整卡不渲染）。
-            delegationCardOf(delStats)),
+            // 服务缺失时返回 null 整卡不渲染）；标题行点按切换展开 / 收起，
+            // 折叠态由 delOpen 持久记忆。
+            delegationCardOf(delStats, delOpen, toggleDelOpen)),
           // 页头「更多」菜单：整份配置文件的导出 / 导入（低频操作收进来，页头
           // 不添第二排按钮）。定位锚点用相对定位的薄包裹层，下拉复用工作区
           // 「更多」的 omd-tabMenu / omd-tabMenuItem 既有样式；靠右对齐（inline

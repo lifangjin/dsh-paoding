@@ -124,17 +124,27 @@
     }
 
     // 卡片渲染：stats 缺失 / ok!==true / roles 非数组 → null（整卡零占位）。
-    // delegatedSessions=0 渲染标题 + 一行空文案；有数据渲染紧凑表（表头 +
-    // 最多 8 行，超出给「共 N 个角色」尾行），失败数 >0 标红提醒。
-    function delegationCardOf(stats) {
+    // 标题行是整行按钮（pd-delegHead）：点按经 onToggle 切换 open（PageShell
+    // 持态并写 localStorage 记忆）；收起时表格 / 尾行 / 空文案一律不渲染，
+    // 只剩标题 + 指向 chevron。delegatedSessions=0 展开态渲染一行空文案；
+    // 有数据渲染紧凑表（表头 + 最多 8 行，超出给「共 N 个角色」尾行），
+    // 失败数 >0 标红提醒。
+    function delegationCardOf(stats, open, onToggle) {
       if (!stats || stats.ok !== true || !Array.isArray(stats.roles)) return null;
       // project==='all' = 缺省项目零记录后回落的全项目聚合，标题尾加弱化角标
       // 点明口径，免得误读成当前项目自己的数据（服务端见 stats-core.mjs 回落）。
-      var head = h("div", { className: "pd-delegTitle" }, t("del.cardTitle"),
-        stats.project === "all" ? h("span", { className: "pd-delegScope" }, t("del.scopeAll")) : null);
+      var head = h("button", {
+        type: "button",
+        className: "pd-delegHead",
+        "aria-expanded": open ? "true" : "false",
+        title: t("del.toggleTip"),
+        onClick: function () { if (typeof onToggle === "function") onToggle(); },
+      }, h("span", { className: "pd-delegTitle" }, t("del.cardTitle"),
+          stats.project === "all" ? h("span", { className: "pd-delegScope" }, t("del.scopeAll")) : null),
+        h("span", { className: open ? "pd-delegChev pd-delegChevOpen" : "pd-delegChev", "aria-hidden": "true" }, "▸"));
       if (!stats.delegatedSessions) {
         return h("div", { className: "pd-delegCard" }, head,
-          h("div", { className: "pd-delegEmpty" }, t("del.empty")));
+          open ? h("div", { className: "pd-delegEmpty" }, t("del.empty")) : null);
       }
       var cols = [
         ["pd-delegRole", t("del.colRole")],
@@ -159,7 +169,8 @@
         ? h("div", { className: "pd-delegMore" }, t("del.totalRoles", { n: stats.roles.length }))
         : null;
       return h("div", { className: "pd-delegCard" }, head,
-        h.apply(null, ["div", { className: "pd-delegTable" }, headerRow].concat(rows)), tail);
+        open ? h.apply(null, ["div", { className: "pd-delegTable" }, headerRow].concat(rows)) : null,
+        open ? tail : null);
     }
 
     var DEFAULT_ROLES = ["search_external", "design", "implement"];

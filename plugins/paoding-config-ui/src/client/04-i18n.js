@@ -392,6 +392,8 @@
       "del.empty": { zh: "暂无委派记录", en: "No delegation records yet" },
       // 标题角标：响应 project='all'（缺省项目零记录，服务端回落全项目聚合）时点明统计口径
       "del.scopeAll": { zh: "全部项目", en: "all projects" },
+      // 标题行按钮的悬浮提示（title 属性）：展开 / 收起切换的 affordance
+      "del.toggleTip": { zh: "展开 / 收起委派效果", en: "Expand / collapse delegation stats" },
 
       // ── 预览「本次变更」区块（preview.diff 结构化差分的渲染文案）───────────
       // 服务端 diff 是纯结构零文案（tools/lib/config.mjs diffAssignments），

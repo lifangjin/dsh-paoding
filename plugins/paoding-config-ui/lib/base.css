@@ -1325,7 +1325,9 @@ html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskbo
 .pd-pageHeader {
   flex: none;
   display: flex;
-  align-items: center;
+  /* 顶格对齐：标题列内含委派效果卡（懒加载后撑高整列）时，「更多」/「×」
+     仍钉在页头右上角，不随 align-items:center 的纵向居中漂到半腰。 */
+  align-items: flex-start;
   gap: 12px;
   width: 100%;
   padding: 18px 28px 10px;
@@ -1401,6 +1403,43 @@ html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskbo
   font-weight: 600;
   color: var(--dsw-alias-label-primary);
 }
+
+/* 标题行整行按钮：点按切换展开 / 收起（pd-delegateHead 同族观感，缩一号：
+   卡内嵌在页头，hover 面积过大反而抢眼）。chevron 靠右（margin-left:auto），
+   展开态旋 90° 指下——与委派调用行的 pd-delegateChev 同一语义。 */
+.pd-delegHead {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 1px 4px;
+  margin: -1px -4px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: background 0.12s ease;
+}
+
+.pd-delegHead:hover,
+.pd-delegHead:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+  outline: none;
+}
+
+.pd-delegChev {
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform 0.12s ease;
+}
+
+.pd-delegChevOpen { transform: rotate(90deg); }
 
 /* 标题尾角标：缺省项目零记录回落全项目聚合（project='all'）时点明口径——
    弱化字号与三级文字色，紧跟标题不抢视觉。 */
@@ -1894,6 +1933,7 @@ html[data-dsh-paoding-active]:not([data-dsh-mnemon-active]):not([data-dsh-taskbo
 @media (prefers-reduced-motion: reduce) {
   .pd-delegateRunning { animation: none; }
   .pd-delegateChev { transition: none; }
+  .pd-delegChev { transition: none; }
   .pd-delegateHead { transition: none; }
 }
 
