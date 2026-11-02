@@ -143,6 +143,24 @@
       "api.notJson": { zh: "HTTP {status}（响应不是 JSON）", en: "HTTP {status} (response was not JSON)" },
       "api.timeout": { zh: "请求超时（{s}s 无响应）", en: "Request timed out (no response for {s}s)" },
 
+      // api.err.*：服务端稳定错误码（tools/lib/errors.mjs 单表）的本地化文案。
+      // 30 片段按 error.code 查 key，有则用（按 UI 语言）、无则回落服务端
+      // message（仅中文）。generation_failed 永不本地化（服务端 message 是
+      // 动态生成原因，逐案必读）。
+      "api.err.apply_in_flight": { zh: "已有一次应用正在进行，请稍后重试", en: "An apply is already in progress — please retry shortly" },
+      "api.err.config_stale": { zh: "配置已被其他入口（面板 / API / CLI / 手编文件）修改，面板已重新加载最新配置；请核对后再应用（未保存的本地改动已丢弃）", en: "The config was changed elsewhere (panel / API / CLI / manual edit); the panel reloaded the latest config — review it and apply again (unsaved local edits were dropped)" },
+      "api.err.forbidden": { zh: "请求来源不受信任（forbidden）", en: "Request source is not trusted (forbidden)" },
+      "api.err.preset_not_found": { zh: "未找到该预设", en: "Preset not found" },
+      "api.err.backup_not_found": { zh: "备份 / 快照不存在", en: "Backup or snapshot not found" },
+      "api.err.preset_delete_forbidden": { zh: "全局 orchestrator 预设不支持删除：插件启动自愈会自动重装；卸载请移除 dsh-paoding 插件", en: "The global orchestrator preset cannot be deleted: plugin startup self-heals it back; remove the dsh-paoding plugin to uninstall" },
+      "api.err.route_not_found": { zh: "接口不存在", en: "No such API route" },
+      "api.err.workspace_path_missing": { zh: "缺少工作区目录绝对路径", en: "Missing workspace directory absolute path" },
+      "api.err.workspace_not_dir": { zh: "目录不存在或不是目录", en: "Directory does not exist or is not a directory" },
+      "api.err.assignments_missing": { zh: "缺少预设配置（body.assignments）", en: "Missing preset assignments (body.assignments)" },
+      "api.err.config_text_missing": { zh: "缺少配置文本（body.content）", en: "Missing config text (body.content)" },
+      "api.err.body_too_large": { zh: "请求体超过大小上限", en: "Request body exceeds the size limit" },
+      "api.err.body_invalid_json": { zh: "请求体不是合法 JSON", en: "Request body is not valid JSON" },
+
       // ver.*：40 片段页头版本更新卡
       "ver.checkFailed": { zh: "版本检测失败", en: "Version check failed" },
       "ver.checking": { zh: "检测中…", en: "Checking…" },

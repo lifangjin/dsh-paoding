@@ -176,6 +176,7 @@ function parseInlineRoleBlock(text, itemStart, blockEnd) {
   const toolNameM = /\n        toolName: ([^\n]*)/.exec(head)
   if (!toolNameM) throw new Error('角色委派块缺 toolName 行（0.2.1 角色行适配无法定位 8 空格缩进的 "toolName: "）')
   const providerM = /\n        provider: ([^\n]*)/.exec(head)
+  const bgM = /\n        backgroundMode: ([^\n]*)/.exec(head)
   // persona 块标量：key 行之后 `|-` + 换行 + 缩进内容（缩进剥皮走 personaDefaultText）。
   const dashStart = personaKeyIdx + personaMarker.length // 指向 `|-` 之后的换行
   const contentStart = dashStart + 1
@@ -205,6 +206,7 @@ function parseInlineRoleBlock(text, itemStart, blockEnd) {
   return {
     toolName: unquoteYamlScalar(toolNameM[1]),
     provider: providerM ? unquoteYamlScalar(providerM[1]) : 'spawn',
+    backgroundMode: bgM ? bgM[1].trim() : null,
     personaText,
     names,
     dropStart: personaKeyIdx,
@@ -273,6 +275,71 @@ function extractRoleBaseRows(out) {
 }
 
 /**
+ * continuable 角色的「快 shell」基础行变体（借自 dsh-superagent worker 预设）：
+ * 前台命令与 job 等待超过 5 秒即转后台任务——主 agent 用 send_message 续修时，
+ * 正在跑的长 build/test 不再挡住消息（子 agent 在下一步收到）。变换两处：
+ *  1) tool-bash / tool-pwsh 两条裸工具行 → isolate: shell 组（组内先挂
+ *     dsh-bash-local / dsh-pwsh-local executor 并钉 timeoutMs/maxTimeoutMs
+ *     5000，再挂 tool-bash / tool-pwsh）——executor 预算只能经组内 executor
+ *     行配置，裸工具行没有该配置面；
+ *  2) tool-jobs 行补 waitTimeoutMs/maxWaitTimeoutMs 5000（job_output 等待
+ *     上限同款收紧）。
+ * 只作用于该角色自己的子预设组合（0.2.1 AgentPreset 形态），不影响主 agent 与
+ * 其它角色。one-shot 角色与 ≤0.2.0 内联形态不注入（后者 executor 组会波及
+ * 主 agent，见 docs/configuration.md 2.6）。模板行缺失属漂移，硬错误。
+ */
+export const FAST_SHELL_MS = 5000
+
+export function fastShellBaseRows(baseRowsBlock) {
+  // 非 sticky / 非 global：首处命中即止，条目跨行 = 头行 + 8 空格续行。
+  const bashEntryRe = /\n      - id: tool-bash\n(?:        .*\n)*/
+  const pwshEntryRe = /\n\n      - id: tool-pwsh\n(?:        .*\n)*/
+  const jobsRowRe = /(      - id: tool-jobs\n        name: '@deepseek-ai\/dsh-tool-jobs')\n/
+  if (!bashEntryRe.test(baseRowsBlock) || !pwshEntryRe.test(baseRowsBlock)) {
+    throw new Error('快 shell 变体定位失败：base rows 缺 tool-bash / tool-pwsh 条目（模板漂移）')
+  }
+  if (!jobsRowRe.test(baseRowsBlock)) {
+    throw new Error('快 shell 变体定位失败：base rows 缺 tool-jobs 条目（模板漂移）')
+  }
+  const shellGroup = [
+    '',
+    '      # continuable fast shell：前台命令 / job 等待超 5s 转后台，续修消息不被长命令挡住',
+    '      - id: shell',
+    '        name: cordis:group',
+    '        group: true',
+    '        isolate:',
+    '          shell: true',
+    '        config:',
+    '          - id: bash',
+    '            name: \'@deepseek-ai/dsh-bash-local\'',
+    '            disabled: !!js process.platform === \'win32\'',
+    '            config:',
+    '              timeoutMs: 5000',
+    '              maxTimeoutMs: 5000',
+    '          - id: pwsh',
+    '            name: \'@deepseek-ai/dsh-pwsh-local\'',
+    '            disabled: !!js process.platform !== \'win32\'',
+    '            config:',
+    '              timeoutMs: 5000',
+    '              maxTimeoutMs: 5000',
+    '          - id: tool-bash',
+    '            name: \'@deepseek-ai/dsh-tool-bash\'',
+    '            disabled: !!js process.platform === \'win32\'',
+    '          - id: tool-pwsh',
+    '            name: \'@deepseek-ai/dsh-tool-pwsh\'',
+    '            disabled: !!js process.platform !== \'win32\'',
+    '',
+  ].join('\n')
+  return baseRowsBlock
+    .replace(bashEntryRe, () => `\n${shellGroup}`)
+    .replace(pwshEntryRe, () => '')
+    .replace(
+      jobsRowRe,
+      `$1\n        config:\n          waitTimeoutMs: ${FAST_SHELL_MS}\n          maxWaitTimeoutMs: ${FAST_SHELL_MS}\n`,
+    )
+}
+
+/**
  * 角色委派行宿主版本适配（≥0.2.1 走 AgentPreset 形态，见 isPresetRoleHost）：
  *  1) 扫全部 4 空格缩进的 `- id: delegation-<rowId>` 行（内置三块 +
  *     search_internal_deep 静态块 + 自定义角色块；delegation-labels 等顶层行
@@ -329,6 +396,9 @@ export function adaptPresetRoleRows(text, assignments, hostVersionTriple, hostPr
   // standard 基础行片段从原文提取即可：两段切片（shell→delegation 注释行之间、
   // remaining marker→文尾）都在委派层之外，瘦身编辑不落在切片内。
   const baseRowsBlock = extractRoleBaseRows(text)
+  // continuable 角色用「快 shell」变体（fastShellBaseRows，见上）：同一份基础行
+  // 只变换一次，多个 continuable 角色共享缓存。
+  let fastRowsCache = null
   for (let idx = 0; idx < ordered.length; idx++) {
     const block = ordered[idx]
     if (block.provider === 'fork') {
@@ -341,6 +411,9 @@ export function adaptPresetRoleRows(text, assignments, hostVersionTriple, hostPr
     }
     const presetId = `${ROLE_PRESET_ID_PREFIX}${block.toolName}`
     const order = ROLE_PRESET_BASE_ORDER + ROLE_PRESET_ORDER_STEP * idx
+    if (block.backgroundMode === 'continuable' && fastRowsCache === null) {
+      fastRowsCache = fastShellBaseRows(baseRowsBlock)
+    }
     chunks.push(
       renderRolePresetRow({
         presetId,
@@ -348,7 +421,7 @@ export function adaptPresetRoleRows(text, assignments, hostVersionTriple, hostPr
         order,
         personaText: block.personaText,
         allowNames: block.names,
-        baseRowsBlock,
+        baseRowsBlock: block.backgroundMode === 'continuable' ? fastRowsCache : baseRowsBlock,
       }),
     )
     dropEdits.push({ start: block.dropStart, end: block.dropEnd, text: `        agentPreset: ${presetId}\n` })

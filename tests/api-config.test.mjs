@@ -219,7 +219,10 @@ test('import：合法配置 → 200 {ok} 落盘规范化，mtime 失效 state �
 
   const r = await callRoute(handlerOf(), '/api/paoding/config/import', { body: { content: incoming } })
   assert.equal(r.status, 200)
-  assert.deepEqual(r.json, { ok: true })
+  // 0.4.9 起响应纯增量附带 revision（写盘后版本链最新编号，客户端就地更新
+  // baseRevision 用）。
+  assert.equal(r.json.ok, true)
+  assert.ok(Number.isInteger(r.json.revision), 'revision 恒为整数（无历史首次写 = 1）')
 
   // 落盘 = 规范化写出：头注释换标准头、手写注释不保留（有意取舍，见文件头）
   const written = readFileSync(configFile, 'utf8')
@@ -316,14 +319,20 @@ test('backups 路由：200 { ok, backups }，按新→旧返回；restore 成功
   writeFileSync(configFile, CFG_B, 'utf8')
   apiCore.rotateConfigBackups()
 
-  // 清单路由：纯读不写
+  // 清单路由：纯读不写。0.4.9 起为版本链清单（snapshots）+ 旧 bak 兼容列表
+  //（legacyBackups）+ 当前 revision；本用例只造了 bak（历史目录为空 → 首次
+  // 清单读取会把存量 bak 迁移导入成 v1/v2，origin=legacy-backup）。
   const list1 = await callRoute(handlerOf(), '/api/paoding/config/backups')
   assert.equal(list1.status, 200)
   assert.equal(list1.json.ok, true)
-  assert.deepEqual(list1.json.backups.map((b) => b.file), [
+  assert.ok(Number.isInteger(list1.json.revision))
+  assert.deepEqual(list1.json.legacyBackups.map((b) => b.file), [
     'dsh-paoding.config.yml.bak-1',
     'dsh-paoding.config.yml.bak-2',
-  ], '新→旧：bak-1（B）在前')
+  ], '旧 bak 兼容列表仍在（新→旧）')
+  // 清单恒纯读不写：版本链里只有前序用例（import）留下的快照，本用例手工造
+  // 的 bak 不会被清单迁移（迁移只发生在下一次写盘，snapshotConfig 内幂等）。
+  assert.ok(Array.isArray(list1.json.snapshots))
   assert.equal(readFileSync(configFile, 'utf8'), CFG_B, '清单绝不改写配置文件')
 
   // 回滚到 bak-2（A 版）：200 { ok: true }，配置回到 A，且「当前 B」被推入 bak-1
@@ -333,12 +342,19 @@ test('backups 路由：200 { ok, backups }，按新→旧返回；restore 成功
     body: { file: 'dsh-paoding.config.yml.bak-2' },
   })
   assert.equal(r.status, 200)
-  assert.deepEqual(r.json, { ok: true })
+  assert.equal(r.json.ok, true)
+  assert.equal(r.json.restored, 'dsh-paoding.config.yml.bak-2')
+  assert.ok(Number.isInteger(r.json.revision))
   assert.equal(readFileSync(configFile, 'utf8'), CFG_A, '配置内容回到选定快照（A 版）')
-  assert.equal(readFileSync(`${configFile}.bak-1`, 'utf8'), CFG_B, '回滚前的当前配置（B）先推入 bak-1')
-  // 轮换链整体后移一层：bak-1(B)→bak-2、原 bak-2(A)→bak-3，再拷当前(B)进 bak-1
-  assert.equal(readFileSync(`${configFile}.bak-2`, 'utf8'), CFG_B, '轮换后 bak-2 = 原 bak-1（B）')
-  assert.equal(readFileSync(`${configFile}.bak-3`, 'utf8'), CFG_A, '轮换后 bak-3 = 原 bak-2（A）')
+  // 0.4.9 起回滚前的「当前」快照进版本链（origin=restore），不再轮换 .bak 链：
+  // bak-1/2/3 保持回滚前原样（B/B/A）。
+  assert.equal(readFileSync(`${configFile}.bak-1`, 'utf8'), CFG_B, 'bak-1 不再被回滚轮换改写')
+  const { readFileSync: rf } = await import('node:fs')
+  const histDir = `${configFile}.history`
+  const { readdirSync } = await import('node:fs')
+  const ymls = readdirSync(histDir).filter((f) => f.endsWith('.yml')).sort()
+  const newest = ymls[ymls.length - 1]
+  assert.equal(rf(`${histDir}/${newest}`, 'utf8'), CFG_B, '回滚前当前配置（B）进版本链最新快照')
   assert.equal(apiCore.isStateCacheStale(), true, '回滚落盘改 mtime，state 缓存按对账自动失效')
 })
 

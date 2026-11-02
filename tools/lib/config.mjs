@@ -299,6 +299,11 @@ export function normalizeTargetFields(raw) {
       start_mode: normalizeStartMode(raw.start_mode, `roles.${toolName}.start_mode`),
       background_mode: normalizeBackgroundMode(raw.background_mode, `roles.${toolName}.background_mode`),
       persona: typeof raw.persona === 'string' && raw.persona.trim() !== '' ? raw.persona : null,
+      // persona_base：自动管理的血缘键（stableHash(默认 persona)）——记录用户
+      // 覆盖所基于的默认模板版本；默认模板升级后 hash 不匹配即出 default_changed
+      // 警告（state.mjs 检测、生成层 warn）。非用户可编辑项；仅随 persona 覆盖
+      // 存在时有意义。字符串收（trim 后非空），其余 → null。
+      persona_base: typeof raw.persona_base === 'string' && raw.persona_base.trim() !== '' ? raw.persona_base.trim() : null,
       tools,
     }
   }
@@ -538,6 +543,11 @@ function writeTargetFields(lines, pad, target) {
     if (role.persona !== null && role.persona !== undefined) {
       lines.push(`${pad}    persona: |-`)
       for (const line of String(role.persona).split('\n')) lines.push(`${pad}      ${line}`)
+      // 血缘键随覆盖一起落盘（default_changed 三方合并的依据）；只有覆盖存在
+      // 且键非空才写——无覆盖不写（避免对默认角色制造噪音键）。
+      if (role.persona_base !== null && role.persona_base !== undefined) {
+        lines.push(`${pad}    persona_base: ${yamlScalar(role.persona_base)}`)
+      }
     }
     if (role.tools !== null && role.tools !== undefined) {
       lines.push(`${pad}    tools:`)

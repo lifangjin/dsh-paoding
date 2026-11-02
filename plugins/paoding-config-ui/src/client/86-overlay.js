@@ -290,8 +290,27 @@
         setBkErr("");
         setBkBusy(true);
         paodingApi("config/backups").then(function (d) {
-          if (!d || d.ok !== true || !Array.isArray(d.backups)) throw new Error(t("menu.backupBadResponse"));
-          setBkList(d.backups);
+          if (!d || d.ok !== true) throw new Error(t("menu.backupBadResponse"));
+          // 0.4.9 起清单 = 版本链快照（snapshots，按 revision 回滚，主形态）+
+          // 旧 .bak 轮换备份（legacyBackups，按 file 回滚，兼容）。两者统一成
+          // 行条目 { tag, atMs, size, revision? , file? }，服务端均已按新→旧
+          // 排好，这里保持顺序直接拼接（版本链在前）。
+          var items = [];
+          (Array.isArray(d.snapshots) ? d.snapshots : []).forEach(function (x) {
+            if (!x || typeof x.revision !== "number") return;
+            items.push({
+              tag: "v" + x.revision,
+              atMs: x.at ? Date.parse(x.at) : 0,
+              size: typeof x.size === "number" ? x.size : 0,
+              revision: x.revision,
+              origin: typeof x.origin === "string" ? x.origin : "",
+            });
+          });
+          (Array.isArray(d.legacyBackups) ? d.legacyBackups : []).forEach(function (b) {
+            if (!b || typeof b.file !== "string" || !b.file) return;
+            items.push({ tag: backupTagOf(b.file), atMs: b.mtimeMs, size: b.size, file: b.file });
+          });
+          setBkList(items);
         }).catch(function (err) {
           setBkErr(t("menu.backupListFail", { msg: err.message }));
         }).finally(function () {
@@ -306,16 +325,22 @@
       }
 
       function pickBackup(item) {
-        if (!item || typeof item.file !== "string" || item.file === "" || bkBusy) return;
+        // 条目两种形态：revision（版本链快照，主形态）/ file（旧 .bak，兼容）。
+        // 其余字段非法（空条目防御）或恢复请求在途时直接忽略。
+        if (!item || bkBusy) return;
+        var byRevision = typeof item.revision === "number";
+        if (!byRevision && (typeof item.file !== "string" || item.file === "")) return;
+        var tag = item.tag || backupTagOf(item.file);
+        var payload = byRevision ? { revision: item.revision } : { file: item.file };
         confirmCtrl.ask({
           title: t("menu.restoreTitle"),
-          body: t("menu.restoreBody", { name: backupTagOf(item.file) }),
+          body: t("menu.restoreBody", { name: tag }),
           danger: true,
           confirmText: t("menu.restoreConfirm"),
           onConfirm: function () {
             setBkBusy(true);
-            paodingApi("config/restore", { file: item.file }).then(function () {
-              toast.ok(t("menu.restored", { name: backupTagOf(item.file) }));
+            paodingApi("config/restore", payload).then(function () {
+              toast.ok(t("menu.restored", { name: tag }));
               setBkOpen(false);
               // 面板既有刷新路径（与「导入配置」同款）：重拉 state 重建 assign；
               // 显示名 / 角色名单可能被回滚改变，事件流委派行键控注册跟着刷新。
@@ -352,16 +377,22 @@
       function backupModalOf() {
         if (!bkOpen) return null;
         var rows = bkList.map(function (it, i) {
+          // tag = v<N>（版本链）/ bak-N（旧备份）；origin（panel-apply 等）拼进
+          // title 提示，行内保持「徽标 + 时间 + 大小」三段不变。
+          var tag = (it && it.tag) || backupTagOf(it && it.file);
+          var titleParts = [];
+          if (it && typeof it.file === "string" && it.file) titleParts.push(it.file);
+          if (it && it.origin) titleParts.push(it.origin);
           return h("button", {
             type: "button",
-            key: it && typeof it.file === "string" && it.file ? it.file : "bak-" + i,
+            key: (it && ((typeof it.file === "string" && it.file) || it.tag)) || ("bak-" + i),
             className: "pd-backupItem",
             disabled: bkBusy,
-            title: it && typeof it.file === "string" ? it.file : undefined,
+            title: titleParts.join(" · ") || undefined,
             onClick: function () { pickBackup(it); },
           },
-            h("span", { className: "pd-backupTag" }, backupTagOf(it && it.file)),
-            h("span", { className: "pd-backupTime" }, backupTimeText(it && it.mtimeMs)),
+            h("span", { className: "pd-backupTag" }, tag),
+            h("span", { className: "pd-backupTime" }, backupTimeText(it && it.atMs)),
             h("span", { className: "pd-backupSize" }, backupSizeText(it && it.size)));
         });
         return h("div", {

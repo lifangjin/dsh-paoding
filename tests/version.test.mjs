@@ -8,6 +8,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import { compareVersions, fetchLatestFromMirror, getVersionInfo } from '../tools/lib/version.mjs'
 
@@ -54,12 +55,15 @@ test('getVersionInfo: npm registry 命中时不碰镜像与 GitHub', async () =>
 })
 
 test('getVersionInfo: registry 失败 → npmmirror 兜底命中，source 标记 mirror', async () => {
-  // latest 取比当前包版本高一档的钉值（当前 0.4.8 → latest 0.4.9），bump 时同改
-  const fetchImpl = makeFetch({ registry: { throw: 'TimeoutError' }, mirror: { body: { version: '0.4.9' } } })
+  // latest 取「当前包版本 patch +1」动态构造，bump 版本不再需要手改钉值
+  const local = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+  const [maj, min, pat] = local.split('.').map(Number)
+  const newer = `${maj}.${min}.${pat + 1}`
+  const fetchImpl = makeFetch({ registry: { throw: 'TimeoutError' }, mirror: { body: { version: newer } } })
   const info = await getVersionInfo({ fetchImpl, now: T_MIRROR })
   assert.equal(info.source, 'mirror')
-  assert.equal(info.latest, 'v0.4.9')
-  assert.equal(info.updateAvailable, true, '0.4.8 < 0.4.9 应提示升级')
+  assert.equal(info.latest, `v${newer}`)
+  assert.equal(info.updateAvailable, true, `${local} < ${newer} 应提示升级`)
   assert.equal(fetchImpl.visited.length, 2)
   assert.match(fetchImpl.visited[1], /registry\.npmmirror\.com/)
 })

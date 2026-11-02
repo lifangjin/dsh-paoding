@@ -40,7 +40,7 @@ import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getState, refreshState, isStateCacheStale, serializeState, installAssignments, resolveDshHome, discoverWorkspaceCandidates, ensurePresetInstalled, pluginVersion, exportConfigPayload, importConfigContent, listConfigBackups, restoreConfigBackup, rotateConfigBackups, slimStatsOf, listPresets, resolveWorkspacePathByPresetId, deleteWorkspacePreset } from './api-core.mjs'
+import { getState, refreshState, isStateCacheStale, serializeState, installAssignments, resolveDshHome, discoverWorkspaceCandidates, ensurePresetInstalled, pluginVersion, exportConfigPayload, importConfigContent, restoreConfigSnapshot, listConfigSnapshots, slimStatsOf, listPresets, resolveWorkspacePathByPresetId, deleteWorkspacePreset } from './api-core.mjs'
 import { collectModelRefs } from '../../tools/lib/health.mjs'
 import { diffAssignments, loadConfig } from '../../tools/lib/config.mjs'
 import { detectSkills } from '../../tools/lib/skills.mjs'
@@ -48,6 +48,8 @@ import { collectRuntimeFacts, detectHmrOf } from './runtime-inventory.mjs'
 import { collectDelegationStats } from './stats-core.mjs'
 import { getVersionInfo } from '../../tools/lib/version.mjs'
 import { runUpgrade } from '../../tools/lib/upgrade.mjs'
+import { errorPayload } from '../../tools/lib/errors.mjs'
+import { assertRevisionFresh, currentConfigRevision, listConfigHistory, snapshotConfig } from '../../tools/lib/history.mjs'
 
 export const name = 'paoding-config-ui'
 
@@ -150,6 +152,14 @@ function json(res, status, payload) {
   res.end(text)
 }
 
+/** 错误码统一回包：errorPayload 取 { status, code, error, ...extra }，状态码
+ * 与响应体同源（单表驱动，见 tools/lib/errors.mjs）。extra 纯增量并入响应体
+ *（如 warnings / currentRevision）。 */
+function jsonError(res, code, values = {}, extra = {}) {
+  const payload = errorPayload(code, values, extra)
+  json(res, payload.status, payload)
+}
+
 // ── 对外错误信息脱敏（home 目录 / 插件安装根 → ~）───────────────────────────
 // 错误原文（可能带本机绝对路径）只进日志；回给浏览器的 message 先过这里。
 
@@ -229,6 +239,10 @@ function stateResponse(ctx, state) {
     ...state,
     persistenceAvailable: persistenceAvailableOf(ctx),
     slim: slimStatsOf(state, state.existing ?? {}),
+    // 配置版本链当前 revision（写路由的 baseRevision 比对基准；无历史 = 0）
+    // 与近期快照（面板「历史」下拉直接可渲染，无需再拉清单页）。
+    configRevision: currentConfigRevision(state.configFile),
+    configHistory: listConfigHistory(state.configFile, { limit: 10 }),
   }
 }
 
@@ -311,9 +325,9 @@ async function modelDirectoryOf(ctx) {
  * state.existing?.workspaces 判断该工作区键是否已存在）；PUT 一律视作更新，
  * 不回该键。生成失败按 apply 同款 422（err.warnings 透传体检结果）。
  */
-async function writeWorkspacePreset(ctx, res, { workspacePath, assignments, withCreated }) {
+async function writeWorkspacePreset(ctx, res, { workspacePath, assignments, withCreated, baseRevision = undefined }) {
   if (applyInFlight) {
-    json(res, 409, { error: '已有一次应用（apply）正在进行，请稍后重试' })
+    jsonError(res, 'apply_in_flight')
     return
   }
   applyInFlight = true
@@ -333,9 +347,12 @@ async function writeWorkspacePreset(ctx, res, { workspacePath, assignments, with
       }
     }
     try {
-      // 写盘前自动轮换备份（当前配置推入 bak-1；首次保存无「当前」则不备份），
-      // 与 apply / import / 回滚同一口径——工作区预设写盘同样是配置写路径。
-      rotateConfigBackups()
+      // 写盘前：CAS 护栏（baseRevision 与磁盘不一致 → 409 config_stale）+
+      // 版本链快照（origin=panel-workspace；替代旧 bak 轮换，见 history.mjs）。
+      // 复用函数入口取的 s（落盘前 state 已新鲜）；CAS 在 in-flight 闸内，
+      // 快照紧贴写盘，窗口最小。
+      assertRevisionFresh(s.configFile, baseRevision)
+      snapshotConfig(s.configFile, 'panel-workspace', workspacePath)
       const result = installAssignments(s, assignments, {
         dryRun: false,
         saveConfigOnWrite: true,
@@ -360,12 +377,13 @@ async function writeWorkspacePreset(ctx, res, { workspacePath, assignments, with
         warnings: result.warnings,
         ...(withCreated ? { created } : {}),
         workspace: workspacePath,
+        // 写盘后版本链最新编号（客户端就地更新 baseRevision，无需重拉 state）。
+        revision: currentConfigRevision(s.configFile),
       })
     } catch (err) {
-      json(res, 422, {
-        error: err.message,
+      jsonError(res, 'generation_failed', { message: err.message }, {
         ...(Array.isArray(err?.warnings) ? { warnings: err.warnings } : {}),
-      })
+        })
     }
   } finally {
     applyInFlight = false
@@ -411,7 +429,7 @@ export async function apply(ctx) {
     path: '/api/paoding',
     handler: async (req, res) => {
       if (!isTrustedApiRequest(req, trustedHostsOf())) {
-        json(res, 403, { error: 'forbidden' })
+        jsonError(res, 'forbidden')
         return
       }
       const url = new URL(req.url, 'http://dsh.internal')
@@ -494,7 +512,7 @@ export async function apply(ctx) {
           if (url.searchParams.get('skills') === '1') {
             const wsPath = url.searchParams.get('path')
             if (typeof wsPath !== 'string' || wsPath.trim() === '') {
-              json(res, 422, { error: '缺少工作区目录绝对路径（query.path）' })
+              jsonError(res, 'workspace_path_missing', { where: 'query.path' })
               return
             }
             const dshHome = resolveDshHome()
@@ -558,7 +576,7 @@ export async function apply(ctx) {
           const body = await readBody(req)
           const wsPath = typeof body.path === 'string' ? body.path.trim() : ''
           if (wsPath === '') {
-            json(res, 422, { error: '缺少工作区目录绝对路径（body.path）' })
+            jsonError(res, 'workspace_path_missing', { where: 'body.path' })
             return
           }
           // 存在预检：调宿主 create 之前先确认路径真实存在且是目录——坏路径
@@ -567,7 +585,7 @@ export async function apply(ctx) {
           let wsStat = null
           try { wsStat = statSync(wsPath) } catch { /* 不存在：stat 抛错，落到下方 422 */ }
           if (!wsStat || !wsStat.isDirectory()) {
-            json(res, 422, { error: `目录不存在或不是目录：${wsPath}` })
+            jsonError(res, 'workspace_not_dir', { path: wsPath })
             return
           }
           try {
@@ -604,7 +622,7 @@ export async function apply(ctx) {
           // apply in-flight 闸（预览无写副作用不受限）：落盘期间重复 apply 直接
           // 409，防并发写配置文件。
           if (!dryRun && applyInFlight) {
-            json(res, 409, { error: '已有一次应用（apply）正在进行，请稍后重试' })
+            jsonError(res, 'apply_in_flight')
             return
           }
           if (!dryRun) applyInFlight = true
@@ -620,7 +638,7 @@ export async function apply(ctx) {
               let wsStat = null
               try { wsStat = statSync(workspacePath) } catch { /* 不存在：stat 抛错，落到下方 422 */ }
               if (!wsStat || !wsStat.isDirectory()) {
-                json(res, 422, { error: `目录不存在或不是目录：${rawWorkspace}` })
+                jsonError(res, 'workspace_not_dir', { path: rawWorkspace })
                 return
               }
             }
@@ -646,10 +664,14 @@ export async function apply(ctx) {
               // 磁盘真实内容（preview 不落盘，先后等价，统一走改前口径）。生成
               // 管线随后对同一文件做同样的 loadConfig 护栏，解析失败同样 422。
               const diskAssignments = loadConfig(s.configFile, s.yamlMod)
-              // 写盘前自动轮换备份（当前配置推入 bak-1；首次保存无「当前」则不
-              // 备份），与 import / 工作区预设写盘 / 回滚同一口径。预览不落盘，
-              // 不轮换。
-              if (!dryRun) rotateConfigBackups()
+              // 写盘前：CAS 护栏（body.baseRevision 与磁盘版本链不一致 → 409
+              // config_stale；缺省不比较，老客户端零变化）+ 版本链快照
+              //（origin=panel-apply / panel-apply-workspace）。预览不落盘，
+              // 不 CAS 不快照。
+              if (!dryRun) {
+                assertRevisionFresh(s.configFile, body.baseRevision)
+                snapshotConfig(s.configFile, workspacePath === null ? 'panel-apply' : 'panel-apply-workspace', workspacePath)
+              }
               const result = installAssignments(s, body.assignments, {
                 dryRun,
                 saveConfigOnWrite: !dryRun,
@@ -687,12 +709,14 @@ export async function apply(ctx) {
                 // 增量字段。
                 diff: diffAssignments(diskAssignments, body.assignments),
                 slim: slimStatsOf(s, body.assignments),
+                // 写盘后版本链最新编号（客户端就地更新 baseRevision）。预览
+                //（未写盘）也回当前值，语义统一为「响应时刻的 revision」。
+                revision: currentConfigRevision(s.configFile),
               })
             } catch (err) {
               // 422 保持既有 { error } 形状；体检结果（如零工具角色的可读说明）
               // 挂在 error.warnings 上时一并透传（同样纯增量）。
-              json(res, 422, {
-                error: err.message,
+              jsonError(res, 'generation_failed', { message: err.message }, {
                 ...(Array.isArray(err?.warnings) ? { warnings: err.warnings } : {}),
               })
             }
@@ -720,16 +744,16 @@ export async function apply(ctx) {
           const body = await readBody(req)
           const content = typeof body.content === 'string' ? body.content : ''
           if (content.trim() === '') {
-            json(res, 422, { error: '缺少配置文本（body.content）' })
+            jsonError(res, 'config_text_missing')
             return
           }
           if (applyInFlight) {
-            json(res, 409, { error: '已有一次应用（apply）正在进行，请稍后重试' })
+            jsonError(res, 'apply_in_flight')
             return
           }
           applyInFlight = true
           try {
-            json(res, 200, await importConfigContent(content))
+            json(res, 200, await importConfigContent(content, { baseRevision: body.baseRevision }))
           } finally {
             applyInFlight = false
           }
@@ -737,28 +761,33 @@ export async function apply(ctx) {
         }
 
         if (route === 'config/backups' && req.method === 'GET') {
-          // 备份清单（新→旧）：{ file, mtimeMs, size }[]，无备份返回空数组。
-          // 纯读不写；file 恒为 basename，客户端回传它即够（还原路由只认配置
-          // 目录内的备份名）。
-          json(res, 200, { ok: true, backups: listConfigBackups() })
+          // 快照清单（新→旧）：版本链 entries（{ revision, file, origin, at, size }[]）
+          // + 旧 .bak 轮换备份（legacyBackups，兼容展示与回滚）。纯读不写；
+          // file 恒为 basename（回滚路由只认配置目录内的名字，防路径穿越）。
+          json(res, 200, { ok: true, ...listConfigSnapshots() })
           return
         }
 
         if (route === 'config/restore' && req.method === 'POST') {
-          // 回滚配置：{ file } 须精确匹配「配置文件名.bak-1/2/3」。与 apply /
-          // import 共用同一把 in-flight 闸（写盘路径防并发交错）。核心函数先
-          // loadConfig 验证备份可解析（坏备份 422 / 备份不存在 404，statusCode
-          // 由外层 catch 回 { error } 信封，不写盘），再把「当前配置」按同款
-          // 轮换推入备份链后拷贝备份为当前；mtime 变化令 state 缓存按既有对账
-          // 自动失效，无需手动清理。
+          // 回滚配置：body { revision }（版本链编号，新形态）或 { file }（旧
+          // 「配置文件名.bak-1/2/3」，兼容），可选 baseRevision 走 CAS。与
+          // apply / import 共用同一把 in-flight 闸（写盘路径防并发交错）。核心
+          // 函数（restoreConfigSnapshot）先 loadConfig 验证快照可解析（坏快照
+          // 422 / 不存在 404 / CAS 过期 409，statusCode + code 由外层 catch 回
+          // 包，不写盘），再把「当前配置」快照进版本链（origin=restore）后整
+          // 文件回写；mtime 变化令 state 缓存按既有对账自动失效。
           const body = await readBody(req)
           if (applyInFlight) {
-            json(res, 409, { error: '已有一次应用（apply）正在进行，请稍后重试' })
+            jsonError(res, 'apply_in_flight')
             return
           }
           applyInFlight = true
           try {
-            json(res, 200, await restoreConfigBackup(typeof body.file === 'string' ? body.file : ''))
+            json(res, 200, await restoreConfigSnapshot({
+              file: typeof body.file === 'string' ? body.file : '',
+              revision: Number.isInteger(body.revision) ? body.revision : null,
+              baseRevision: body.baseRevision,
+            }))
           } finally {
             applyInFlight = false
           }
@@ -843,24 +872,25 @@ export async function apply(ctx) {
           const body = await readBody(req)
           const assignments = body.assignments
           if (!assignments || typeof assignments !== 'object' || Array.isArray(assignments) || Object.keys(assignments).length === 0) {
-            json(res, 422, { error: '缺少预设配置（body.assignments）' })
+            jsonError(res, 'assignments_missing')
             return
           }
           const rawWorkspace = typeof body.workspace === 'string' ? body.workspace.trim() : ''
           if (rawWorkspace === '') {
-            json(res, 422, { error: '缺少工作区目录绝对路径（body.workspace）' })
+            jsonError(res, 'workspace_path_missing', { where: 'body.workspace' })
             return
           }
           let wsStat = null
           try { wsStat = statSync(rawWorkspace) } catch { /* 不存在：stat 抛错，落到下方 422 */ }
           if (!wsStat || !wsStat.isDirectory()) {
-            json(res, 422, { error: `目录不存在或不是目录：${rawWorkspace}` })
+            jsonError(res, 'workspace_not_dir', { path: rawWorkspace })
             return
           }
           await writeWorkspacePreset(ctx, res, {
             workspacePath: path.normalize(path.resolve(rawWorkspace)),
             assignments,
             withCreated: true,
+            baseRevision: body.baseRevision,
           })
           return
         }
@@ -872,7 +902,7 @@ export async function apply(ctx) {
             // 全局预设两态先行分流：更新 = 等价 apply 不带 workspace；删除
             // 语义不成立（启动自愈会装回来），403 直接拒绝。
             if (req.method === 'DELETE' && presetId === 'orchestrator') {
-              json(res, 403, { error: '全局 orchestrator 预设不支持删除：插件启动自愈会自动重装；卸载请移除 dsh-paoding 插件' })
+              jsonError(res, 'preset_delete_forbidden')
               return
             }
             // PUT 的 body 与校验先行（不占闸，与 POST 同款文案），校验过了再
@@ -882,13 +912,13 @@ export async function apply(ctx) {
               const body = await readBody(req)
               assignments = body.assignments
               if (!assignments || typeof assignments !== 'object' || Array.isArray(assignments) || Object.keys(assignments).length === 0) {
-                json(res, 422, { error: '缺少预设配置（body.assignments）' })
+                jsonError(res, 'assignments_missing')
                 return
               }
             }
             if (presetId === 'orchestrator') {
               // 全局更新：workspacePath = null、无 created，其余与 POST 一致。
-              await writeWorkspacePreset(ctx, res, { workspacePath: null, assignments, withCreated: false })
+              await writeWorkspacePreset(ctx, res, { workspacePath: null, assignments, withCreated: false, baseRevision: body.baseRevision })
               return
             }
             // 工作区预设按 id 反查路径（原始 state 的 existing.workspaces 键集
@@ -897,18 +927,18 @@ export async function apply(ctx) {
             const s0 = await rawStateWithRuntimeFacts(ctx)
             const workspacePath = resolveWorkspacePathByPresetId(s0.existing, presetId)
             if (workspacePath === null) {
-              json(res, 404, { error: `未找到预设: ${presetId}` })
+              jsonError(res, 'preset_not_found', { presetId })
               return
             }
             // 目录预检（配置里的路径可能已被外部删除），文案与 POST 同款。
             let wsStat = null
             try { wsStat = statSync(workspacePath) } catch { /* 不存在：落到下方 422 */ }
             if (!wsStat || !wsStat.isDirectory()) {
-              json(res, 422, { error: `目录不存在或不是目录：${workspacePath}` })
+              jsonError(res, 'workspace_not_dir', { path: workspacePath })
               return
             }
             if (req.method === 'PUT') {
-              await writeWorkspacePreset(ctx, res, { workspacePath, assignments, withCreated: false })
+              await writeWorkspacePreset(ctx, res, { workspacePath, assignments, withCreated: false, baseRevision: body.baseRevision })
               return
             }
             // DELETE：核心清理在 deleteWorkspacePreset（配置重读护栏在函数
@@ -916,18 +946,18 @@ export async function apply(ctx) {
             // 共用同一把闸；成功后显式重刷缓存（saveConfig 已改 mtime，理论
             // 上缓存自失效，重刷与 POST/PUT 对齐；best-effort）。
             if (applyInFlight) {
-              json(res, 409, { error: '已有一次应用（apply）正在进行，请稍后重试' })
+              jsonError(res, 'apply_in_flight')
               return
             }
             applyInFlight = true
             try {
-              const removed = deleteWorkspacePreset(s0, workspacePath)
+              const removed = deleteWorkspacePreset(s0, workspacePath, { baseRevision: body.baseRevision })
               try {
                 await rawStateWithRuntimeFacts(ctx, { force: true })
               } catch (err) {
                 ctx.logger?.warn?.('paoding-config-ui: post-apply state refresh failed: ' + String(err?.message ?? err))
               }
-              json(res, 200, { ok: true, ...removed })
+              json(res, 200, { ok: true, ...removed, revision: currentConfigRevision(s0.configFile) })
             } finally {
               applyInFlight = false
             }
@@ -935,12 +965,12 @@ export async function apply(ctx) {
           }
         }
 
-        json(res, 404, { error: `no such route: ${req.method} /api/paoding/${route}` })
+        jsonError(res, 'route_not_found', { route: `${req.method} /api/paoding/${route}` })
       } catch (err) {
         // 错误原文（可能带本机绝对路径）留日志；对外 message 先脱敏（home /
         // 插件安装根 → ~）。readBody 的 413/400 带 statusCode，按其状态码回。
         ctx.logger?.warn?.('paoding-config-ui: request failed: ' + String(err?.message ?? err))
-        json(res, Number.isInteger(err?.statusCode) ? err.statusCode : 500, { error: sanitizeMessage(err?.message ?? err) })
+        json(res, Number.isInteger(err?.statusCode) ? err.statusCode : 500, { error: sanitizeMessage(err?.message ?? err), ...(err?.data ?? {}) })
       }
     },
   })

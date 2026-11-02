@@ -35,7 +35,7 @@ import {
   stripNonTargetKeys,
   yamlScalar,
 } from './config.mjs'
-import { assignSlugs, presetIdOf } from './workspaces.mjs'
+import { assignSlugs, presetIdOf, stableHash } from './workspaces.mjs'
 import {
   extractMcp,
   isEntryEnabled,
@@ -46,7 +46,7 @@ import {
 } from './host.mjs'
 import { detectSkills, findSkillMeta } from './skills.mjs'
 import { locateAllowBlocks, locatePersonaBlocks } from './spans.mjs'
-import { composeGenerated, extractMainAgentAllow } from './compose.mjs'
+import { composeGenerated, extractMainAgentAllow, personaDefaultText } from './compose.mjs'
 import { smartDefaults } from './alloc.mjs'
 import {
   buildPresetRowText,
@@ -345,6 +345,37 @@ function readPresetMeta() {
  * 存盘只把该条目并进配置 workspaces 段（顶层字段维持磁盘现状）；不传（null）
  * 走全局路径，落点与存盘行为和旧版完全一致。
  */
+/**
+ * persona 覆盖血缘对账（generateAndInstall 生成前调用，就地补写 assignments）：
+ * 对每个「persona 被覆盖」的内置角色，把当前静态源默认 persona 的 stableHash
+ * 与 roles.<role>.persona_base 比对：
+ *  - persona_base 缺失（老配置升级 / 首次带覆盖保存）→ 静默回填当前 hash
+ *    （以当前默认为基线，后续默认再变才会告警）；
+ *  - persona_base 存在但 != 当前 hash（默认模板升级过）→ warn 一次
+ *    default_changed 提示（保留覆盖照常生效 / 清空覆盖采纳新默认），不改动、
+ *    不静默合并 —— 血缘键只在「与当前默认一致」时才刷新，升级窗口内不追认。
+ * 未覆盖 / 自定义角色：不动。dry-run 下照常对账（preview 也该看到告警），
+ * 但不落盘（saveConfigOnWrite=false），无副作用。
+ */
+export function reconcilePersonaLineage(personaBlocks, assignments) {
+  if (!personaBlocks || !assignments?.roles) return
+  for (const role of ROLES) {
+    const entry = assignments.roles[role]
+    if (!entry || entry.persona === null || entry.persona === undefined) continue
+    const block = personaBlocks.get(role)
+    if (!block) continue
+    const currentBase = stableHash(personaDefaultText(block.text))
+    if (entry.persona_base === null || entry.persona_base === undefined) {
+      entry.persona_base = currentBase
+    } else if (entry.persona_base !== currentBase) {
+      warn(
+        `roles.${role}.persona: 默认 persona 模板已升级（你的覆盖基于旧版默认，default_changed）——` +
+          '覆盖仍按原样生效；要采纳新默认请清空该覆盖后保存，要保留请在自定义 persona 里自行合并新默认的改动',
+      )
+    }
+  }
+}
+
 export function generateAndInstall(state, assignments, { dryRun = false, saveConfigOnWrite = false, workspacePath = null } = {}) {
   const { srcText, blocks, personaBlocks, inventory, restrictBase, yamlMod, dshHome, configFile, scanned, effectiveProfile } = state
 
@@ -404,6 +435,14 @@ export function generateAndInstall(state, assignments, { dryRun = false, saveCon
     const hit = findSkillMeta(name, dshHome, skillCwd)
     if (hit) mainAgentSkillMetas[name] = hit
   }
+
+  // persona 覆盖血缘（default_changed 三方合并，借自 dsh-superagent prompts
+  // override 记 base 的做法）：内置角色 persona 被覆盖时，比对「覆盖所基于的
+  // 默认模板 hash」（roles.<role>.persona_base，生成层自动维护）与当前静态源
+  // 默认 persona 的 stableHash —— 缺失（老配置 / 首次带覆盖保存）静默回填当前
+  // hash；不一致（默认模板已升级）warn 一次提示三方合并（保留覆盖 / 清空采纳
+  // 新默认），绝不静默覆盖用户的覆盖。自定义角色无默认模板，不参与。
+  reconcilePersonaLineage(personaBlocks, assignments)
 
   // Compose the generated config; a composition error is a hard error.
   //（这层包装无增值，让 composeGenerated 的原始错误直接上抛。）宿主版本三元组

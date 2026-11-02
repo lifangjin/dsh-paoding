@@ -16,6 +16,13 @@ import { computeRestrictAllow } from '../../tools/lib/compose.mjs'
 import { loadConfig, normalizeConfig, normalizeTargetFields, saveConfig, serializeConfig, stripNonTargetKeys } from '../../tools/lib/config.mjs'
 import { loadYaml, parseYamlSubset, preprocessPatchText } from '../../tools/lib/yaml.mjs'
 import { captureWarnings, healthCheck } from '../../tools/lib/health.mjs'
+import {
+  assertRevisionFresh,
+  configHistoryEntryPath,
+  currentConfigRevision,
+  listConfigHistory,
+  snapshotConfig,
+} from '../../tools/lib/history.mjs'
 import { ROLES, warn } from '../../tools/lib/util.mjs'
 import {
   backfillHomePatchRows,
@@ -230,6 +237,25 @@ export function installAssignments(state, assignments, { dryRun = false, saveCon
   if (!assignments || typeof assignments !== 'object') {
     throw new Error('missing assignments object')
   }
+  // 血缘键磁盘优先合并（客户端往返可能丢 persona_base——它不是用户可编辑项）：
+  // 内置角色带 persona 覆盖而请求体缺 persona_base 时，从磁盘现有配置继承，
+  // 让 default_changed 检测（state.mjs reconcilePersonaLineage）不因面板
+  // 往返而失效；显式传 null / 字符串都视为「客户端已表态」，不覆盖。
+  const diskRoles = workspacePath === null ? state?.existing?.roles : state?.existing?.workspaces?.[workspacePath]?.roles
+  if (diskRoles && assignments.roles && typeof assignments.roles === 'object') {
+    for (const roleName of Object.keys(diskRoles ?? {})) {
+      const disk = diskRoles[roleName]
+      const sent = assignments.roles[roleName]
+      if (
+        disk && typeof disk === 'object' && disk.persona != null && disk.persona_base != null &&
+        sent && typeof sent === 'object' && sent.persona != null &&
+        (sent.persona_base === undefined || sent.persona_base === null) &&
+        sent.persona === disk.persona
+      ) {
+        sent.persona_base = disk.persona_base
+      }
+    }
+  }
   let result = null
   let generationWarnings = []
   let generateError = null
@@ -295,7 +321,7 @@ export async function exportConfigPayload() {
  * schema 字段（含 has_main_agent_extra 显式空表等「缺省 vs 显式」语义）全保留
  * ——与面板 / CLI 每次保存的行为一致，换来落盘配置恒合法、可再解析。
  */
-export async function importConfigContent(content) {
+export async function importConfigContent(content, { baseRevision = undefined } = {}) {
   const processed = preprocessPatchText(String(content ?? ''))
   // 宿主 yaml 模块从 state 顺路取（collectState 已探测好）；state 通道异常时
   // 退化为仅内置解析器校验——内置解析器覆盖不了的长文法此时可能误报 422，
@@ -322,11 +348,13 @@ export async function importConfigContent(content) {
     error.statusCode = 422
     throw error
   }
-  // 写盘前自动轮换备份（当前配置推入 bak-1，旧 bak 依次后移；首次保存无
-  // 「当前」则不备份）——apply / 工作区预设写盘 / 回滚同一口径，见下方备份节。
-  rotateConfigBackups()
+  // 写盘前：CAS 护栏（baseRevision 与磁盘不一致 → 409 config_stale）+ 版本链
+  // 快照（origin=panel-import；替代旧 bak 轮换，见 tools/lib/history.mjs——
+  // 首次启用顺带把存量 .bak 导入编号链）。首次保存无「当前」则快照为 null。
+  assertRevisionFresh(resolveConfigFile(), baseRevision)
+  snapshotConfig(resolveConfigFile(), 'panel-import')
   saveConfig(resolveConfigFile(), normalizeConfig(data))
-  return { ok: true }
+  return { ok: true, revision: currentConfigRevision(resolveConfigFile()) }
 }
 
 // ── 配置自动备份与回滚（配置文件写路径的护栏，页头「更多」菜单服务端核心）──────
@@ -401,6 +429,20 @@ export function listConfigBackups() {
 }
 
 /**
+ * 快照清单（GET config/backups）：版本链（新→旧）+ 旧 .bak 兼容展示。
+ * 纯读不写；revision = 当前版本链编号（无历史 0）。旧 bak 只列出，不再增长
+ *（面板写盘已全部走版本链快照），但回滚仍支持。
+ */
+export function listConfigSnapshots() {
+  const config = resolveConfigFile()
+  return {
+    revision: currentConfigRevision(config),
+    snapshots: listConfigHistory(config),
+    legacyBackups: listConfigBackups(),
+  }
+}
+
+/**
  * 回滚配置（POST config/restore）：file 须精确匹配「配置文件名.bak-1/2/3」，
  * 显式拒任何含分隔符 / 上跳段的名字（防路径穿越）；通过后先按 loadConfig 同一
  * 口径验证备份可解析（坏备份拒绝覆盖，422；备份不存在 404——statusCode 由
@@ -409,13 +451,43 @@ export function listConfigBackups() {
  * state 缓存靠既有对账自动失效，无需手动清理。
  */
 export async function restoreConfigBackup(file) {
-  const name = typeof file === 'string' ? file : ''
-  if (name === '' || name.includes('/') || name.includes('..') || !configBackupRe().test(name)) {
-    const error = new Error(`备份文件名不合法（须为 ${path.basename(resolveConfigFile())}.bak-1/2/3）：${name === '' ? '（空）' : name}`)
-    error.statusCode = 422
-    throw error
+  return restoreConfigSnapshot({ file })
+}
+
+/**
+ * 统一回滚核心（POST config/restore，body: { file } | { revision, baseRevision }）：
+ *  - revision（编号链）：正整数，configHistoryEntryPath 取 v<N>.yml 绝对路径；
+ *  - file（旧形态）：仍须精确匹配「配置文件名.bak-1/2/3」（防路径穿越），
+ *    旧面板 / 旧脚本零改动继续可用；
+ * 二选一（都给以 revision 为准）。通过后先按 loadConfig 同一口径验证快照可解析
+ *（坏快照 422 / 不存在 404，statusCode 由路由层外层 catch 回包），CAS 护栏
+ *（baseRevision 不一致 → 409 config_stale），再把「当前配置」快照进版本链
+ *（origin=restore，滚错了还能滚回来），最后整文件回写。mtime 变化令 state
+ * 缓存按既有对账自动失效。
+ */
+export async function restoreConfigSnapshot({ file = '', revision = null, baseRevision = undefined } = {}) {
+  const config = resolveConfigFile()
+  assertRevisionFresh(config, baseRevision)
+  let backupPath = null
+  let label = null
+  if (Number.isInteger(revision) && revision >= 1) {
+    backupPath = configHistoryEntryPath(config, revision)
+    if (backupPath === null) {
+      const error = new Error(`快照不存在：v${revision}`)
+      error.statusCode = 404
+      throw error
+    }
+    label = `v${revision}`
+  } else {
+    const name = typeof file === 'string' ? file : ''
+    if (name === '' || name.includes('/') || name.includes('..') || !configBackupRe().test(name)) {
+      const error = new Error(`备份文件名不合法（须为 ${path.basename(config)}.bak-1/2/3 或 body.revision）：${name === '' ? '（空）' : name}`)
+      error.statusCode = 422
+      throw error
+    }
+    backupPath = path.join(path.dirname(config), name)
+    label = name
   }
-  const backupPath = path.join(path.dirname(resolveConfigFile()), name)
   // 宿主 yaml 模块从 state 顺路取（collectState 已探测好）；state 通道异常时
   // 退化为仅内置解析器校验，与 importConfigContent 同款降级——宁严勿漏。
   let yamlMod = null
@@ -431,20 +503,20 @@ export async function restoreConfigBackup(file) {
     throw error
   }
   if (parsed === null) {
-    const error = new Error(`备份不存在：${name}`)
+    const error = new Error(`备份不存在：${label}`)
     error.statusCode = 404
     throw error
   }
-  // 先把选定备份的内容读进内存再轮换：轮换会把整条备份链后移一层，固定层号
-  // （bak-N）路径下的内容随之改变——后读的话落到「当前」的就不是用户选的
-  // 那份快照了。配置文件很小，整读零成本，顺序必须遵守。
+  // 先把选定备份的内容读进内存再快照：快照会把「当前」推成新编号，固定编号
+  // （v<N>）路径下的内容不变，但旧 .bak 会因迁移导入而固化——后读的话旧形态
+  // 落到「当前」的就不是用户选的那份了。配置文件很小，整读零成本，顺序必须遵守。
   const content = readFileSync(backupPath)
-  // 回滚本身也是一次写配置：先把「当前」按同款轮换推入备份链（滚错了还能
-  // 再滚回来），再落选定快照。mtime 变化令 state 缓存按既有对账自动失效，
+  // 回滚本身也是一次写配置：先把「当前」快照进版本链（origin=restore，滚错了
+  // 还能滚回来），再落选定快照。mtime 变化令 state 缓存按既有对账自动失效，
   // 无需手动清理。
-  rotateConfigBackups()
-  writeFileSync(resolveConfigFile(), content, { mode: 0o600 }) // 权限口径与 saveConfig 一致
-  return { ok: true }
+  snapshotConfig(config, 'restore', `from ${label}`)
+  writeFileSync(config, content, { mode: 0o600 }) // 权限口径与 saveConfig 一致
+  return { ok: true, restored: label, revision: currentConfigRevision(config) }
 }
 
 // ── 工具面瘦身统计（slim：state / preview / apply 响应的派生字段）─────────────
@@ -582,8 +654,11 @@ export function resolveWorkspacePathByPresetId(existing, presetId) {
  * { presetId, removedConfigEntry, removedPresetDir }；读配置失败仍按既有约定
  * 抛错（无 statusCode，由路由层外层 catch 回 500）。
  */
-export function deleteWorkspacePreset(state, workspacePath) {
+export function deleteWorkspacePreset(state, workspacePath, { baseRevision = undefined } = {}) {
   const { yamlMod, dshHome, configFile } = state
+  // CAS 护栏 + 写盘前版本链快照（origin=workspace-delete）：删除也是一次配置写。
+  assertRevisionFresh(configFile, baseRevision)
+  snapshotConfig(configFile, 'workspace-delete', workspacePath)
   const wsPath = path.normalize(path.resolve(workspacePath))
   let prev = null
   try {

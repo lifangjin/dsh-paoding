@@ -228,6 +228,24 @@ window.__ModuleLoader__.load({
       "api.notJson": { zh: "HTTP {status}（响应不是 JSON）", en: "HTTP {status} (response was not JSON)" },
       "api.timeout": { zh: "请求超时（{s}s 无响应）", en: "Request timed out (no response for {s}s)" },
 
+      // api.err.*：服务端稳定错误码（tools/lib/errors.mjs 单表）的本地化文案。
+      // 30 片段按 error.code 查 key，有则用（按 UI 语言）、无则回落服务端
+      // message（仅中文）。generation_failed 永不本地化（服务端 message 是
+      // 动态生成原因，逐案必读）。
+      "api.err.apply_in_flight": { zh: "已有一次应用正在进行，请稍后重试", en: "An apply is already in progress — please retry shortly" },
+      "api.err.config_stale": { zh: "配置已被其他入口（面板 / API / CLI / 手编文件）修改，面板已重新加载最新配置；请核对后再应用（未保存的本地改动已丢弃）", en: "The config was changed elsewhere (panel / API / CLI / manual edit); the panel reloaded the latest config — review it and apply again (unsaved local edits were dropped)" },
+      "api.err.forbidden": { zh: "请求来源不受信任（forbidden）", en: "Request source is not trusted (forbidden)" },
+      "api.err.preset_not_found": { zh: "未找到该预设", en: "Preset not found" },
+      "api.err.backup_not_found": { zh: "备份 / 快照不存在", en: "Backup or snapshot not found" },
+      "api.err.preset_delete_forbidden": { zh: "全局 orchestrator 预设不支持删除：插件启动自愈会自动重装；卸载请移除 dsh-paoding 插件", en: "The global orchestrator preset cannot be deleted: plugin startup self-heals it back; remove the dsh-paoding plugin to uninstall" },
+      "api.err.route_not_found": { zh: "接口不存在", en: "No such API route" },
+      "api.err.workspace_path_missing": { zh: "缺少工作区目录绝对路径", en: "Missing workspace directory absolute path" },
+      "api.err.workspace_not_dir": { zh: "目录不存在或不是目录", en: "Directory does not exist or is not a directory" },
+      "api.err.assignments_missing": { zh: "缺少预设配置（body.assignments）", en: "Missing preset assignments (body.assignments)" },
+      "api.err.config_text_missing": { zh: "缺少配置文本（body.content）", en: "Missing config text (body.content)" },
+      "api.err.body_too_large": { zh: "请求体超过大小上限", en: "Request body exceeds the size limit" },
+      "api.err.body_invalid_json": { zh: "请求体不是合法 JSON", en: "Request body is not valid JSON" },
+
       // ver.*：40 片段页头版本更新卡
       "ver.checkFailed": { zh: "版本检测失败", en: "Version check failed" },
       "ver.checking": { zh: "检测中…", en: "Checking…" },
@@ -842,7 +860,30 @@ window.__ModuleLoader__.load({
     // 总超时（models 等慢路由同限）：请求挂死时按超时报错，不让按钮永久转圈。
     var PAODING_API_TIMEOUT_MS = 60000;
 
+    // ── 配置版本链 revision 跟踪（乐观并发 CAS）────────────────────────────
+    // GET state 的 configRevision 与每次写响应的 revision 就地更新；写路由的
+    // POST body 自动附带 baseRevision（服务端与磁盘不一致 → 409 config_stale，
+    // 见 tools/lib/history.mjs）。老宿主（无版本链）响应里没有该字段 → 恒
+    // null，不附带，行为与旧版完全一致。
+    var PAODING_REVISION = null;
+    // baseRevision 只对「写配置」路由附带（preview 是干跑、rescan/models 等
+    // 只读路由附带了也无人消费；统一白名单，不猜服务端语义）。
+    var PAODING_WRITE_ROUTES = { "apply": 1, "workspaces": 1, "config/import": 1, "config/restore": 1 };
+
+    function paodingRevision() { return PAODING_REVISION; }
+    function paodingSetRevision(n) {
+      if (typeof n === "number" && isFinite(n) && n >= 0) PAODING_REVISION = Math.floor(n);
+    }
+
     function paodingApi(path, body) {
+      // 写路由 body 附加 baseRevision：浅拷贝再挂（不动调用方对象），已显式
+      // 携带的（测试 / 特殊调用点）不覆盖；presets/* 的写子路由（POST/PUT/
+      // DELETE）一并覆盖。
+      var isWrite = PAODING_WRITE_ROUTES[path] === 1 || String(path || "").indexOf("presets/") === 0;
+      if (body && typeof body === "object" && !Array.isArray(body) &&
+          isWrite && PAODING_REVISION !== null && body.baseRevision === undefined) {
+        body = Object.assign({}, body, { baseRevision: PAODING_REVISION });
+      }
       var opts = body === undefined ? {} : {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -862,7 +903,19 @@ window.__ModuleLoader__.load({
           var d = null;
           try { d = raw ? JSON.parse(raw) : null; } catch (err) { d = null; }
           if (!r.ok) {
-            var err = new Error((d && d.error) || ("HTTP " + r.status));
+            // 错误码本地化：服务端 0.4.9 起所有 4xx 响应附带稳定 code（见
+            // tools/lib/errors.mjs 单表）。api.err.<code> 有文案就用它（按 UI
+            // 语言），没有回落服务端 message（仅中文）；generation_failed 的
+            // 服务端 message 是具体生成错误原因（动态、必读），永不本地化覆盖。
+            var msg = (d && d.error) || ("HTTP " + r.status);
+            if (d && typeof d.code === "string" && d.code !== "generation_failed") {
+              var key = "api.err." + d.code;
+              var loc = t(key);
+              if (loc !== key) msg = loc;
+            }
+            var err = new Error(msg);
+            if (d && typeof d.code === "string") err.code = d.code;
+            if (d && typeof d.currentRevision === "number") err.currentRevision = d.currentRevision;
             if (d && typeof d.output === "string" && d.output) err.output = d.output;
             // 结构化体检结果（preview/apply 的 422 会把 warnings 一并带回，如
             // 零工具角色的可读说明）：message 装不下多条，挂 error.warnings，
@@ -871,6 +924,10 @@ window.__ModuleLoader__.load({
             throw err;
           }
           if (!d) throw new Error(t("api.notJson", { status: r.status }));
+          // revision 就地跟踪：state 的 configRevision（读取基线）与写响应的
+          // revision（写后最新）统一进 PAODING_REVISION。
+          if (typeof d.configRevision === "number") paodingSetRevision(d.configRevision);
+          if (typeof d.revision === "number") paodingSetRevision(d.revision);
           return d;
         });
       }).catch(function (err) {
@@ -880,7 +937,6 @@ window.__ModuleLoader__.load({
         if (timer !== null) clearTimeout(timer);
       });
     }
-
     // ── Toast 反馈控制器（模块级单例，PageShell 的 ToastHost 订阅渲染）──────
     // 三档：ok（成功，4s 自动消失）/ warn（校验提示，6s）/ err（错误，粘性——
     // 不自动消失，手动 × 关；错误文本可能很长（子进程输出尾部等），限高滚动。
@@ -2307,7 +2363,15 @@ window.__ModuleLoader__.load({
               // 标题读 delegateMeta，刷新即可见，无需重开会话）。
               refreshDelegateRows();
             }).catch(function (err) {
-              toast.err(err.message);
+              // 409 config_stale（并发写配置，CAS 过期）：本地化文案提示后整体
+              // 重拉 state 重建面板——revision 基线随之刷新，用户核对最新配置
+              // 后再点应用；未保存的本地改动会随重建丢弃，文案里已明说。
+              if (err && err.code === "config_stale") {
+                toast.warn(err.message);
+                load();
+              } else {
+                toast.err(err.message);
+              }
               // 失败（如零工具角色 422）也把体检说明挂卡：错误原因逐条可读，
               // 修起来有据可依。落盘未发生，卡描述的是「这次为什么没成」。
               if (Array.isArray(err.warnings) && err.warnings.length) {
@@ -4239,8 +4303,27 @@ window.__ModuleLoader__.load({
         setBkErr("");
         setBkBusy(true);
         paodingApi("config/backups").then(function (d) {
-          if (!d || d.ok !== true || !Array.isArray(d.backups)) throw new Error(t("menu.backupBadResponse"));
-          setBkList(d.backups);
+          if (!d || d.ok !== true) throw new Error(t("menu.backupBadResponse"));
+          // 0.4.9 起清单 = 版本链快照（snapshots，按 revision 回滚，主形态）+
+          // 旧 .bak 轮换备份（legacyBackups，按 file 回滚，兼容）。两者统一成
+          // 行条目 { tag, atMs, size, revision? , file? }，服务端均已按新→旧
+          // 排好，这里保持顺序直接拼接（版本链在前）。
+          var items = [];
+          (Array.isArray(d.snapshots) ? d.snapshots : []).forEach(function (x) {
+            if (!x || typeof x.revision !== "number") return;
+            items.push({
+              tag: "v" + x.revision,
+              atMs: x.at ? Date.parse(x.at) : 0,
+              size: typeof x.size === "number" ? x.size : 0,
+              revision: x.revision,
+              origin: typeof x.origin === "string" ? x.origin : "",
+            });
+          });
+          (Array.isArray(d.legacyBackups) ? d.legacyBackups : []).forEach(function (b) {
+            if (!b || typeof b.file !== "string" || !b.file) return;
+            items.push({ tag: backupTagOf(b.file), atMs: b.mtimeMs, size: b.size, file: b.file });
+          });
+          setBkList(items);
         }).catch(function (err) {
           setBkErr(t("menu.backupListFail", { msg: err.message }));
         }).finally(function () {
@@ -4255,16 +4338,22 @@ window.__ModuleLoader__.load({
       }
 
       function pickBackup(item) {
-        if (!item || typeof item.file !== "string" || item.file === "" || bkBusy) return;
+        // 条目两种形态：revision（版本链快照，主形态）/ file（旧 .bak，兼容）。
+        // 其余字段非法（空条目防御）或恢复请求在途时直接忽略。
+        if (!item || bkBusy) return;
+        var byRevision = typeof item.revision === "number";
+        if (!byRevision && (typeof item.file !== "string" || item.file === "")) return;
+        var tag = item.tag || backupTagOf(item.file);
+        var payload = byRevision ? { revision: item.revision } : { file: item.file };
         confirmCtrl.ask({
           title: t("menu.restoreTitle"),
-          body: t("menu.restoreBody", { name: backupTagOf(item.file) }),
+          body: t("menu.restoreBody", { name: tag }),
           danger: true,
           confirmText: t("menu.restoreConfirm"),
           onConfirm: function () {
             setBkBusy(true);
-            paodingApi("config/restore", { file: item.file }).then(function () {
-              toast.ok(t("menu.restored", { name: backupTagOf(item.file) }));
+            paodingApi("config/restore", payload).then(function () {
+              toast.ok(t("menu.restored", { name: tag }));
               setBkOpen(false);
               // 面板既有刷新路径（与「导入配置」同款）：重拉 state 重建 assign；
               // 显示名 / 角色名单可能被回滚改变，事件流委派行键控注册跟着刷新。
@@ -4301,16 +4390,22 @@ window.__ModuleLoader__.load({
       function backupModalOf() {
         if (!bkOpen) return null;
         var rows = bkList.map(function (it, i) {
+          // tag = v<N>（版本链）/ bak-N（旧备份）；origin（panel-apply 等）拼进
+          // title 提示，行内保持「徽标 + 时间 + 大小」三段不变。
+          var tag = (it && it.tag) || backupTagOf(it && it.file);
+          var titleParts = [];
+          if (it && typeof it.file === "string" && it.file) titleParts.push(it.file);
+          if (it && it.origin) titleParts.push(it.origin);
           return h("button", {
             type: "button",
-            key: it && typeof it.file === "string" && it.file ? it.file : "bak-" + i,
+            key: (it && ((typeof it.file === "string" && it.file) || it.tag)) || ("bak-" + i),
             className: "pd-backupItem",
             disabled: bkBusy,
-            title: it && typeof it.file === "string" ? it.file : undefined,
+            title: titleParts.join(" · ") || undefined,
             onClick: function () { pickBackup(it); },
           },
-            h("span", { className: "pd-backupTag" }, backupTagOf(it && it.file)),
-            h("span", { className: "pd-backupTime" }, backupTimeText(it && it.mtimeMs)),
+            h("span", { className: "pd-backupTag" }, tag),
+            h("span", { className: "pd-backupTime" }, backupTimeText(it && it.atMs)),
             h("span", { className: "pd-backupSize" }, backupSizeText(it && it.size)));
         });
         return h("div", {

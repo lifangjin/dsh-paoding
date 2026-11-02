@@ -1048,7 +1048,15 @@
               // 标题读 delegateMeta，刷新即可见，无需重开会话）。
               refreshDelegateRows();
             }).catch(function (err) {
-              toast.err(err.message);
+              // 409 config_stale（并发写配置，CAS 过期）：本地化文案提示后整体
+              // 重拉 state 重建面板——revision 基线随之刷新，用户核对最新配置
+              // 后再点应用；未保存的本地改动会随重建丢弃，文案里已明说。
+              if (err && err.code === "config_stale") {
+                toast.warn(err.message);
+                load();
+              } else {
+                toast.err(err.message);
+              }
               // 失败（如零工具角色 422）也把体检说明挂卡：错误原因逐条可读，
               // 修起来有据可依。落盘未发生，卡描述的是「这次为什么没成」。
               if (Array.isArray(err.warnings) && err.warnings.length) {
