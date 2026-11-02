@@ -54,6 +54,7 @@ dsh-paoding 把「按角色分工的编排 preset」做成**配置驱动**：你
 - `roles.<toolName>.provider`：该角色模型所在的 provider 路由（可选 `string`）。须与 `model` 成对配置才生效，只配 `provider` 会被安装器告警并忽略；只配 `model` 时沿用主 agent 的 provider 路由（详见 2.5）。
 - `roles.<toolName>.background_mode`：该角色的会话模式（可选 `'one-shot' | 'continuable'`，缺省 `one-shot`）——一次性用完即弃，或可续：子会话跨轮保留，主 agent 用 `send_message` 就地续修。内置角色与自定义角色同语义；continuable 的前置、代价与面板路径见 2.6。
 - `roles.<toolName>.start_mode`：该角色的启动方式（可选 `'fresh' | 'fork'`，缺省 `fresh`）——全新启动，或以主 agent 已完成的对话轮次为初始内容启动（继承对话）。内置角色与自定义角色同语义；fork 的语义、与专用模型的互斥及面板路径见 2.7。
+- `roles.<toolName>.persona_base`：**自动管理的血缘键**（非用户可编辑项，正常配置不要写它）。`persona` 覆盖存在时，保存会顺带落盘一份「该覆盖所基于的默认 persona 模板」的短哈希；之后升级庖丁、默认模板变了，下次「保存并应用 / 预览」会出一条 `default_changed` 警告（覆盖仍原样生效，绝不静默合并），提示你自行取舍：保留覆盖 / 清空覆盖采纳新默认 / 手动合并。手动清掉该键 = 下次保存重新以当前默认为基线。
 - `roles` 下键名不在三角色内 = 自定义角色（见第 6 节）；请勿把静态角色 `search_internal_deep` 写进 `roles`（见 2.2）。
 - 内置角色可**整体删除**：`roles_remove` 键只认三角色名，删除效果、与 `roles` 键的一致性及恢复路径见 2.3。
 
@@ -317,6 +318,12 @@ continuable 的前置与代价（如实说明）：
 - **代价：无 TTL 落盘累积、每轮携带累积上下文。** 持久化会话没有 TTL，会持续写盘；continuable 子 agent 每轮带着自己攒下的上下文，长期挂只增不减。只给多轮打磨类委派用，用完 `interrupt_agent` 停掉、顺手清理落盘。
 
 面板操作路径：左侧栏「庖丁配置」→ 角色卡「会话模式」单选（「一次性（one-shot）」/「可续（continuable）」）。未探测到 `sessionPersistence` 时面板会就地警告但不拦截——警告只是提醒先把 persistence 后端挂上，保存照常可执行。
+
+continuable 角色的「快 shell」（DSH ≥ 0.2.1 生效，自动、无配置键）：
+
+- 配成 `continuable` 的角色，其角色子预设组合里的 shell 会被改写成 `isolate: shell` 工具组：组内 `dsh-bash-local` / `dsh-pwsh-local` executor 钉 5 秒前台预算（`timeoutMs` / `maxTimeoutMs` 5000），`tool-jobs` 的等待上限（`waitTimeoutMs` / `maxWaitTimeoutMs`）同样 5000。前台命令 / 等待超过 5 秒自动转后台任务，主 agent 的 `send_message` 续修消息不再被跑着的长 build / test 挡住——子 agent 在下一步边界收到。
+- 影响面只限该角色自己的子预设组合：主 agent、one-shot 角色、其它 continuable 角色互不影响；`one-shot` 角色与缺省保持宿主默认预算（DSH 0.2.1 为前台 120 秒 / 上限 600 秒）。
+- **DSH ≤ 0.2.0 / 0.2.1-rc.1 不注入**：老宿主的角色人设走内联形态、没有 per-role 工具组合，executor 配置是共享作用域（动了会波及主 agent），故明确放弃——这是已知边界，不是缺陷。
 
 边界：
 
@@ -791,6 +798,7 @@ workspaces:
 
 几点约定：
 
-- **同管线同体检**：写操作（POST / PUT）与面板「保存并应用」走同一条生成管线，响应的 `warnings` 字段即 §12 的结构化体检结果；并共用同一把写盘互斥闸——任一写操作进行中，其余写请求收到 409，稍后重试即可。
-- **错误语义**：请求体缺失 / 工作区目录不存在等 422；目标预设不存在 404；删除全局预设 403；其余服务端错误 500，响应统一为 `{ error }`（生成失败时另带 `warnings`）。
+- **同管线同体检**：写操作（POST / PUT）与面板「保存并应用」走同一条生成管线，响应的 `warnings` 字段即 §12 的结构化体检结果；并共用同一把写盘互斥闸——任一写操作进行中，其余写请求收到 409（错误码 `apply_in_flight`），稍后重试即可。
+- **稳定错误码**：0.4.9 起所有 4xx 响应在 `{ error }` 之外纯增量附带 `code`（单表定义于 `tools/lib/errors.mjs`）：`apply_in_flight`（409，写盘互斥）、`config_stale`（409，CAS 过期，见下）、`workspace_path_missing` / `workspace_not_dir` / `assignments_missing` / `config_text_missing` / `generation_failed`（422）、`preset_not_found` / `route_not_found` / `backup_not_found`（404）、`forbidden` / `preset_delete_forbidden`（403）等。脚本按 `code` 分支，不要解析中文文案；错误码一经发布不改名，只追加。
+- **配置版本链与乐观并发（CAS）**：每一次写配置（面板 apply / 导入 / 工作区预设写盘 / 回滚 / 删除工作区预设）前，当前配置文件会先按递增编号快照进 `<配置文件>.history/`（`v000001.yml` + `v000001.json` 元数据，origin 记写入口；保留最近 30 份，旧的 .bak-1/2/3 首次写入时自动导入编号链、原文件保留）。`GET state` 响应附 `configRevision`（当前版本链编号，无历史 = 0）与 `configHistory`（近期 10 条快照）；写请求 body 可带 `baseRevision`，与磁盘不一致时拒绝写入并回 409 `config_stale`（附 `currentRevision`）——「配置已被其他入口改过」不再静默覆盖。`baseRevision` 缺省不比较（老客户端 / curl 零变化）；写响应附 `revision`（写盘后最新编号）。回滚接口同步升级：`POST config/restore` body 接受 `{ revision }`（编号链形态，主路径）或旧 `{ file }`（.bak-N 兼容形态），`GET config/backups` 返回 `{ revision, snapshots: [{revision, file, origin, at, size}], legacyBackups: [...旧 bak 清单] }`。
 - **删除只清配置层**：DELETE 清的是配置 `workspaces` 条目与预设产物（目录 + 声明行），不动宿主工作区注册表——注册/注销工作区仍走面板「添加工作区」对应的接口。
