@@ -71,6 +71,7 @@ dsh plugin --profile web add dsh-paoding
 - **降级自愈（0.1.7 → 0.1.6）**：0.1.6 不认识声明行，声明行留在 patch 里会让 profile 启动失败——安装器自动撤下 home patch 里的托管块；目录轨产物本就齐全，预设无缝回到目录扫描。
 - **升级迁移（0.1.6 → 0.1.7）**：安装器自动补写托管块；`.agent-presets/` 里按旧轨生成的 preset 会话（`agentPreset: orchestrator`）在新轨下按 `config.id` 继续对上，老会话恢复不断档。
 - **角色委派行换代（0.2.0 → 0.2.1）**：0.2.1 起 dsh-tool-subagent 拒绝配置里的内联 persona / toolFilter（出现即抛错，挂编排预设的新建会话直接失败），自愈整盘重生成把人设与工具面迁到各角色的 AgentPreset（`agentPreset: paoding-role-<角色名>`）；工作区专属预设（orchestrator-<slug>）随同轮自愈一并换代。0.2.1 的 prerelease 再细分——守卫自 0.2.1-rc.2 落地，rc.0 / rc.1 仍按内联形状生成。
+- **list-agents 行换代（0.2.1 → 0.2.2）**：0.2.2-alpha.2 起 `@deepseek-ai/dsh-tool-subagent-control` 删除 `./list-agents` 子路径导出（list_agents 清点工具并入主导出的 apply 自动注册，能力无损），残留声明行在该宿主上报 never started、整张预设被注册表判 broken（0.2.2-rc.1 实测复现）。生成与补行落盘时按宿主版本剥离该条目（更老宿主照旧保留——旧宿主上它是独立模块，剥了反而丢能力）；旧版插件留在盘上的残留行随下一次插件升级的整盘重生成一并清掉。
 
 另有两处跨版本行为对齐，同样自动完成、无需用户动作：
 

@@ -276,6 +276,38 @@ test('0.2.1 宿主首装（declarative）：agentPreset 角色形态落盘 + rol
   })
 })
 
+// ── 0.2.2 list-agents 行剥离（子路径导出并入 control 主导出，dsh-maoying#7 同款）──
+
+test('0.2.2-rc.1 宿主首装（declarative）：产物与声明行都剥 list-agents 条目，control 主行无损', async () => {
+  const { dshHome, configFile, patchFile } = freshEnv('fresh-022')
+  makeDeclarative(dshHome)
+  await withHostVersion(configFile, '0.2.2-rc.1', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, true)
+    const agentText = readFileSync(agentFileOf(dshHome), 'utf8')
+    assert.ok(!agentText.includes('list-agents'), '0.2.2 宿主产物不得残留 list-agents 条目（残留 → 整张 preset 被判 broken）')
+    assert.ok(agentText.includes("'@deepseek-ai/dsh-tool-subagent-control'"), 'control 主行保留（list_agents 由主导出注册，能力无损）')
+    const patchText = readFileSync(patchFile, 'utf8')
+    assert.ok(!patchText.includes('list-agents'), '声明行内联文本同样剥净')
+    assert.deepEqual(readHomePatchRows(dshHome), [{ rowId: 'preset-orchestrator', presetId: 'orchestrator' }])
+    // fake 0.2.2-rc.1 → worker=ptc、roles=agent-preset，标记四行齐
+    assert.equal(readFileSync(markerFileOf(dshHome), 'utf8'), `${GEN}\ndeclarative\nptc\nagent-preset\n`)
+  })
+})
+
+test('0.2.1-rc.5 宿主首装：产物保留 list-agents 条目（旧宿主上是独立模块，保留才不丢能力）', async () => {
+  const { dshHome, configFile } = freshEnv('fresh-021-rc5')
+  makeDeclarative(dshHome)
+  await withHostVersion(configFile, '0.2.1-rc.5', async () => {
+    const r = await ensurePresetInstalled({ dshHome, generatorVersion: GEN })
+    assert.equal(r.installed, true)
+    assert.ok(
+      readFileSync(agentFileOf(dshHome), 'utf8').includes("'@deepseek-ai/dsh-tool-subagent-control/list-agents'"),
+      '0.2.1-rc.5 宿主产物保留 list-agents 条目',
+    )
+  })
+})
+
 test('事故新路径：宿主 0.2.0→0.2.1 只升 dsh 不动插件（标记版本/轨道/worker 全吻合，roles=inline）→ 整盘重生成换角色形状', async () => {
   const { dshHome, configFile } = freshEnv('upgrade-021')
   makeDeclarative(dshHome)

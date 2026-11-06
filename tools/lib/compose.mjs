@@ -37,6 +37,10 @@
  * AgentPreset 声明行（dsh-persona config.prefix 带角色人设 + ./role-restrict.mjs
  * 行带工具面 allow）；fork provider 不支持 agentPreset，fork 角色 persona/
  * toolFilter 丢弃并 warn；< 0.2.1 / 探测不到版本保守保留源形状）。
+ * list-agents 行同样按宿主版本生成期适配（adaptSubagentListAgentsRow：
+ * ≥0.2.2-alpha.2 剥掉 @deepseek-ai/dsh-tool-subagent-control/list-agents 条目
+ * ——该子路径导出已并入 control 主导出，残留行让整张 preset 被判 broken；
+ * 能力无损，见 isMergedSubagentListAgentsHost；更老 / 探测不到版本保守保留）。
  * 自定义角色另有三道防护/自动化：toolName 保留名校验（assertCustomToolName，
  * 内置角色 / restrictBase / subagent* / mcp__ 前缀 / YAML 字面量一律 throw）；
  * tools 为空时拒绝安装零工具角色（renderCustomRoleBlocks 直接 throw，防
@@ -50,7 +54,7 @@
 import { DEFAULT_MAIN_AGENT_PERSONA_EXTRA, ROLES, warn } from './util.mjs'
 import { normalizeModelRef, yamlScalar } from './config.mjs'
 import { isHostDependent } from './host.mjs'
-import { isPresetRoleHost, isPtcWorkerHost } from './preset-system.mjs'
+import { isMergedSubagentListAgentsHost, isPresetRoleHost, isPtcWorkerHost, stripMergedSubagentListAgentsRow } from './preset-system.mjs'
 import { expandToolPatterns } from './glob.mjs'
 
 // ── workflow worker 行的宿主版本适配 ─────────────────────────────────────────
@@ -87,6 +91,24 @@ export function adaptWorkflowWorkerRow(text, hostVersionTriple) {
     throw new Error('workflow-worker-thread block not found in source agent.cordis.yml')
   }
   return text.replace(WORKER_THREAD_BLOCK, WORKER_PTC_BLOCK)
+}
+
+// ── list-agents 行的宿主版本适配（≥0.2.2-alpha.2 剥条目）─────────────────────
+
+/**
+ * Host-version adaptation of the delegation group's list-agents entry: on hosts
+ * ≥0.2.2-alpha.2 the standalone subpath export
+ * `@deepseek-ai/dsh-tool-subagent-control/list-agents` is gone (list_agents is
+ * registered by the control main export's apply), so a leftover entry makes the
+ * row "never started" and the whole preset is judged broken by the registry
+ * audit (0.2.2-rc.1 reproduced; the paoding-side port of dsh-maoying#7). The
+ * entry is stripped by name at any nesting depth; capability is unaffected.
+ * Older / undetected hosts keep the source rows byte for byte (on those hosts
+ * the row is the only way to get the tool — see isMergedSubagentListAgentsHost).
+ */
+export function adaptSubagentListAgentsRow(text, hostVersionTriple, hostPrerelease) {
+  if (!isMergedSubagentListAgentsHost(hostVersionTriple, hostPrerelease)) return text
+  return stripMergedSubagentListAgentsRow(text)
 }
 
 // ── 角色委派行宿主版本适配（DSH 0.2.1+ AgentPreset 形态）────────────────────
@@ -1265,6 +1287,11 @@ export function composeGenerated(srcText, blocks, personaBlocks, assignments, in
 
   // workflow worker 行宿主版本适配（≥0.1.6 换 workflow-ptc；见 adaptWorkflowWorkerRow）。
   out = adaptWorkflowWorkerRow(out, hostVersionTriple)
+
+  // list-agents 行宿主版本适配（≥0.2.2-alpha.2 剥 list-agents 条目——子路径
+  // 导出已并入 control 主导出，残留行整张 preset 被判 broken；见
+  // adaptSubagentListAgentsRow）。
+  out = adaptSubagentListAgentsRow(out, hostVersionTriple, hostPrerelease)
 
   // 自定义角色块：tools 里的通配符条目按同一候选集展开成具体名再进 allow
   //（第 4 参见 renderCustomRoleBlocks）。

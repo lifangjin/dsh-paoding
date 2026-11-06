@@ -1000,6 +1000,35 @@ test('workflow worker 行: ≥0.1.6 宿主整块换 workflow-ptc（字节级只�
   }
 })
 
+// ── j2) list-agents 行宿主版本适配（≥0.2.2-alpha.2 剥条目）───────────────────
+
+test('list-agents 行: ≥0.2.2-alpha.2 宿主剥条目（control 主行无损），alpha.1/rc.5 以前与未知保留源行', () => {
+  const blocks = locateAllowBlocks(SRC, yamlMod)
+  const personaBlocks = locatePersonaBlocks(SRC, yamlMod)
+  const restrictBase = extractMainAgentAllow(RESTRICT_SRC)
+  const run = (triple, prerelease) =>
+    composeGenerated(SRC, blocks, personaBlocks, emptyAssignments(), fullInventory(), restrictBase, {}, triple, prerelease).text
+
+  // 保留侧：0.2.1-rc.5 / 0.2.2-alpha.1 / 探测不到——源行逐字节保留
+  for (const [triple, pre] of [[[0, 2, 1], 'rc.5'], [[0, 2, 2], 'alpha.1'], [null, undefined]]) {
+    const text = run(triple, pre)
+    assert.ok(
+      text.includes("    - id: tool-subagent-list-agents\n      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'\n"),
+      `triple=${JSON.stringify(triple)} pre=${pre} 应保留 list-agents 行`,
+    )
+  }
+  // 剥离侧：0.2.2-alpha.2 / rc.1 / 正式版 / 更高版本——条目剥净、control 主行保留
+  for (const [triple, pre] of [[[0, 2, 2], 'alpha.2'], [[0, 2, 2], 'rc.1'], [[0, 2, 2], undefined], [[1, 0, 0], null]]) {
+    const text = run(triple, pre)
+    assert.ok(!text.includes('list-agents'), `triple=${JSON.stringify(triple)} pre=${pre} 应剥净 list-agents`)
+    assert.ok(
+      text.includes("      name: '@deepseek-ai/dsh-tool-subagent-control'\n"),
+      `triple=${JSON.stringify(triple)} pre=${pre} control 主行保留（list_agents 由主导出注册，能力无损）`,
+    )
+    assert.ok(!text.includes('\n\n\n'), `triple=${JSON.stringify(triple)} pre=${pre} 剥行不得留下连续空行堆积`)
+  }
+})
+
 // ── k) delegation-labels 委派标签角色名映射 ─────────────────────────────────
 
 /** composeGenerated 快捷入口：SRC + 全量 inventory + 给定 assignments。 */

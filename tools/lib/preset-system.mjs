@@ -825,21 +825,30 @@ export function detectAgentRolesFlavor(agentYmlText) {
  * 0.2.1 而磁盘还是内联形状——补出去的声明行会让 0.2.1 宿主挂编排 preset 的
  * 新建会话直接被 tool-subagent 守卫拒绝。此时跳过该 preset 并 warn（可整盘
  * 重生成修复），绝不按旧产物写行；反方向（宿主降级、磁盘已是新形状）同理。
- * 守卫经 DSH_PAODING_FAKE_HOST_VERSION 可测。尾参 opts 同 upsertHomePatchRows。
+ * 守卫经 DSH_PAODING_FAKE_HOST_VERSION 可测。补行的内联文本还会按宿主版本
+ * 剥 list-agents 条目（≥0.2.2-alpha.2，见 isMergedSubagentListAgentsHost /
+ * stripMergedSubagentListAgentsRow——磁盘产物字节不动，只剥写出去的行）。
+ * 尾参 opts 同 upsertHomePatchRows。
  */
 export function backfillHomePatchRows(dshHome, presetIds, opts = {}) {
   const rowsOnDisk = readHomePatchRows(dshHome, opts)
   const wanted = new Set((Array.isArray(presetIds) ? presetIds : []).filter((id) => ORCHESTRATOR_PRESET_ID_RE.test(id)))
-  const hostRolesFlavor = presetRolesFlavorOf(detectHostVersionTriple())
+  const hostInfo = detectHostVersionInfo()
+  const hostRolesFlavor = presetRolesFlavorOf(hostInfo?.triple ?? null)
+  // list-agents 行写行前剥离守卫（≥0.2.2-alpha.2 该子路径导出已删，补行剥条目
+  // 能力无损；更老宿主照旧保留——旧宿主上它是独立模块，剥了反而丢能力）
+  const stripListAgentsRow = isMergedSubagentListAgentsHost(hostInfo?.triple ?? null, hostInfo?.prerelease ?? null)
   const rows = []
   const backfilled = []
   for (const presetId of wanted) {
     if (rowsOnDisk.some((r) => r.presetId === presetId)) continue
     const dir = path.join(dshHome, '.agent-presets', presetId)
     try {
-      const agentYmlText = readFileSync(path.join(dir, 'agent.cordis.yml'), 'utf8')
+      const rawAgentYmlText = readFileSync(path.join(dir, 'agent.cordis.yml'), 'utf8')
       // 形态防毒守卫（见上方 doc 注释）：磁盘产物形态 ≠ 宿主所需 → 不补行。
-      const diskRolesFlavor = detectAgentRolesFlavor(agentYmlText)
+      // （形态判定与 role-restrict 缺件检查消费磁盘原文；≥0.2.2 宿主的
+      // list-agents 剥条目只作用在补行的内联文本上，磁盘产物字节不动。）
+      const diskRolesFlavor = detectAgentRolesFlavor(rawAgentYmlText)
       if (diskRolesFlavor !== null && diskRolesFlavor !== hostRolesFlavor) {
         throw new Error(
           `磁盘产物角色行形态 ${diskRolesFlavor} 与宿主所需 ${hostRolesFlavor} 不符——按旧产物补行会让 0.2.1 宿主被 tool-subagent 守卫拒绝，请整盘重生成换代`,
@@ -852,7 +861,7 @@ export function backfillHomePatchRows(dshHome, presetIds, opts = {}) {
       // role-restrict.mjs 仅 0.2.1+ AgentPreset 形态产物含（角色面行）——按产物
       // 里有没有该行决定是否必需，目录轨老产物（inline 形态）不受影响。
       const roleRestrictFile = path.join(dir, 'role-restrict.mjs')
-      if (agentYmlText.includes('name: ./role-restrict.mjs') && !existsSync(roleRestrictFile)) {
+      if (rawAgentYmlText.includes('name: ./role-restrict.mjs') && !existsSync(roleRestrictFile)) {
         throw new Error('role-restrict.mjs 缺失')
       }
       const meta = readPresetDirMeta(dir)
@@ -862,7 +871,7 @@ export function backfillHomePatchRows(dshHome, presetIds, opts = {}) {
           name: meta.name,
           description: meta.description,
           order: meta.order,
-          agentYmlText,
+          agentYmlText: stripListAgentsRow ? stripMergedSubagentListAgentsRow(rawAgentYmlText) : rawAgentYmlText,
           restrictFileUrl: pathToFileURL(restrictFile).href,
           delegationLabelsFileUrl: pathToFileURL(labelsFile).href,
           ...(existsSync(roleRestrictFile) ? { roleRestrictFileUrl: pathToFileURL(roleRestrictFile).href } : {}),
@@ -952,6 +961,98 @@ export function isPresetRoleHost(triple, prerelease) {
  */
 export function presetRolesFlavorOf(hostVersionTriple, prerelease) {
   return isPresetRoleHost(hostVersionTriple, prerelease) ? ROLES_AGENT_PRESET : ROLES_INLINE
+}
+
+// ── list-agents 行剥离（宿主版本 → 写盘时剥行）──────────────────────────────
+
+/**
+ * subagent 会话内清点工具（list_agents）行的两代挂载形状：
+ *   - ≤ 0.2.1 系：独立模块 @deepseek-ai/dsh-tool-subagent-control/list-agents
+ *     （子路径导出），委派组里要单独声明一行；
+ *   - ≥ 0.2.2-alpha.2：该子路径导出被移除，list_agents 的注册并入
+ *     @deepseek-ai/dsh-tool-subagent-control 主导出（apply 末尾自动注册）——
+ *     再声明那一行会因模块解析失败整行 never started，注册表审计把整张
+ *     preset 判 broken、从选择器消失（0.2.2-rc.1 实测复现；dsh-maoying#7
+ *     同款问题的 paoding 侧适配）。
+ * 组合源 presets/orchestrator/agent.cordis.yml 按 ≤ 0.2.1 的形状写（唯一样式
+ * 来源，保持不动），写盘组装时按宿主版本剥离该条目。
+ */
+export const SUBAGENT_LIST_AGENTS_ROW_NAME = '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+/**
+ * 该宿主版本是否已把 list_agents 并入 dsh-tool-subagent-control 主导出
+ * （≥ 0.2.2-alpha.2，含该 prerelease 本身与之后的 rc / 正式版）：独立子路径
+ * 导出 ./list-agents 已删除，声明行里的 list-agents 条目必须剥离。版本解析
+ * 不了返回 false（保守侧：旧行在旧宿主上是必需能力，不乱删）。
+ * prerelease 语义与 isPresetRoleHost 同款：prerelease 原文只在 triple 恰为
+ * [0,2,2] 时参与比较（0.2.2-alpha.1 < 0.2.2-alpha.2 ≤ 0.2.2-rc.1 < 0.2.2）；
+ * 更高的 triple（0.2.3-alpha.1 等）恒 true——semver 里任何 0.2.3 大于任何
+ * 0.2.2；prerelease 未知（缺省 undefined = 旧调用方只传三元组）按正式版处理。
+ */
+export function isMergedSubagentListAgentsHost(triple, prerelease) {
+  if (!Array.isArray(triple) || triple.length !== 3 || triple.some((n) => !Number.isInteger(n))) return false
+  if (!atOrAfterTriple(triple, [0, 2, 2])) return false
+  if (triple[0] === 0 && triple[1] === 2 && triple[2] === 2 && prerelease !== null && prerelease !== undefined) {
+    return comparePrerelease(prerelease, 'alpha.2') >= 0
+  }
+  return true
+}
+
+/** list-agents 条目的 name 行（单引号 / 双引号 / 裸标量三种写法都认）。 */
+const LIST_AGENTS_NAME_LINE_RE =
+  /^[ \t]*name:[ \t]*(?:'@deepseek-ai\/dsh-tool-subagent-control\/list-agents'|"@deepseek-ai\/dsh-tool-subagent-control\/list-agents"|@deepseek-ai\/dsh-tool-subagent-control\/list-agents)[ \t]*\r?$/
+
+/**
+ * 从 agent.cordis.yml 文本里剥掉 list-agents 插件条目（写盘组装期的行级手术，
+ * dsh-maoying#7 的 paoding 侧适配）：0.2.2-alpha.2 起该子路径导出已删除，条目
+ * 残留会让行 never started → 整张 preset 被注册表判 broken。list_agents 工具
+ * 本身由 control 主导出的 apply 末尾自动注册，剥离后能力无损。
+ *
+ * 匹配按 name 值（id 只是书写约定，name 才是宿主解析模块的键），缩进不限——
+ * 同一函数既服务生成产物（delegation 组 4 空格条目缩进）也服务产物内联后的
+ * 声明行文本（+10 空格等任意深度嵌套）。删除范围是整个列表条目：name 行向上
+ * 找同条目的 `- ` 头行、向下收更深的续行（config 块等）；条目两侧都是空行时
+ * 再吃掉一侧，防剥后双空行堆积。头行定位不到（畸形文本）只删 name 行自身，
+ * 绝不向上越界误删别的条目。无匹配原样返回（含 CRLF 文本——includes 预检
+ * 先行，未命中不做任何改写）。
+ */
+export function stripMergedSubagentListAgentsRow(text) {
+  const src = String(text ?? '')
+  if (!src.includes(SUBAGENT_LIST_AGENTS_ROW_NAME)) return src
+  const lines = src.split(/\r?\n/)
+  const drop = new Set()
+  for (let i = 0; i < lines.length; i++) {
+    if (!LIST_AGENTS_NAME_LINE_RE.test(lines[i])) continue
+    const indentOf = (line) => (line.match(/^[ \t]*/) ?? [''])[0].length
+    const headIndent = indentOf(lines[i]) - 2 // 本仓 YAML 清单风格：条目头 `- ` 比续行键浅 2 空格
+    // 条目头：name 行上方最近的非空行；是 headIndent 缩进的 `- ` 行则整条剥，
+    // 否则（畸形）从 name 行起剥
+    let head = i
+    for (let j = i - 1; j >= 0; j--) {
+      const line = lines[j]
+      if (line.trim() === '') break // 条目内行连续；空行上方不可能是本条目头
+      const ind = indentOf(line)
+      if (ind === headIndent && /^[ \t]*-[ \t]/.test(line)) {
+        head = j
+        break
+      }
+      if (ind <= headIndent) break // 撞上更浅的上一条目 / 键：畸形，只删 name 行
+    }
+    // 条目尾：name 行向下收深度超过条目头的续行（到空行或浅缩进行止）
+    let tail = i
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j]
+      if (line.trim() === '' || indentOf(line) <= headIndent) break
+      tail = j
+    }
+    for (let j = head; j <= tail; j++) drop.add(j)
+    // 条目两侧都是空行：吃掉尾侧一个，剥完只剩一个空行分隔
+    if (head > 0 && lines[head - 1].trim() === '' && tail + 1 < lines.length && lines[tail + 1].trim() === '') {
+      drop.add(tail + 1)
+    }
+  }
+  if (drop.size === 0) return src
+  return lines.filter((_, idx) => !drop.has(idx)).join('\n')
 }
 
 /**

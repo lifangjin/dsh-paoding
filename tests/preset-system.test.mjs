@@ -35,6 +35,7 @@ import {
   detectPresetSystem,
   formatGeneratorMarker,
   hostVersionFromArgv,
+  isMergedSubagentListAgentsHost,
   isPresetRoleHost,
   isPtcWorkerHost,
   listOrchestratorPresetIds,
@@ -47,6 +48,7 @@ import {
   readHomePatchRows,
   readPresetDirMeta,
   stripHomePatchRows,
+  stripMergedSubagentListAgentsRow,
   upsertHomePatchRows,
 } from '../tools/lib/preset-system.mjs'
 import { collectState, generateAndInstall } from '../tools/install.mjs'
@@ -814,6 +816,122 @@ test('0.2.1 角色行形态门的 prerelease 边界：守卫 0.2.1-rc.2 落地�
   assert.equal(isPresetRoleHost([0, 2, 0], 'rc.9'), false)
   assert.equal(presetRolesFlavorOf([0, 2, 1], 'rc.1'), ROLES_INLINE)
   assert.equal(presetRolesFlavorOf([0, 2, 1], 'rc.2'), ROLES_AGENT_PRESET)
+})
+
+// ── list-agents 行剥离（≥0.2.2-alpha.2：子路径导出并入 control 主导出）───────
+
+test('isMergedSubagentListAgentsHost: 0.2.2 边界（prerelease 原文比较），null/非法保守保留源行', () => {
+  assert.equal(isMergedSubagentListAgentsHost([0, 2, 1], 'rc.5'), false, '0.2.1-rc.5：list-agents 仍是独立模块，保留')
+  assert.equal(isMergedSubagentListAgentsHost([0, 2, 2], 'alpha.1'), false, 'alpha.1 早于守卫落地（alpha.2 才删子路径导出），保留')
+  assert.equal(isMergedSubagentListAgentsHost([0, 2, 2], 'alpha.2'), true, '守卫落地点')
+  assert.equal(isMergedSubagentListAgentsHost([0, 2, 2], 'alpha.10'), true, 'alpha.N 按数值比较')
+  assert.equal(isMergedSubagentListAgentsHost([0, 2, 2], 'beta.1'), true, 'beta 字典序在 alpha 之后')
+  assert.equal(isMergedSubagentListAgentsHost([0, 2, 2], 'rc.1'), true, '0.2.2-rc.1（真机复现 broken 的版本）：剥')
+  assert.equal(isMergedSubagentListAgentsHost([0, 2, 2], null), true, '0.2.2 正式版：剥')
+  assert.equal(isMergedSubagentListAgentsHost([0, 2, 2]), true, 'prerelease 未知（旧调用方只传三元组）：按正式版处理')
+  assert.equal(isMergedSubagentListAgentsHost([0, 2, 3], 'alpha.1'), true, '更高 triple 恒剥（semver 里任何 0.2.3 > 任何 0.2.2）')
+  assert.equal(isMergedSubagentListAgentsHost([1, 0, 0], null), true)
+  assert.equal(isMergedSubagentListAgentsHost(null, null), false, '探测不到：保守保留（旧宿主上这行是必需能力）')
+  assert.equal(isMergedSubagentListAgentsHost([0, 2], 'rc.1'), false, '非法三元组：保守保留')
+})
+
+/** 带完整 delegation 组的 agent 文本片段（4 空格条目缩进，与源模板同形状）。 */
+const LIST_AGENTS_SNIPPET = [
+  '- id: delegation',
+  '  name: cordis:group',
+  '  group: true',
+  '  config:',
+  "    - id: tool-subagent-control",
+  "      name: '@deepseek-ai/dsh-tool-subagent-control'",
+  '',
+  '    - id: tool-subagent-list-agents',
+  "      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'",
+  '',
+  '    # list_agents 注册并入 control 主导出后本条目为残留',
+  '    - id: workflow-ptc',
+  "      name: '@deepseek-ai/dsh-workflow-ptc'",
+].join('\n')
+const LIST_AGENTS_ENTRY_SPAN =
+  "    - id: tool-subagent-list-agents\n      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'\n\n"
+
+test('stripMergedSubagentListAgentsRow: 整条剥（其余逐字节一致）、任意缩进深度、引号变体、config 续行、无匹配原样', () => {
+  // 源模板形状：条目两行 + 尾侧空行一起剥，前后各留一个空行分隔
+  assert.equal(stripMergedSubagentListAgentsRow(LIST_AGENTS_SNIPPET), LIST_AGENTS_SNIPPET.replace(LIST_AGENTS_ENTRY_SPAN, ''))
+  // 内联进声明行后的 +10 缩进形态同样整条剥
+  const indented = LIST_AGENTS_SNIPPET.split('\n').map((l) => (l === '' ? '' : `          ${l}`)).join('\n')
+  const stripped = stripMergedSubagentListAgentsRow(indented)
+  assert.ok(!stripped.includes('list-agents'), '深缩进条目剥净')
+  assert.ok(stripped.includes("              - id: tool-subagent-control\n                name: '@deepseek-ai/dsh-tool-subagent-control'\n"), 'control 主行（含缩进）无损')
+  assert.notEqual(parseYamlSubset(stripped), null, '剥行后仍可被仓库 YAML 子集解析器解析')
+  // 双引号 / 裸标量 name 写法也认
+  const doubleQuoted = LIST_AGENTS_SNIPPET.replace("'@deepseek-ai/dsh-tool-subagent-control/list-agents'", '"@deepseek-ai/dsh-tool-subagent-control/list-agents"')
+  assert.ok(!stripMergedSubagentListAgentsRow(doubleQuoted).includes('list-agents'), '双引号 name 行剥净')
+  const bare = LIST_AGENTS_SNIPPET.replace("'@deepseek-ai/dsh-tool-subagent-control/list-agents'", '@deepseek-ai/dsh-tool-subagent-control/list-agents')
+  assert.ok(!stripMergedSubagentListAgentsRow(bare).includes('list-agents'), '裸标量 name 行剥净')
+  // 条目带 config 续行（深度超过条目头的键）一起剥
+  const withConfig = [
+    "  - id: tool-subagent-list-agents",
+    "    name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'",
+    '    config:',
+    '      provider: spawn',
+    '',
+    '  - id: after',
+  ].join('\n')
+  assert.equal(stripMergedSubagentListAgentsRow(withConfig), '\n  - id: after', 'config 续行随条目剥净（头上无空行可吃，保留尾侧空行）')
+  // 畸形（name 行缩进比任何 `- ` 头行都深，头行定位不到）只删 name 行自身，
+  // 不向上越界误删别的条目
+  const malformed = "  - id: keep-me\n      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'\n"
+  assert.equal(stripMergedSubagentListAgentsRow(malformed), "  - id: keep-me\n", '畸形条目只删 name 行')
+  // 无匹配原样返回（含 CRLF 文本不做任何改写）
+  assert.equal(stripMergedSubagentListAgentsRow('hello\r\nworld\r\n'), 'hello\r\nworld\r\n')
+})
+
+test('backfillHomePatchRows: ≥0.2.2 宿主补行剥 list-agents 条目，0.2.1-rc.5 照旧保留（行文本按宿主代际分岔）', async () => {
+  // 两无形态产物（无 persona / agentPreset 键，不触发角色形态防毒守卫）+ 完整 delegation 组
+  const artifact = [
+    '- id: tool-bash',
+    "  name: '@deepseek-ai/dsh-tool-bash'",
+    '',
+    '- id: delegation',
+    '  name: cordis:group',
+    '  group: true',
+    '  config:',
+    "    - id: tool-subagent-control",
+    "      name: '@deepseek-ai/dsh-tool-subagent-control'",
+    '',
+    '    - id: tool-subagent-list-agents',
+    "      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'",
+    '',
+    '- id: workflow-ptc',
+    "  name: '@deepseek-ai/dsh-workflow-ptc'",
+  ].join('\n') + '\n'
+  const makeHome = async () => {
+    const { dshHome, patchFile } = freshEnv('bf-listagents')
+    mkdirSync(path.join(dshHome, '.agent-presets', 'orchestrator'), { recursive: true })
+    writeFileSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'agent.cordis.yml'), artifact)
+    // 补行必查的伴生文件（内容与断言无关，存在即可）
+    writeFileSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'restrict.mjs'), 'export default []\n')
+    writeFileSync(path.join(dshHome, '.agent-presets', 'orchestrator', 'delegation-labels.mjs'), 'export default {}\n')
+    return { dshHome, patchFile }
+  }
+
+  // 0.2.2-rc.1：补行剥条目——control 主行保留、托管块 YAML 合法
+  const { dshHome: h22, patchFile: p22 } = await makeHome()
+  await withFakeHost('0.2.2-rc.1', async () => {
+    assert.deepEqual(backfillHomePatchRows(h22, ['orchestrator']), ['orchestrator'])
+  })
+  const patched22 = readFileSync(p22, 'utf8')
+  assert.ok(!patched22.includes('list-agents'), '0.2.2-rc.1 宿主补行不得残留 list-agents 条目（否则整张 preset 被判 broken）')
+  assert.ok(patched22.includes("name: '@deepseek-ai/dsh-tool-subagent-control'"), 'control 主行必须保留（list_agents 由主导出注册，能力无损）')
+  assert.notEqual(parseYamlSubset(patched22), null, '剥行后的托管块仍是合法 YAML')
+  assert.deepEqual(readHomePatchRows(h22), [{ rowId: 'preset-orchestrator', presetId: 'orchestrator' }])
+
+  // 0.2.1-rc.5：同产物补行保留条目（旧宿主上 list-agents 是独立模块，保留才不丢能力）
+  const { dshHome: h21, patchFile: p21 } = await makeHome()
+  await withFakeHost('0.2.1-rc.5', async () => {
+    assert.deepEqual(backfillHomePatchRows(h21, ['orchestrator']), ['orchestrator'])
+  })
+  assert.ok(readFileSync(p21, 'utf8').includes('list-agents'), '旧宿主补行保留 list-agents 条目')
 })
 
 test('parseVersionInfo / detectHostVersionInfo：prerelease 原文保留，探测链与三元组版同源', async () => {
