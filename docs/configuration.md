@@ -112,7 +112,7 @@ main_agent_skills:      # 软引导：persona 技能行 + 主 agent 用 read 按
   - caveman
 main_agent_skills_inline: []   # 硬内联（空 = 不用）；与 `main_agent_skills` 同列时只内联不写软行
 main_agent_persona_extra: |-   # null/缺省 = 默认 codegraph 规则；'' = 不追加；其他 = 覆盖
-  Never call codegraph_* tools without passing projectPath = {{cwd}}.
+  Never call codegraph_* tools without passing projectPath = the absolute path of your current working directory.
 
 skills:                 # skill -> 分配给的角色（写进角色 persona 的 Available skills 引导）
   frontend-design: [design]
@@ -124,7 +124,7 @@ skills:                 # skill -> 分配给的角色（写进角色 persona 的
 - `roles.search_external` 的 tools 是**意图**：若 tavily 未启用，生成器会把 5 个 `mcp__tavily__*` 剔除，保留其余（「预览生成」的 removed 列表会给出原因）。
 - `roles.design` 未写 `tools` → 保留静态 allow，只换 persona。
 - `roles.code-reviewer` 安装后生成 `delegation-code-reviewer` 委派块，主 agent 白名单加入 `code-reviewer`，对话里直接调该 toolName 即可委派。
-- `main_agent_persona_extra` 里的 `{{cwd}}` / `{{model}}` 是 DSH 运行时替换的占位符，必须原样保留。
+- `main_agent_persona_extra` 里可用的 DSH 运行时占位符只有 `{{model}}`（及 `{{provider}}`），用了必须原样保留；`{{cwd}}` 已禁用——0.2.1 的 persona 部署段只注册 provider / model 两个变量，未知变量直接抛错，工作目录请用自然语言描述（示例正文即如此，见 5.3）。
 
 ### 1.4 patch 层判定与 Android compat 壳（dsh-maoying#1）
 
@@ -521,11 +521,11 @@ main_agent_display_name: 庖丁   # 仅 preset 显示名换成「庖丁」，per
 
 ### 5.3 默认常量原文
 
-单点事实源是 `tools/lib/util.mjs` 里的 `DEFAULT_MAIN_AGENT_PERSONA_EXTRA`（`tools/install.mjs` 仅 re-export 转出口，不定义；`presets/orchestrator/agent.cordis.yml` **不再内置**该行）。默认值原文（英文）：
+单点事实源是 `tools/lib/util.mjs` 里的 `DEFAULT_MAIN_AGENT_PERSONA_EXTRA`（`tools/install.mjs` 仅 re-export 转出口，不定义；`presets/orchestrator/agent.cordis.yml` **不再内置**该行）。默认值原文（逐字照录，英文）：
 
-> Codegraph MCP default project may be a DIFFERENT repository than {{cwd}}. Never call codegraph_* tools without passing projectPath = {{cwd}} (the absolute path of your working directory). If {{cwd}} has no .codegraph index, fall back to glob/grep/read directly and do not loop or comment on project mismatches.
+> Codegraph MCP default project may be a DIFFERENT repository than your current working directory. Never call codegraph_* tools without passing projectPath = the absolute path of your current working directory. If that directory has no .codegraph index, fall back to glob/grep/read directly and do not loop or comment on project mismatches.
 
-它只在挂载了 codegraph MCP 时相关（约束 codegraph 工具必须带当前项目路径）；未挂载时是无关但无害的一段文本。`{{cwd}}` / `{{model}}` 是 persona 模板占位符，DSH 运行时替换 —— 手编时**必须原样保留**。
+它只在挂载了 codegraph MCP 时相关（约束 codegraph 工具必须带当前项目路径）；未挂载时是无关但无害的一段文本。占位符口径：DSH 0.2.1 的 `deployment:persona-prefix` 部署段只注册 `{{model}}` / `{{provider}}` 两个变量，**`{{cwd}}` 已禁用**——自定义文本里写它，宿主部署时遇未知变量直接抛错；工作目录一律用自然语言描述（上面的默认常量正是这么写的）。`{{model}}` / `{{provider}}` 若使用则原样保留，由 DSH 运行时替换。
 
 ### 5.4 编辑途径
 
@@ -765,7 +765,7 @@ workspaces:
 - 落盘即改 mtime，面板的检测状态缓存按对账自动失效，视图随后按新配置重建。
 - 与「保存并应用」共用同一把写盘互斥闸：应用进行中导入（或反过来）会收到 409，稍后重试即可。
 
-**备份与恢复**：凡是往配置文件写盘的动作（保存并应用、导入、恢复备份）都会先把当前文件轮换备份三份——`dsh-paoding.config.yml.bak-1`（最新）到 `.bak-3`，逐份后移、最旧的淘汰；备份与配置文件同目录，首次保存前没有旧值就不备份。回滚走「更多」→「恢复备份…」：列出各备份的生成时间与大小，二次确认后整份覆盖回当前配置（恢复前当前文件还会再自动备份一份，连按恢复也能原路退回）；恢复同样先验格式（解析不出顶层映射的备份拒收），共用写盘互斥闸。没有面板时，手动把 `.bak-N` 拷回主文件名即可。
+**备份与恢复**：凡是往配置文件写盘的动作（保存并应用、导入、恢复备份、工作区预设写盘）落盘前都会先把当前文件**按递增编号快照进版本链**——`<配置文件>.history/v000001.yml` 起步（同名 `.json` 元数据记 revision、写入口 origin、时间与大小），保留最近 30 份、超限淘汰最旧；首次保存前没有旧值就不快照。回滚走「更多」→「恢复备份…」：按新→旧列出各快照的编号、来源、时间与大小，二次确认后整份覆盖回当前配置（恢复前当前文件还会再快照一份进版本链，连按恢复也能原路退回）；恢复同样先验格式（解析不出顶层映射的快照拒收），共用写盘互斥闸。旧的三槽轮换备份 `.bak-1/2/3` 只在版本链首次启用时一次性导入编号链（旧文件保留不动），此后写盘不再轮换它们；版本链编号同时是写接口 `baseRevision` 乐观并发的比对基准（见 §13）。没有面板时，把 `<配置>.history/` 里目标 `vNNNNNN.yml` 拷回主文件名即可手动回滚。
 
 ## 12. 检查提示（体检）
 
@@ -802,3 +802,4 @@ workspaces:
 - **稳定错误码**：0.4.9 起所有 4xx 响应在 `{ error }` 之外纯增量附带 `code`（单表定义于 `tools/lib/errors.mjs`）：`apply_in_flight`（409，写盘互斥）、`config_stale`（409，CAS 过期，见下）、`workspace_path_missing` / `workspace_not_dir` / `assignments_missing` / `config_text_missing` / `generation_failed`（422）、`preset_not_found` / `route_not_found` / `backup_not_found`（404）、`forbidden` / `preset_delete_forbidden`（403）等。脚本按 `code` 分支，不要解析中文文案；错误码一经发布不改名，只追加。
 - **配置版本链与乐观并发（CAS）**：每一次写配置（面板 apply / 导入 / 工作区预设写盘 / 回滚 / 删除工作区预设）前，当前配置文件会先按递增编号快照进 `<配置文件>.history/`（`v000001.yml` + `v000001.json` 元数据，origin 记写入口；保留最近 30 份，旧的 .bak-1/2/3 首次写入时自动导入编号链、原文件保留）。`GET state` 响应附 `configRevision`（当前版本链编号，无历史 = 0）与 `configHistory`（近期 10 条快照）；写请求 body 可带 `baseRevision`，与磁盘不一致时拒绝写入并回 409 `config_stale`（附 `currentRevision`）——「配置已被其他入口改过」不再静默覆盖。`baseRevision` 缺省不比较（老客户端 / curl 零变化）；写响应附 `revision`（写盘后最新编号）。回滚接口同步升级：`POST config/restore` body 接受 `{ revision }`（编号链形态，主路径）或旧 `{ file }`（.bak-N 兼容形态），`GET config/backups` 返回 `{ revision, snapshots: [{revision, file, origin, at, size}], legacyBackups: [...旧 bak 清单] }`。
 - **删除只清配置层**：DELETE 清的是配置 `workspaces` 条目与预设产物（目录 + 声明行），不动宿主工作区注册表——注册/注销工作区仍走面板「添加工作区」对应的接口。
+- **委派效果统计（只读）**：`GET /api/paoding/stats?days=30&project=<slug>` 是面板「委派效果」卡的数据源（宿主 `sessionPersistence` 服务逐会话冷读抽摘要聚合，只认 `paoding-role-` 前缀的子会话）。响应 `{ ok, project, windowDays, roles: [{ role, calls, avgMs, failures, lastUsedAt }], sessionsScanned, delegatedSessions, skipped }`——每角色的 `avgMs` 由聚合总耗时 `totalMs` 均摊而来，`lastUsedAt` 为该角色最近一次使用时刻。`days` 缺省 30、夹取到 1–365；`project` 缺省 = 当前面板项目（cwd 换算 slug），该 slug 零委派记录时自动回落一轮全项目聚合（响应 `project: 'all'`），显式传参（含 `'all'`）不回落，非法值 422。`sessionPersistence` 服务不可用时回 `{ ok: false, reason: 'persistence-unavailable' }`，面板据此整卡不渲染。

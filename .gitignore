@@ -10,3 +10,5 @@ plan/
 .cortexkit/
 exp-home-e2e/
 node_modules/
+# issue-check daily task snapshot
+.issue-check-seen.json

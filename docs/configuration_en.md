@@ -19,7 +19,7 @@ How an edit gets applied ("re-apply" below always means the first row):
 | Scenario | Behavior |
 |---|---|
 | Web panel (庖丁配置 in the left sidebar) | **The main path**: opening the panel loads the existing config as the current values;「保存并应用」(Save & Apply) writes the preset and saves the assignments to the config file (default `~/.dsh/dsh-paoding.config.yml`, written with `0o600` permissions). If you hand-edited the file, open the panel first and then apply |
-| First-install automation | At startup the plugin applies the config file automatically once it finds the preset missing or carrying a stale version marker (no config → base template) — no manual trigger needed in day-to-day use |
+| First-install automation | At startup the plugin self-heals once when it finds the preset missing, carrying a stale version marker, or after a host preset-track flip (upgrading dsh without touching the plugin): the first two regenerate from the config file (no config → base template), while a track flip only backfills the missing declaration rows from the on-disk artifact without regenerating its content — no manual trigger needed in day-to-day use |
 | Fallback CLI (developers who cloned the repo only) | `node tools/install.mjs --auto`: applies the config file idempotently when present, else writes the base template; `--dry-run` prints only the detection report and the allow / persona changes that would be generated — writes nothing (including the config file), good for previewing first; `--config <file>` uses the given file instead of the default location |
 
 A config file that **exists but fails to parse** is a hard error (the pipeline aborts); a **missing** file simply means "no configuration" (the base template). Top-level keys such as `profile` and `roles` are described in the next subsection.
@@ -54,6 +54,7 @@ The key names below match `normalizeConfig` in `tools/lib/config.mjs` — the si
 - `roles.<toolName>.provider`: the provider route the role's model lives on (optional `string`). It only takes effect paired with `model`; a lone `provider` is warned about and ignored by the installer, while a lone `model` rides the main agent's provider route (see 2.5).
 - `roles.<toolName>.background_mode`: the role's session mode (optional `'one-shot' | 'continuable'`; default `one-shot`) — run-and-discard, or continuable: the child conversation is kept across turns so the main agent can resume in place with `send_message`. Built-in and custom role entries share the semantics; the continuable prerequisites, costs and panel path are in 2.6.
 - `roles.<toolName>.start_mode`: the role's start mode (optional `'fresh' | 'fork'`; default `fresh`) — a brand-new child, or one that starts with the main agent's completed turns as its initial content (inherit the conversation). Built-in and custom role entries share the semantics; fork semantics, the dedicated-model mutual exclusion and the panel path are in 2.7.
+- `roles.<toolName>.persona_base`: an **automatically managed lineage key** (not a user-editable field — normal configs should not write it). When a `persona` override exists, saving also stores a short hash of "the default persona template that override was based on"; if a later Paoding upgrade changes the default template, the next Save & Apply / Preview raises a `default_changed` warning (the override still applies verbatim — it is never silently merged), asking you to choose: keep the override / clear it and adopt the new default / merge by hand. Clearing this key by hand = the next save re-baselines against the current default.
 - Keys under `roles` outside the built-in trio are **custom roles** (section 6). Do not put the static role `search_internal_deep` under `roles` (see 2.2).
 - Built-in roles can be **deleted wholesale**: the `roles_remove` key accepts only the trio's names — deletion effect, consistency with the `roles` key, and the restore paths are in 2.3.
 
@@ -111,7 +112,7 @@ main_agent_skills:      # soft guidance: persona skill rows; the main agent load
   - caveman
 main_agent_skills_inline: []   # hard inlining (empty = unused); when also in main_agent_skills, inline only — no soft row
 main_agent_persona_extra: |-   # null/absent = default codegraph rule; '' = append nothing; any other = override
-  Never call codegraph_* tools without passing projectPath = {{cwd}}.
+  Never call codegraph_* tools without passing projectPath = the absolute path of your current working directory.
 
 skills:                 # skill -> the roles it is assigned to (writes the Available skills guidance into those personas)
   frontend-design: [design]
@@ -123,7 +124,7 @@ Notes:
 - The `tools` under `roles.search_external` express **intent**: if tavily is not enabled, the generator drops the five `mcp__tavily__*` names and keeps the rest (the Preview "removed" list states the reason for each).
 - `roles.design` omits `tools`, so the static allow is kept and only the persona is replaced.
 - After installation, `roles.code-reviewer` becomes a generated `delegation-code-reviewer` block, `code-reviewer` joins the main-agent allow list, and the main agent can delegate to it directly by calling that toolName.
-- `{{cwd}}` and `{{model}}` inside `main_agent_persona_extra` are persona placeholders that DSH substitutes at runtime — keep them verbatim.
+- The only DSH-substituted placeholders inside `main_agent_persona_extra` are `{{model}}` (and `{{provider}}`); when used, keep them verbatim. `{{cwd}}` is disabled — the 0.2.1 persona deployment section registers provider / model only and throws on unknown variables, so describe the working directory in natural language (as the example above does; see 5.3).
 
 ### 1.4 Patch layer selection and the Android compat shell (dsh-maoying#1)
 
@@ -317,6 +318,12 @@ Prerequisites and costs of continuable (stated plainly):
 - **Costs: no TTL, on-disk accumulation, and accumulated context on every turn.** Persisted sessions have no TTL and keep writing to disk; a continuable child carries the context it has accumulated on every turn, so a long-lived child only gets more expensive. Reserve it for multi-round polishing delegations; `interrupt_agent` sessions you no longer need and clean up the on-disk files.
 
 Panel path: 庖丁配置 in the left sidebar → the「会话模式」("session mode") radio on a role card (「一次性（one-shot）」/「可续（continuable）」). When `sessionPersistence` is not detected the panel warns in place but does not block — the warning only reminds you to mount the persistence backend first; saving works as usual.
+
+The continuable「快 shell」("fast shell"; effective on DSH ≥ 0.2.1, automatic, no config key):
+
+- In a role configured as `continuable`, the shell inside that role's own sub-preset composition is rewritten into an `isolate: shell` tool group: the `dsh-bash-local` / `dsh-pwsh-local` executors in the group pin a 5-second foreground budget (`timeoutMs` / `maxTimeoutMs` 5000), and the `tool-jobs` wait ceiling (`waitTimeoutMs` / `maxWaitTimeoutMs`) is likewise 5000. Foreground commands / waits past 5 seconds automatically turn into background jobs, so the main agent's `send_message` resume messages are no longer blocked by a running long build / test — the child picks them up at its next step boundary.
+- The blast radius is that role's own sub-preset composition only: the main agent, one-shot roles and other continuable roles are unaffected; `one-shot` roles and the default keep the host's default budgets (on DSH 0.2.1, 120 s foreground / 600 s ceiling).
+- **Not injected on DSH ≤ 0.2.0 / 0.2.1-rc.1**: on older hosts the role personas ship in the inline form with no per-role tool composition, and executor config is a shared scope (touching it would leak into the main agent) — deliberately skipped. This is a known boundary, not a defect.
 
 Boundaries:
 
@@ -514,11 +521,11 @@ Serialization: `''` is written out explicitly as `main_agent_persona_extra: ''` 
 
 ### 5.3 The default constant, verbatim
 
-The single source of truth is `DEFAULT_MAIN_AGENT_PERSONA_EXTRA` in `tools/lib/util.mjs` (`tools/install.mjs` only re-exports it); `presets/orchestrator/agent.cordis.yml` no longer embeds the line. The default value, verbatim:
+The single source of truth is `DEFAULT_MAIN_AGENT_PERSONA_EXTRA` in `tools/lib/util.mjs` (`tools/install.mjs` only re-exports it); `presets/orchestrator/agent.cordis.yml` no longer embeds the line. The default value, copied verbatim (English):
 
-> Codegraph MCP default project may be a DIFFERENT repository than {{cwd}}. Never call codegraph_* tools without passing projectPath = {{cwd}} (the absolute path of your working directory). If {{cwd}} has no .codegraph index, fall back to glob/grep/read directly and do not loop or comment on project mismatches.
+> Codegraph MCP default project may be a DIFFERENT repository than your current working directory. Never call codegraph_* tools without passing projectPath = the absolute path of your current working directory. If that directory has no .codegraph index, fall back to glob/grep/read directly and do not loop or comment on project mismatches.
 
-It matters only when the codegraph MCP is mounted (it constrains codegraph tools to carry the current project path); otherwise it is an irrelevant-but-harmless paragraph. `{{cwd}}` and `{{model}}` are persona template placeholders substituted by DSH at runtime — **keep them verbatim** when hand-editing.
+It matters only when the codegraph MCP is mounted (it constrains codegraph tools to carry the current project path); otherwise it is an irrelevant-but-harmless paragraph. Placeholder rules: DSH 0.2.1's `deployment:persona-prefix` deployment section registers only `{{model}}` / `{{provider}}` — **`{{cwd}}` is disabled**, and writing it into custom text makes the host throw at deployment time on the unknown variable; describe the working directory in natural language, exactly as the default constant above does. Any `{{model}}` / `{{provider}}` you do use must be kept verbatim and is substituted by DSH at runtime.
 
 ### 5.4 Where to edit
 
@@ -659,6 +666,8 @@ At install time the generator appends the guidance sentence `Available skills: f
 
 This is a **soft constraint**, not hard isolation: directory visibility is a DSH mechanism (collected per cwd, fully visible to role agents); the persona sentence is only a hint. Hard isolation comes from the tool surface (whether `skill` is in the role's allow). The main agent is the exception: `skill` is denied at its registry level (see 3.1), so skills are invisible to it — when needed, use `main_agent_skills` / `main_agent_skills_inline` (section 4), not the `skills` key.
 
+The skill-candidate scan roots follow the configuration target: the global view covers user-level skills only, while a workspace view additionally includes the project-level skills under that workspace's directory (badged「项目」("project") in the panel) — see 9.5.
+
 ## 8. Per-agent model & misc
 
 ### 8.1 Per-role model via agentOptions
@@ -770,7 +779,7 @@ The header "More" menu offers export and import of the whole config file (the §
 - Writing changes the file's mtime, so the panel's detection-state cache invalidates automatically through the existing reconciliation, and the view rebuilds from the new config.
 - Import shares the same in-flight write gate as "save & apply": applying during an import (or the reverse) answers 409 — retry shortly.
 
-**Backups and restore**: every action that writes the config file (save & apply, import, restore) first rotates the current file through three backups — `dsh-paoding.config.yml.bak-1` (newest) to `.bak-3`, each shifting one slot and the oldest falling off; backups live next to the config file, and a first-ever save with no previous file backs up nothing. Rollback runs through "More" → "Restore backup…": each backup is listed with its time and size, one confirming dialog puts it back in place (the current file is backed up once more first, so even a mistaken restore can be walked back); the restore validates the backup too (a backup that parses to a non-mapping is rejected) and shares the write gate. Without the panel, copy a `.bak-N` back over the main filename by hand.
+**Backups and restore**: every action that writes the config file (save & apply, import, restore, workspace-preset writes) first snapshots the current file into the **numbered version chain** — `<config file>.history/v000001.yml` and up (a same-named `.json` sidecar records the revision, the write entry point `origin`, time and size), keeping the latest 30 snapshots and evicting the oldest past that; a first-ever save with no previous file snapshots nothing. Rollback runs through "More" → "Restore backup…": snapshots are listed newest-first with number, origin, time and size, and one confirming dialog puts the chosen one back in place (the current file is snapshotted into the chain once more first, so even a mistaken restore can be walked back); the restore validates the snapshot too (one that parses to a non-mapping is rejected) and shares the write gate. The old three-slot rotation backups `.bak-1/2/3` are only imported into the chain once, when the version chain is first enabled (the old files are kept untouched); from then on writes never rotate them again. The chain numbers are also what write requests compare `baseRevision` against for optimistic concurrency (see §13). Without the panel, copy the desired `<config>.history/vNNNNNN.yml` back over the main filename to roll back by hand.
 
 ## 12. Check messages (health review)
 
@@ -803,6 +812,8 @@ The plugin's web backend is mounted under the `/api/paoding/*` prefix inside the
 
 Ground rules:
 
-- **Same pipeline, same health review**: writes (POST / PUT) run through the same generation pipeline as the panel's "save & apply"; the response's `warnings` field is the §12 structured health review. They also share the same in-flight write gate — while any write is running, other writes answer 409; retry shortly.
-- **Error semantics**: missing body fields or a non-existent workspace directory answer 422; an unknown preset id answers 404; deleting the global preset answers 403; anything else answers 500. Responses are uniformly `{ error }` (generation failures additionally carry `warnings`).
+- **Same pipeline, same health review**: writes (POST / PUT) run through the same generation pipeline as the panel's "save & apply"; the response's `warnings` field is the §12 structured health review. They also share the same in-flight write gate — while any write is running, other writes answer 409 (`apply_in_flight`); retry shortly.
+- **Stable error codes**: since 0.4.9 every 4xx response adds a `code` alongside `{ error }`, purely additively (single table in `tools/lib/errors.mjs`): `apply_in_flight` (409, in-flight write gate), `config_stale` (409, expired CAS, see below), `workspace_path_missing` / `workspace_not_dir` / `assignments_missing` / `config_text_missing` / `generation_failed` (422), `preset_not_found` / `route_not_found` / `backup_not_found` (404), `forbidden` / `preset_delete_forbidden` (403), and so on. Branch scripts on `code`, never on the (Chinese) message text; codes are never renamed once published — additions only.
+- **Config version chain and optimistic concurrency (CAS)**: before every config write (panel apply / import / workspace-preset write / restore / workspace deletion), the current config file is first snapshotted into `<config file>.history/` under an incrementing number (`v000001.yml` + a `v000001.json` metadata sidecar; `origin` records the write entry point; the latest 30 snapshots are kept, and old `.bak-1/2/3` files are imported into the chain once at first write, originals left in place). The `GET state` response carries `configRevision` (the current chain number, 0 with no history) and `configHistory` (the 10 most recent snapshots); a write request body may carry `baseRevision`, and a mismatch with disk rejects the write with 409 `config_stale` (plus `currentRevision`) — "the config was changed by another entry point" is no longer silently overwritten. An absent `baseRevision` is not compared (old clients / curl unchanged); write responses carry `revision` (the newest number after the write). The restore API is upgraded accordingly: `POST config/restore` accepts `{ revision }` (chain-numbered form, the main path) or the legacy `{ file }` (`.bak-N` compatibility form), and `GET config/backups` returns `{ revision, snapshots: [{revision, file, origin, at, size}], legacyBackups: [...the old bak list] }`.
+- **Delegation stats (read-only)**: `GET /api/paoding/stats?days=30&project=<slug>` is the data source of the panel's「委派效果」("Delegation stats") card — cold-read summaries per session through the host `sessionPersistence` service, aggregated over child sessions whose preset starts with `paoding-role-`. Response: `{ ok, project, windowDays, roles: [{ role, calls, avgMs, failures, lastUsedAt }], sessionsScanned, delegatedSessions, skipped }` — each role's `avgMs` is the mean of its aggregated `totalMs`, and `lastUsedAt` is the role's most recent use. `days` defaults to 30 and is clamped to 1–365; `project` defaults to the panel's current project (cwd → slug), and when that slug has zero delegation records the route falls back to an all-projects aggregation (response `project: 'all'`); an explicit value (including `'all'`) never falls back, and an invalid one answers 422. When the `sessionPersistence` service is unavailable it answers `{ ok: false, reason: 'persistence-unavailable' }` and the panel hides the whole card.
 - **Deletion only touches the config layer**: DELETE removes the `workspaces` config entry and the preset artifacts (directory + declarative row), not the host workspace registry — registering/unregistering workspaces remains the job of the API behind the panel's "add workspace".

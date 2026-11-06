@@ -10,7 +10,7 @@
 dsh-paoding 把 DSH 从「单体 agent 全量加载工具」改造成「主 agent 编排 + 角色子 agent 分工」。分工遵循任务纹理：
 
 - **热路径——内部文件问题不委派。** 找代码、查引用、读文件这类问题由主 agent 自己用只读工具解决：`glob` / `grep` / `read` / `read_image` / `bash` 全部在主 agent 白名单内，零委派往返延迟。persona 文案里的 `codegraph` 是 host MCP 工具，仅在安装期检测到 codegraph 服务器并经 `main_agent_extra` 注入后才真正可用（详见[配置](configuration.md)与[安装](installation.md)）。
-- **冷路径——只干自己那活的角色子 agent。** 外部调研委派 `search_external`（只带 `web_search` / `web_fetch` + tavily 五工具 + 本地只读）、UI/前端设计委派 `design`（读参考 + 设计技能 + 出 spec，不写最终代码）、代码实现委派 `implement`（读上下文 → 精准修改 → 验证）、超大仓库全量探索委派 `search_internal_deep`（第四角色，2026-09 加入，见下节与[架构](architecture.md)）。每个子 agent 只在真正被委派的那一次才加载工具面（按需加载）。
+- **冷路径——只干自己那活的角色子 agent。** 外部调研委派 `search_external`（只带 `web_search` / `web_fetch` + tavily 五工具 + 本地只读 + `ask_user_question`，共 11 项）、UI/前端设计委派 `design`（读参考 + 设计技能 + 出 spec，不写最终代码）、代码实现委派 `implement`（读上下文 → 精准修改 → 验证）、超大仓库全量探索委派 `search_internal_deep`（第四角色，2026-09 加入，见下节与[架构](architecture.md)）。每个子 agent 只在真正被委派的那一次才加载工具面（按需加载）。
 - **运行中指挥。** 子 agent 运行期间，主 agent 可用 `send_message` 追加指示、`list_agents` 查看状态、`interrupt_agent` 叫停（三者由 `dsh-tool-subagent-control` 注册，属「子 agent 管理」工具面）。
 - **完成后只集成摘要。** 主 agent 从不把子 agent 的完整上下文倒进自己的上下文——它只收一份摘要（见第 5 节「上下文隔离」）。
 
@@ -28,14 +28,14 @@ dsh-paoding 把 DSH 从「单体 agent 全量加载工具」改造成「主 agen
 
 ### 子代理标签带角色名
 
-委派时主 agent 写下的任务短语（委派工具的 `description` 参数）会随子会话持久化，成为三处展示面的标签：侧栏任务管理页、会话头的子代理目录树、后台任务列表。给角色配了显示名（`roles.<toolName>.name`，见[配置](configuration.md) 2.4）后，安装器在预设里带上 `delegation-labels` 插件行：该角色派出的每个子会话，标签统一为 `角色名 · 原任务短语`（如「民工码农 · 修复标签显示」）——多角色并行时扫一眼就知道谁在干活，不用点进会话核对。改写在工具执行的瀑布上原地完成，主 agent 与子 agent 都无感知；只对配置后新发起的委派生效，已有子会话不追溯。
+委派时主 agent 写下的任务短语（委派工具的 `description` 参数）会随子会话持久化，成为三处展示面的标签：侧栏任务管理页、会话头的子代理目录树、后台任务列表。给角色配了显示名（`roles.<toolName>.name`，见[配置](configuration.md) 2.4）后，生成器把「工具名 → 显示名」映射填进预设里**静态常驻**的 `delegation-labels` 插件行——该行恒在（`roles: {}` 占位），显示名只负责填映射；一个显示名都没配时映射为空、行原样保留，插件侧也不注册处理器。配好映射后，该角色派出的每个子会话，标签统一为 `角色名 · 原任务短语`（如「民工码农 · 修复标签显示」）——多角色并行时扫一眼就知道谁在干活，不用点进会话核对。改写在工具执行的瀑布上原地完成，主 agent 与子 agent 都无感知；只对配置后新发起的委派生效，已有子会话不追溯。
 
 ### 主 agent persona（编排人设）原文摘录
 
-来自 `presets/orchestrator/agent.cordis.yml` 的 `- id: persona` 行（YAML `prefix: |-` 块标量，内容行缩进 6 空格；v0.3.0 起 persona 配置键为 `prefix`，`text` 是生成器兼容的旧名）。编排与委派的总指引（persona 原文为英文，照录如下）：
+来自 `presets/orchestrator/agent.cordis.yml` 的 `- id: persona` 行（YAML `prefix: |-` 块标量，内容行缩进 6 空格；v0.3.0 起 persona 配置键为 `prefix`，`text` 是生成器兼容的旧名）。编排与委派的总指引（persona 原文为英文，首段照录如下，`…` 处省略其后的 Routing discipline 段；DSH 0.2.1 起 persona-prefix 仅注册 provider/model，`{{cwd}}` 占位符会抛错，已自源文件移除——工作目录由宿主 env 上下文提供）：
 
 ```text
-You are the orchestrator agent powered by the {{model}} model. Your working directory is {{cwd}}.
+You are the orchestrator agent powered by the {{model}} model.
 
 Decompose the task, delegate to role agents, integrate results.
 - Internal file questions (finding code, references, reading files): solve yourself with glob/grep/read (and codegraph if enabled) — never delegate them.
@@ -43,6 +43,7 @@ Decompose the task, delegate to role agents, integrate results.
 - UI/design work: delegate to design.
 - Code implementation: delegate to implement.
 Keep your own context lean; integrate only summaries. Use todo_write to plan, and ask_user_question only for user-owned choices.
+…
 ```
 
 中文释意：
@@ -67,7 +68,7 @@ DSH 没有原生自动重试——恢复是编排层的职责，具体地说就�
 
 本 preset 在生成期消除这类失败：生成器（面板「保存并应用」与兜底 CLI 共用同一管线）读取 host patch 层（home / profile / `--patch`），检测实际启用的 MCP 服务器与本地工具插件，解析出精确工具名（一律先实时 JSON-RPC 握手，已知服务器握手失败才回落静态表兜底），然后把 search_external / design / implement 三个可配角色的 allow 重写为「静态意图 ∩ 实际检测到的工具」——组合保证的基础工具原样保留，未启用/无法解析的 host 工具被剔除。未知服务器握手失败或 transport 不支持才整服务器跳过（已知服务器握手失败回落静态表、工具保留）：对应角色只是缺这些工具，应用不报错。宿主停用/启用了 MCP 或插件后，到「庖丁配置」点一次「保存并应用」即可同步 allow（「预览生成」先看清单）。细节见[安装](installation.md)。
 
-注意：生成器的 allow 重写只覆盖三个内置角色（`search_external` / `design` / `implement`，`tools/lib/util.mjs` 的 `ROLES` 常量，`tools/install.mjs` 转出口）。手写新增的 `delegation-*` 块（例如第 4 节手编的 `implement_cont`）**原样生效、不会被自动清洗**——其中的 host 依赖工具名必须自己与宿主实际启用的插件保持同步，否则创建被拒。这正是 2026-09-02 起各角色 allow 剔除 `memory_search` / `mcp__codegraph__codegraph_explore` 的原因（插件停用时这些名字不在注册面；重开插件时按需加回，见 `agent.cordis.yml` 中 `delegation-search-internal-deep` 的注释）。
+注意：生成器的 allow 重写只覆盖三个内置角色（`search_external` / `design` / `implement`，`ROLES` 常量定义在 `tools/lib/util.mjs`）。手写新增的 `delegation-*` 块（例如第 4 节手编的 `implement_cont`）**原样生效、不会被自动清洗**——其中的 host 依赖工具名必须自己与宿主实际启用的插件保持同步，否则创建被拒。这正是 2026-09-02 起各角色 allow 剔除 `memory_search` / `mcp__codegraph__codegraph_explore` 的原因（插件停用时这些名字不在注册面；重开插件时按需加回，见 `agent.cordis.yml` 中 `delegation-search-internal-deep` 的注释）。
 
 ### 第 2 层：检测
 
@@ -174,7 +175,7 @@ fork 的语义（如实说明）：
 
 - **初始内容 = 主 agent 已完成的轮次。** 委派发生时，子 agent 拿到的是主 agent 到此刻已经收尾的对话（指令与产出都在）；进行中的那一轮不算数。主 agent 一个已完成轮次都没有时，fork 与全新启动没有区别。
 - **一次性快照，两边各自推进。** fork 之后主 agent 的新进展不会流进子会话，子 agent 的产出也不回写主会话；交汇点只有「子 agent 返回结果」。要持续跟着主 agent 走的帮手，用 continuable + `send_message`（见上节），两者可叠加。
-- **只继承对话，不继承工具与权限。** fork 帮手的工具面仍按该角色 `toolFilter.allow` 收敛，DSH 权限语义（被拒操作不重试）原样适用。
+- **只继承对话，不继承工具与权限——但 fork 的工具面按宿主代际分岔。** DSH 0.2.1+ 宿主上，生成器把 `provider: fork` 角色块的 persona 与 `toolFilter` 整段丢弃并告警（0.2.1 的 dsh-tool-subagent 拒绝内联 persona/toolFilter，fork 角色也不产出子预设/AgentPreset）：fork 子 agent 按宿主缺省组合启动，拿到的**不是**该角色的收敛面。0.2.0 及以下宿主保持内联形状，fork 子 agent 仍按该角色 `toolFilter.allow` 收敛。无论哪代，DSH 权限语义（被拒操作不重试）原样适用。
 - **模型跟随主 agent。** fork 子 agent 继承主 agent 当前的 provider 路由与模型（KV cache 复用的硬约束），角色配的专用模型此时不生效（安装器告警并忽略，见[配置](configuration.md) 2.5）。
 
 什么时候值得 fork：主 agent 已经做完一轮有分量的产出（调研结论、大纲、方案），接下来的活需要「知道这些」但又不想把这些内容在委派 prompt 里复述一遍——比如把写好的大纲做成 PPT、按已定的方案改代码。fork 让帮手直接从已完成上下文开工；反过来，任务与主 agent 上下文无关时不必 fork，全新启动上下文更干净。
@@ -246,9 +247,9 @@ fork 的语义（如实说明）：
 
 主 agent 只能调用白名单内的工具。首选直接编辑 `presets/orchestrator/restrict.mjs` 的 `MAIN_AGENT_ALLOW`（21 项白名单常量，`new Set([...])`），在其中加一行 `'implement_cont'`（改的是 SRC，改完需重新应用，见第 4 步）。
 
-为什么不走配置文件：`main_agent_extra` 的注入走白名单对账——名字必须落在 **presetUniverse**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 各角色 allow）或**检测库存**里才会保留，两头都不占的名字一律剔除。`implement_cont` 这类自定义委派名恰好两头都不占：写进 `main_agent_extra` 会被生成器丢弃（兜底 CLI 输出只汇总数量、不列明细），面板「主 agent」卡也勾不到它。想让配置层路径生效，手写名必须先存在于 presetUniverse / 检测库存之中。
+为什么不走配置文件：`main_agent_extra` 的注入走白名单对账——名字必须落在 **presetUniverse**（`restrict.mjs` 主 agent 白名单 ∪ 源 preset 三个内置角色 `search_external` / `design` / `implement` 的 allow；`search_internal_deep` 的 allow 不在其中）或**检测库存**里才会保留，两头都不占的名字一律剔除。`implement_cont` 这类自定义委派名恰好两头都不占：写进 `main_agent_extra` 会被生成器丢弃（兜底 CLI 输出只汇总数量、不列明细），面板「主 agent」卡也勾不到它。想让配置层路径生效，手写名必须先存在于 presetUniverse / 检测库存之中——注意这条「先存在才保留」只约束 `main_agent_extra`：第 2 步自定义角色的 `toolName` 走 `compose.mjs` 的直通分支，不经对账直接进主 agent allow。
 
-注意**覆盖语义**：运行时 `allow = config.allow ?? MAIN_AGENT_ALLOW`（空 allow 拒绝加载）。生成器从 `restrict.mjs` 源码现场解析该常量作为 base，生成 `config.allow = (base + main_agent_extra − main_agent_remove) ∩ (presetUniverse ∪ inventory)`，且**只在结果与 base 不同时才注入** `config.allow` 行。因此：改完常量必须重新应用（base 重新解析、安装副本刷新）；若运行中的 `agent.cordis.yml` 已有注入的 `config.allow`，运行时以它为准、常量只作回退。
+注意**覆盖语义**：运行时 `allow = config.allow ?? MAIN_AGENT_ALLOW`（空 allow 拒绝加载）。生成器从 `restrict.mjs` 源码现场解析该常量作为 base，生成 `config.allow = (base + main_agent_extra − main_agent_remove − roles_remove) ∩ (presetUniverse ∪ inventory)`，且**只在结果与 base 不同时才注入** `config.allow` 行——例外是 `roles_remove` 非空时强制注入，即使结果与 base 相同（否则静态常量会继续向已删角色委派，删除形同虚设）。因此：改完常量必须重新应用（base 重新解析、安装副本刷新）；若运行中的 `agent.cordis.yml` 已有注入的 `config.allow`，运行时以它为准、常量只作回退。
 
 ### 第 4 步 —— 应用
 
@@ -265,9 +266,9 @@ continuable 会话**无 TTL**，会持续写盘累积：
 
 ## 上下文隔离
 
-收尾一句设计原则：**worker 上下文小而专，主 agent 只收摘要。** 具体落在三处：
+收尾一句设计原则：**worker 上下文小而专，主 agent 只收摘要。** 具体落在四处：
 
 1. **角色工具面即上下文边界。** 每个角色子 agent 只带干自己那活的工具（`toolFilter.allow`），persona 又指引它只产出本角色的产物（调研摘要 / 设计 spec / 代码改动）。大输出在子上下文内部消化，不回灌主 agent。
 2. **主 agent 只集成摘要。** 委派返回后，主 agent 的上下文里只有子 agent 的（结构化）结果/失败诊断，子 agent 的完整历史、中间搜索 dump、逐段 diff 都不进入主上下文——单体会话里「每次搜索 dump、每轮设计稿、每段 diff 都累积」的问题由此消除。
-3. **全仓探索的 dump 隔离。** `search_internal_deep`（第四角色，2026-09 加入）把「超大仓库全量探索」隔离到子上下文：工具面 = 内部搜索全量（`glob`/`grep`/`read`/`read_image`/`bash`，**无 write/edit、无网络**），persona 要求只回浓缩摘要——查了什么、关键文件带行号、找到的定义/符号、主 agent 决策所需要点——并**绝不回传大 dump**。主 agent 遇到这类任务应委派而非自做（热路径上的单文件读、精准 grep 仍自做，零委派延迟）。详见[架构](architecture.md)。
+3. **全仓探索的 dump 隔离。** `search_internal_deep`（第四角色，2026-09 加入）把「超大仓库全量探索」隔离到子上下文：工具面 = 内部搜索全量 10 项（`glob`/`grep`/`read`/`read_image`/`bash` + `ask_user_question`/`todo_write`/`job_output`/`job_list`/`job_kill`，**无 write/edit、无网络**），persona 要求只回浓缩摘要——查了什么、关键文件带行号、找到的定义/符号、主 agent 决策所需要点——并**绝不回传大 dump**。主 agent 遇到这类任务应委派而非自做（热路径上的单文件读、精准 grep 仍自做，零委派延迟）。详见[架构](architecture.md)。
 4. **one-shot 与隔离的关系。** one-shot 让隔离边界落在「每次委派」：用完即弃，天然不跨轮泄漏。continuable 是有意把某个子上下文跨轮保留（见第 3 节），隔离边界放宽到「每次会话」——即便如此，主 agent 依然只收摘要，累积只发生在那个 continuable 子会话内部。

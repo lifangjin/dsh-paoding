@@ -84,8 +84,7 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 | implement 子 agent | 17 项 allow | ~3.8k | 仅实际委派实现时才产生 |
 | search_internal_deep 子 agent | 10 项 allow | 未单独估算 | 仅实际委派全仓深搜时才产生 |
 
-注：表中角色工具数按 `agent.cordis.yml` 实际 allow 条目数计（design 12 / implement 17），README 旧表
-中的 14 / 17 与白名单 22 已过时。
+注：表中角色工具数按 `agent.cordis.yml` 实际 allow 条目数计（design 12 / implement 17）。
 
 **真正的收益是上下文隔离，而不是省下的几千 token 本身**：
 
@@ -202,10 +201,11 @@ dsh-paoding（中文品牌「庖丁」，取庖丁解牛之意）是 DSH（DeepS
 **① 基础工具注册在 preset 层，orchestrator 必须全量组合 standard preset。** DSH 中 read/write/edit/
 glob/grep/bash/skill/web_search 等基础工具**不由 global 层提供**，而是由 builtin `standard` preset 的
 组合挂载。因此 orchestrator 组合必须原样包含 standard 的全部行——tool-bash / tool-pwsh / fs /
-fs-search / jobs / skill / goal / planning / compaction / delegation / ask-user / todo / web——否则子
+fs-search / jobs / skill-filesystem / tool-skill / goal / planning / compaction / delegation / ask-user / todo / web——否则子
 agent 创建时 `tools.restrict()` 会报 `unknown global tools`。这是设计上的硬约束：子 agent 继承的是
 **组合自身注册的工具**，组合缺一行，对应工具就在子 agent 注册面中缺席。host 层（如
-`~/.dsh/cordis.patch.yml`）只挂 MCP 服务器与本地插件工具。
+`~/.dsh/cordis.patch.yml`）挂 MCP 服务器、本地插件工具，以及本安装器 upsert 的
+`@deepseek-ai/dsh-agent-preset` preset 声明行（同一托管块，见⑦）。
 
 **② 主 agent 工具面裁剪 = 瀑布过滤器按白名单过滤模型可见面。** `restrict.mjs` 挂在
 `system-prompt/assemble` 瀑布上（`prepend: true` 使过滤器位于最外层，`await next()` 看到下游完整组装
@@ -253,7 +253,7 @@ SOP（按 stop reason 分流：error 重委派一次 / max-tokens 拆小 / refus
 
 ## Web 配置页 client bundle：源头多文件，产物单文件
 
-配置页的前端代码按分区存放在 `plugins/paoding-config-ui/src/client/`，是十几个带两位序号前缀的片段文件，文件名顺序即拼接顺序；`scripts/build-client.mjs` 把它们按序原样相连，写出 `plugins/paoding-config-ui/lib/client.js`——不转译、不压缩、不插入任何分隔符，产物与片段逐字节对得上。DSH 平台对每个插件包只认 `exports["./client"]` 这一个入口，所以发布物必须仍是这一个单文件。要改前端就改片段，跑一次拼接脚本重新生成产物；直接手改 `lib/client.js` 会被 `prepublishOnly` 钩子里的 `--check` 当场拦下。
+配置页的前端代码按分区存放在 `plugins/paoding-config-ui/src/client/`，是十几个带两位序号前缀的片段文件，文件名顺序即拼接顺序；`scripts/build-client.mjs` 把它们按序原样相连，写出 `plugins/paoding-config-ui/lib/client.js`——不转译、不压缩、不插入任何分隔符，产物与片段逐字节对得上。DSH 平台对每个插件包只认 `exports["./client"]` 这一个入口，所以发布物必须仍是这一个单文件。要改前端就改片段，跑一次拼接脚本重新生成产物；直接手改 `lib/client.js` 会被 `prepublishOnly` 钩子里的 `--check` 当场拦下。拼接脚本在写盘 / 比对之前还会对结果跑一段注册 id 冒烟（`scripts/client-id-smoke.mjs`）：把产物顶层在 stub 的 `window` / `document` 里求值，截获 `__ModuleLoader__.load` 的注册 id，按宿主两代 URL 形状（0.2.1-rc.5- 路径式 / 0.2.2-rc.1+ `/??` 集合式，各含单资源与多插件 combo 前后位）× 两个挂载名 × 无 src 回退逐例断言——守的是 dsh-maoying#5 那类「宿主改 client.js URL 形状导致 id 解析错名、面板整包不可用」的回归（本插件的字面量候选集解析对其免疫，冒烟把这份免疫变成机器可验的契约；阴性对照见 `tests/client-smoke.test.mjs`）。
 
 ## Token 治理（性能调优）
 
@@ -323,4 +323,4 @@ DSH 0.1.7 起宿主默认升到 65536，显式值让 0.1.5 – 0.2.0-rc.2 全系
 
 1. **这屏的信息，用户此刻非知道不可吗？** 体检结果（warnings）只在 preview / apply 的响应里就地出现——不主动轮询、不弹窗打扰；info 级条目默认收起要点一句。默认安静，有事才说话。
 2. **说的事用户能行动吗？** 每条 warn / error 都带「改哪个键 / 点哪里」的指向（`roles.<toolName>.tools`、面板入口名），纯抱怨式提示不接受——说不清怎么办的问题先不抛给用户。
-3. **行动的成本配得上打断吗？** 危险操作（导入覆盖、回滚、删除工作区）走二次确认红钮；并发冲突（409 `config_stale`）不打断表单——一条 toast + 自动重载，把「谁改的」说清即可。错误码（`tools/lib/errors.mjs` 单表）保证脚本与面板共享同一套可行动语义，不各养一套文案。
+3. **行动的成本配得上打断吗？** 危险操作（导入覆盖、回滚、删除工作区）走二次确认红钮；并发冲突（409 `config_stale`）不打断表单——一条 toast + 自动重载，把「谁改的」说清即可。错误码（`tools/lib/errors.mjs` 单表）保证面板 HTTP 接口与外部脚本共享同一套可行动语义，不各养一套文案。

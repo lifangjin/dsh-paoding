@@ -114,7 +114,7 @@ measured calibration; figures are order-of-magnitude estimates):
 | search_internal_deep sub-agent | 10 allowed entries | not separately estimated | Paid only when a deep repo search is delegated |
 
 Note: role tool counts above follow the actual `allow` entries in `agent.cordis.yml` (design 12 / implement
-17); the old README figures of 14 / 17 and a 22-entry whitelist are outdated.
+17).
 
 **The real win is context isolation, not the few thousand tokens saved per se**:
 
@@ -262,11 +262,12 @@ composes them. Each item below is stated as a design decision (the first release
 preset.** In DSH, base tools such as read/write/edit/glob/grep/bash/skill/web_search are **not provided by
 the global layer** — they are mounted by the composition of the builtin `standard` preset. The orchestrator
 composition must therefore include every row of `standard` verbatim — tool-bash / tool-pwsh / fs / fs-search
-/ jobs / skill / goal / planning / compaction / delegation / ask-user / todo / web — otherwise a sub-agent's
+/ jobs / skill-filesystem / tool-skill / goal / planning / compaction / delegation / ask-user / todo / web — otherwise a sub-agent's
 `tools.restrict()` fails with `unknown global tools`. This is a hard design constraint: a sub-agent inherits
 the tools **registered by the composition itself**, and a missing row means the tool is absent from the
-sub-agent's registry. The host layer (e.g. `~/.dsh/cordis.patch.yml`) mounts only MCP servers and local
-plugin tools.
+sub-agent's registry. The host layer (e.g. `~/.dsh/cordis.patch.yml`) mounts MCP servers, local plugin
+tools, and the `@deepseek-ai/dsh-agent-preset` preset declaration rows upserted by this installer (the same
+managed block; see mechanism ⑦).
 
 **② The main-agent surface trim is a waterfall filter on the model-facing catalog.** `restrict.mjs` hooks
 the `system-prompt/assemble` waterfall (`prepend: true` places the filter outermost, so `await next()`
@@ -329,7 +330,7 @@ preset leaves nothing behind when removed.
 
 ## Web config panel client bundle: multi-file sources, single-file artifact
 
-The panel's front-end code lives in `plugins/paoding-config-ui/src/client/` as a dozen-odd fragment files whose two-digit filename prefixes fix the concatenation order; `scripts/build-client.mjs` concatenates them verbatim into `plugins/paoding-config-ui/lib/client.js` — no transpiling, no minifying, no inserted separators, so the artifact matches the fragments byte for byte. The DSH platform serves exactly one entry per package (`exports["./client"]`), which is why the published artifact stays that single file. Edit the fragments, then rerun the build script to regenerate the artifact; hand-editing `lib/client.js` is caught by the `--check` mode wired into the `prepublishOnly` hook.
+The panel's front-end code lives in `plugins/paoding-config-ui/src/client/` as a dozen-odd fragment files whose two-digit filename prefixes fix the concatenation order; `scripts/build-client.mjs` concatenates them verbatim into `plugins/paoding-config-ui/lib/client.js` — no transpiling, no minifying, no inserted separators, so the artifact matches the fragments byte for byte. The DSH platform serves exactly one entry per package (`exports["./client"]`), which is why the published artifact stays that single file. Edit the fragments, then rerun the build script to regenerate the artifact; hand-editing `lib/client.js` is caught by the `--check` mode wired into the `prepublishOnly` hook. Before writing or comparing, the build script also runs a registration-id smoke over the result (`scripts/client-id-smoke.mjs`): it evaluates the artifact's top level against stubbed `window` / `document`, intercepts the id passed to `__ModuleLoader__.load`, and asserts it per host URL shape across both generations (path-style on 0.2.1-rc.5 and earlier, `/??` set-style on 0.2.2-rc.1 and later, each with single-resource and multi-plugin combo head/tail variants) × both mount names × the no-src fallback — guarding against the dsh-maoying#5 class of regression where a host-side URL shape change silently breaks id resolution and takes the whole panel down (this plugin's literal candidate-set resolution is immune, and the smoke turns that immunity into a machine-checkable contract; negative controls live in `tests/client-smoke.test.mjs`).
 
 ## Performance: token governance
 
@@ -393,3 +394,25 @@ composition:
 - **Whole-repo exploration tasks should be delegated to `search_internal_deep` rather than done by the
   main agent**: whole-repo grep dumps and full-file reads that repeatedly flood the main context are
   exactly what that role isolates (read-only, no network, condensed summaries only).
+
+## Rejected concepts
+
+The "do-not list", evaluated item by item while borrowing from dsh-superagent. It is written down here to keep a future self from "conveniently adding it back" — every entry has a first-class reason; read the reason before reconsidering:
+
+| Rejected | Reason |
+| --- | --- |
+| Modifying DSH host source / maintaining a fork | Paoding's founding principle is **zero host changes**: everything the preset generator plus local plugins can reach (declaration rows, the patch layer, AgentPreset) has been reached. Changing host source means rebasing on every host release, growing the maintenance surface from "one repository" to "one repository × N host versions". |
+| Negotiating tool surfaces at runtime (sub-agents picking tools per task) | A statically bound tool surface is exactly the orchestrator mode's value: pick a role = pick a surface = pick a cost tier. Runtime negotiation hands the "how many tools" decision to the model, so cost and safety boundaries drift; DSH's `tools.restrict()` is assembly-time semantics, and runtime negotiation has no host mechanism behind it. |
+| Resident teams / always-on standby role agents | Role sub-agents spawn on demand and are discarded after use (`continuable` only keeps the conversation resumable, it is not residency). Residency eats context window and token budget all year, and the saved "one cold start" is barely measurable on a local host. |
+| SQLite / a full Effects system to persist runtime state | Configuration is the entire state: `dsh-paoding.config.yml` plus the version-chain snapshots (`<config>.history/`) are plain files — readable, diffable, hand-editable for recovery. Session runtime state belongs to the host (sessionPersistence); paoding does not keep a second copy. |
+| The full Trigger / Ticket / Mandate domain model | Paoding has no multi-agent concurrency-contention problem — a single panel + a single CLI + a write mutex gate + revision CAS already cover every concurrency scenario. The domain model is complexity designed for "multi-tenant multi-agent scheduling"; porting it only grows maintenance burden. |
+| A hard 100-word cap on personas | Word count is a poor metric: the discipline paragraphs (the five report states, question discipline) are themselves worth 80 words. Paoding uses a **size ratchet** instead (the SIZE_BUDGETS in `tests/persona-contract.test.mjs`: one character budget per persona, tighten-only, growth must be intentional) — the same goal (prevent bloat) without punishing content that deserves its length. |
+| An embedded terminal / file browser in the panel | The panel does configuration and checkup only. Terminals and file trees are the territory of the host Web GUI and the user's editor; rebuilding them merely forks the experience. |
+
+## Panel and checkup attention guidelines
+
+Every screen of the paoding panel is bargaining with the user's attention. Three questions are asked at design time:
+
+1. **Must the user know this screen's information right now?** Checkup results (warnings) appear in place, only in the preview / apply responses — no proactive polling, no popup interruptions; info-level entries are collapsed by default to a one-line summary. Quiet by default; it speaks only when there is something to say.
+2. **Can the user act on what it says?** Every warn / error carries a pointer to "which key to change / where to click" (`roles.<toolName>.tools`, the panel entry name); pure complaints are not accepted — a problem with no stated remedy is not thrown at the user first.
+3. **Is the action worth the interruption?** Dangerous operations (import overwrite, rollback, workspace deletion) go through a red double-confirm button; a concurrency conflict (409 `config_stale`) does not interrupt the form — one toast plus an automatic reload that says who changed it. The single error-code table (`tools/lib/errors.mjs`) keeps the panel's HTTP interface and external scripts on one shared set of actionable semantics, instead of each growing its own copy of the wording.

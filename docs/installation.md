@@ -19,7 +19,7 @@
 |---|---|---|
 | `$DSH_HOME` | `~/.dsh` | DSH 家目录（认环境变量 `DSH_HOME`，缺省 `$HOME/.dsh`）。host 层配置 `cordis.patch.yml`、`node_modules`、`profiles/<name>/cordis.patch.yml`、插件 profile 目录都在其下 |
 | preset roster 根目录 | `$DSH_HOME/.agent-presets/` | DSH ≤ 0.1.6 由 `dsh-agent-presets` 扫描此目录发现本地 authored presets；DSH ≥ 0.1.7 宿主不再扫目录，此目录退为预设文件存放处（见第 2 节「版本支持与预设落点双轨」） |
-| 本预设安装目标 | `$DSH_HOME/.agent-presets/orchestrator` | 生成产物：`agent.cordis.yml`（重写后的角色配置）、`preset.yml`、`restrict.mjs`、`delegation-labels.mjs`、`.generator-version` 版本与轨道标记，是一个静态目录；按工作区配置生成的预设落同一父目录下的 `orchestrator-<slug>` |
+| 本预设安装目标 | `$DSH_HOME/.agent-presets/orchestrator` | 生成产物：`agent.cordis.yml`（重写后的角色配置）、`preset.yml`、`restrict.mjs`、`delegation-labels.mjs`、`role-restrict.mjs`、`.generator-version` 版本标记，是一个静态目录；按工作区配置生成的预设落同一父目录下的 `orchestrator-<slug>` |
 | 声明行托管块（仅 DSH ≥ 0.1.7） | `$DSH_HOME/cordis.patch.yml` 内的托管块 | 以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、配套 end 标记收尾，块内 `- insert:` 写 `@deepseek-ai/dsh-agent-preset` 声明行；安装器自动维护，详见第 2 节 |
 | 配置文件 | `$DSH_HOME/dsh-paoding.config.yml` | 「庖丁配置」面板「保存并应用」写入的角色与工具分配（`0o600`，可手编）；首装自动化同样读写它 |
 
@@ -56,15 +56,16 @@ dsh plugin --profile web add dsh-paoding
 
 两代宿主发现「本地 authored preset」的机制不同，安装器据此分双轨落点，宿主检测全自动、用户无感：
 
-- **目录轨（DSH ≤ 0.1.6）**：宿主扫描 `$DSH_HOME/.agent-presets/` 下的目录来发现 preset，目录即注册。安装器照旧把产物写成 `$DSH_HOME/.agent-presets/orchestrator/`（`agent.cordis.yml` + `preset.yml` + `restrict.mjs` + `delegation-labels.mjs`）；按工作区配置生成的预设落同目录下的 `orchestrator-<slug>`。
-- **声明行轨（DSH ≥ 0.1.7）**：宿主不再扫目录，改为读取 patch 里的 `@deepseek-ai/dsh-agent-preset` 声明行。安装器在目标 patch 层（缺省 home 层 `$DSH_HOME/cordis.patch.yml`；Android compat 壳 / `patch_layer: profile` 时为 profile 层 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`，见下节「patch 层与写盘护栏」）里维护一个托管块——以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、以配套的 end 标记收尾——块内用 `- insert:` 写声明行：全局预设 `config.id: orchestrator`，工作区预设 `config.id: orchestrator-<slug>`，各自的 `plugins` 内联全部插件行；`restrict.mjs` / `delegation-labels.mjs` 以绝对 `file:` URL 引用。产物四件套仍落在 `.agent-presets/<id>/`，只是从「目录即注册」变成「文件存放处」。托管块之外的用户内容一字节不动；块内带 do not edit 标记，手改块内内容会在下次保存时被覆盖。
+- **目录轨（DSH ≤ 0.1.6）**：宿主扫描 `$DSH_HOME/.agent-presets/` 下的目录来发现 preset，目录即注册。安装器照旧把产物写成 `$DSH_HOME/.agent-presets/orchestrator/`（`agent.cordis.yml` + `preset.yml` + `restrict.mjs` + `delegation-labels.mjs` + `role-restrict.mjs`）；按工作区配置生成的预设落同目录下的 `orchestrator-<slug>`。
+- **声明行轨（DSH ≥ 0.1.7）**：宿主不再扫目录，改为读取 patch 里的 `@deepseek-ai/dsh-agent-preset` 声明行。安装器在目标 patch 层（缺省 home 层 `$DSH_HOME/cordis.patch.yml`；Android compat 壳 / `patch_layer: profile` 时为 profile 层 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`，见下节「patch 层与写盘护栏」）里维护一个托管块——以 `# --- dsh-paoding presets (auto-generated; do not edit) ---` 起始、以配套的 end 标记收尾——块内用 `- insert:` 写声明行：全局预设 `config.id: orchestrator`，工作区预设 `config.id: orchestrator-<slug>`，各自的 `plugins` 内联全部插件行；`restrict.mjs` / `delegation-labels.mjs` / `role-restrict.mjs` 以绝对 `file:` URL 引用（role-restrict.mjs 仅 0.2.1+ AgentPreset 形态产物引用，老宿主复制了不引用、无害）。产物五件套仍落在 `.agent-presets/<id>/`，只是从「目录即注册」变成「文件存放处」。托管块之外的用户内容一字节不动；块内带 do not edit 标记，手改块内内容会在下次保存时被覆盖。
 
 安装器按下面的顺序判定走哪条轨：
 
 1. Web 面板运行时探测优先——`agentPresets` 服务的 `register` 方法 0.1.7 才有，探测到即在声明行轨；
-2. CLI 侧 `dsh --version`；
-3. 兜底探测 `$DSH_HOME/node_modules/@deepseek-ai/dsh-agent-preset`（这个单数包在，即为 0.1.7+）；
-4. 都失败时默认按 ≤ 0.1.6 处理（安全侧）。
+2. argv 探测——插件与宿主同进程时，从 `process.argv[1]` 入口向上找宿主包（`@deepseek-ai/dsh` / `@deepseek-ai/dsh-desktop-host`）的 `package.json` 反推版本，比 PATH 上的 `dsh` CLI 更准；
+3. CLI 侧 `dsh --version`；
+4. 兜底探测 `$DSH_HOME/node_modules/@deepseek-ai/dsh-agent-preset`（这个单数包在，即为 0.1.7+）；
+5. 都失败时默认按 ≤ 0.1.6 处理（安全侧）。
 
 宿主版本变化后的首次保存/自愈会自动迁移，双向都不用手动干预：
 
@@ -86,10 +87,10 @@ dsh plugin --profile web add dsh-paoding
 
 ### 版本标记与自动重生成
 
-`.generator-version` 标记由插件启动自愈在生成 preset 后写入，内容三行：**生成器版本 + 预设安装轨道 + workflow worker 形态**（0.3.7 起；v2 旧标记只有前两行、更早只有版本一行，缺行按「未知」处理，恰是宿主升级后的迁移触发态）。四类触发：
+`.generator-version` 标记由插件启动自愈在生成 preset 后写入，内容四行（v4 格式）：**生成器版本 + 预设安装轨道 + workflow worker 形态 + 角色委派行形态 roles**——roles 行为 v4 新增（三行的 v3 止于 0.4.3，其 worker 行自 0.3.7 引入；更早的旧标记缺行按「未知」处理，恰是宿主升级后的迁移触发态）。四类触发：
 
 - **标记缺失 / 版本不符**（首装、插件升级）→ 整盘重生成。面板「保存并应用」与兜底 CLI 的生成走整目录重建、不写回标记——重建即移除旧标记，下次 DSH 启动自愈发现标记缺失会多补跑一次生成并重写标记（产物相同，只是多跑一轮）。插件升级后标记与包版本不符，下次 DSH 启动自动按新版重生成，「升级后 preset 还是旧版产物」的漂移就此消除。
-- **版本一致、worker 形态分叉**（宿主跨过 0.1.5/0.1.6 的 worker 边界：0.1.5 用 `workflow-worker-thread`，0.1.6+ 换 `workflow-ptc`；旧标记无第三行、而宿主已升到 ptc 侧时同样算分叉）→ 整盘重生成：该行长在产物正文里，轻量补行覆盖不到。
+- **版本一致、worker / 角色行形态分叉**（worker：宿主跨过 0.1.5/0.1.6 的 worker 边界——0.1.5 用 `workflow-worker-thread`，0.1.6+ 换 `workflow-ptc`；roles：宿主跨过 0.2.1 的内联→AgentPreset 边界——0.2.1-rc.2 起 dsh-tool-subagent 拒绝内联 persona / toolFilter；旧标记缺对应行、而宿主已在目标侧时同样算分叉）→ 整盘重生成：这些行长在产物正文里，轻量补行覆盖不到。
 - **版本一致、轨道翻转**（只升 dsh 不动插件——升级最常见路径）→ 轻量迁移，不重生成内容：声明轨上按磁盘产物补写缺失的声明行（含各工作区预设），directory 轨上若有残留声明行则整盘重生成撤下（残留会让 0.1.6 profile 启动失败）。
 - **版本轨道都一致** → 对账声明行：缺行补行、目录已删的孤儿行撤行，齐则什么都不动。
 
@@ -196,7 +197,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 
 ### 数据接口与安全
 
-面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地升级：普通 profile 走 `dsh plugin update`，desktop profile 直跑 `pnpm add`，pnpm 按「裸 pnpm → `corepack pnpm` → PNPM_HOME 落位」候选链解析）、`GET /api/paoding/config/export`（配置文件原文导出，下载/备份用）、`POST /api/paoding/config/import`（整份导入：先验格式、与「保存并应用」共用写盘闸）、`GET /api/paoding/config/backups`（自动备份清单）、`POST /api/paoding/config/restore`（恢复备份：文件名白名单防穿越，先验可解析再覆盖）、`GET /api/paoding/stats`（委派效果统计：冷读会话存档聚合，days 窗口与 project 过滤）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
+面板数据走**同源 `/api/paoding/*`**：Node 侧注册前缀路由——`GET /api/paoding/state`（带缓存的检测状态）、`GET /api/paoding/version`（最新版检测，版本/更新卡的数据源）、`GET /api/paoding/models`（宿主模型运行时的模型清单）、`GET` + `POST /api/paoding/workspaces`（工作区列表 / 添加工作区）、`GET` + `POST /api/paoding/presets`（工作区预设列举 / 新增·幂等更新）、`PUT` / `DELETE /api/paoding/presets/<id>`（更新工作区预设；删除 = 配置条目 + 目录产物 + 声明行三位一体清理，全局 `orchestrator` 删除一律 403）、`POST /api/paoding/rescan`（强制重检测，含 MCP 握手）、`POST /api/paoding/preview`（不写盘生成）、`POST /api/paoding/apply`（安装并保存配置）、`POST /api/paoding/upgrade`（就地升级：普通 profile 走 `dsh plugin update`，desktop profile 直跑 `pnpm add`，pnpm 按「裸 pnpm → `corepack pnpm` → PNPM_HOME 落位」候选链解析）、`GET /api/paoding/config/export`（配置文件原文导出，下载/备份用）、`POST /api/paoding/config/import`（整份导入：先验格式、与「保存并应用」共用写盘闸）、`GET /api/paoding/config/backups`（自动备份清单）、`POST /api/paoding/config/restore`（恢复备份：文件名白名单防穿越，先验可解析再覆盖）、`GET /api/paoding/stats`（委派效果统计：冷读会话存档聚合，days 窗口与 project 过滤）、`GET /api/paoding/client.css`（面板样式静态下发）——复用 `tools/` 的检测与生成管线（`plugins/paoding-config-ui/api-core.mjs`）。路由自带**浏览器信任围栏**：Host 必须回环或落在 `webRuntime.trustedHosts`，并拒绝 cross-site 请求（复刻 DSH `/api` 网关围栏语义，因为 `/api/paoding` 前缀更长会命中本插件而绕开网关）。面板**没有独立服务端/端口**：DSH Web 端口只监听 `127.0.0.1`，不对外网暴露。
 
 ### 面板能力
 
@@ -207,7 +208,7 @@ patch 与配置文件用 **`yaml` 包**解析——通过 `createRequire` 从 `$
 - **保存并应用**：确认后写入 preset（覆盖 `$DSH_HOME/.agent-presets/orchestrator`）并按宿主版本同步登记——≤ 0.1.6 目录扫描即生效，≥ 0.1.7 同步维护 `$DSH_HOME/cordis.patch.yml` 里的声明行托管块（见第 2 节）——再把当前分配保存到 `$DSH_HOME/dsh-paoding.config.yml`；应用成功后提示重启 DSH 或新建会话生效（检测到 patch 比生成结果新时提示重启后生效）。打开面板时会加载既有配置文件作为当前值——手编过的选择直接可见、可改。
 - **场景模板**：页头三档切换（轻量：只留实现角色；调研：只留检索角色；全开：全员到齐、主 agent 额外工具带满检测库存），一键换「班底」；只动 `roles_remove` 与 `main_agent_extra`，各角色精调过的工具面、persona、模型、启动方式分毫不动，切回即原样复原。
 - **检查提示卡**：每次「预览生成 / 保存并应用」自动过一遍体检（配置了未挂载的工具、零工具角色、查无此名的模型、预设落后于配置），分级提示以卡片形式贴在页头下方，处理完再保存不迟。
-- **备份与回滚**：保存、导入、恢复配置前都会自动把当前配置轮换备份三份（`config.yml.bak-1..3`，新压旧）；「更多」→「恢复备份…」列时间与大小、二次确认后回退，恢复前当前配置还会再自动备份一份——误操作有后悔药。
+- **备份与回滚**：保存、导入、恢复配置落盘前都会先把当前配置快照进版本链——配置文件旁的 `dsh-paoding.config.yml.history/` 目录，`v000001.yml` 起编号连续递增、默认保留最近 30 份（每份带记录来源与时间的 meta，接口响应附当前 `revision`）；「更多」→「恢复备份…」列各快照的时间与大小、二次确认后按编号回退，恢复本身也会先把当前配置快照进链（滚错了还能再滚回来）。旧版三份轮换备份 `config.yml.bak-1..3` 仅作遗留兼容：首次快照时按旧→新自动迁入版本链（旧文件保留），仍在场的照常列出。误操作有后悔药。
 - **委派效果统计**：页头「委派效果」卡按角色统计被委派的调用数、平均耗时与失败数（近 30 天，`days` 参数可调）。数据来自宿主会话存档的冷读——经宿主 `sessionPersistence` 服务逐会话抽摘要、本地聚合，不出机、不带负载；失败记的是子会话零轮次或轮次中断（spawn 后即死、中途终止两种形态）。缺省项目（宿主 cwd 换算）扫不到任何委派记录时自动回落为全项目聚合（响应 `project='all'`，卡片标注「全部项目」）；冷读带日志 mtime 预过滤，窗口外的日志文件不再开读句柄。标题行点按可折叠 / 展开（偏好记入浏览器 localStorage，默认展开），收起时只留标题一行。宿主缺会话服务时整卡不渲染。
 - **「更多」菜单**：配置导出（下载 `dsh-paoding.config.yml` 原文）/ 导入（先验格式，整份覆盖含工作区段，需二次确认）/ 恢复备份（见上条）与面板语言切换（中英自动识别、手动选择优先并记住）。
 
