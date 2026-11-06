@@ -6,10 +6,16 @@
 //   node scripts/build-client.mjs           # 拼接并写出 lib/client.js（幂等）
 //   node scripts/build-client.mjs --check   # 只比对，不一致时 exit 1（CI / prepublish 护栏）
 //
+// 两种模式都会在写盘 / 比对之前，对拼接结果先跑一段注册 id 冒烟
+// （scripts/client-id-smoke.mjs：URL 形状矩阵 × 两挂载名 + 无 src 回退，
+// 防 dsh-maoying#5 那类「宿主改 client.js URL 形状导致 id 解析错名」的
+// 回归静默上线）；冒烟不过直接 exit 1。
+//
 // 纪律：片段是纯字节区段，本脚本不做任何转换；产物必须与片段依次相连逐字节
 // 相等。文件名用两位序号前缀（00-90）保证拼接顺序稳定。
 
 import { fileURLToPath } from "node:url";
+import { runClientIdSmoke } from "./client-id-smoke.mjs";
 import { dirname, join } from "node:path";
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 
@@ -60,6 +66,14 @@ const joined = Buffer.concat(buffers);
 if (joined.length !== expectedBytes) {
   fail("对账失败：片段字节合计 " + expectedBytes + " ≠ 拼接结果 " + joined.length + "，拼接逻辑被改动了？");
 }
+
+// 冒烟前置：拼接结果必须是「可加载、注册 id 对两代宿主 URL 形状都正确」的
+// 产物——构建与 --check 两条路都先过这一关，再谈写盘 / 比对。
+const smokeFailures = runClientIdSmoke(joined.toString("utf8"));
+if (smokeFailures.length > 0) {
+  fail("client 冒烟未过（" + smokeFailures.length + " 项）：\n  - " + smokeFailures.join("\n  - "));
+}
+process.stdout.write("冒烟通过：client bundle 注册 id 对全部 URL 形状 × 两挂载名 + 无 src 回退均正确。\n");
 
 function firstDiff(a, b) {
   const n = Math.min(a.length, b.length);

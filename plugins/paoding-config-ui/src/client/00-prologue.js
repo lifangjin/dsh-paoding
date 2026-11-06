@@ -20,7 +20,9 @@
  *    后置校验必失败）；且合并 bundle 下所有插件共享同一 URL，无法
  *    泛化定位"哪段是我"。挂载名是封闭二选一集合，且宿主保证本行
  *    URL <挂载名>/client.js 必在 script src 里（否则本代码不会被执行），
- *    故直接在 currentScript.src 里找候选名，未命中回退主包名。
+ *    故直接在 currentScript.src 里找候选名，未命中回退主包名。该解析对
+ *    URL 形状的免疫性由冒烟守门（scripts/client-id-smoke.mjs，构建前置跑；
+ *    回归 tests/client-smoke.test.mjs 含 maoying#5 式坏 id 行的阴性对照）。
  *  - factory 内 require() 只解析平台 seed 模块（react / cordis /
  *    ui-slots / ui-primitives 与已物化模块）；本 bundle 依赖 react 与
  *    @deepseek-ai/dsh-client-ui-primitives。
